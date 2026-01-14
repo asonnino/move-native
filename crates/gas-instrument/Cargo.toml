@@ -13,4 +13,4 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-# No external dependencies - hand-written parser
+petgraph = "0.8"

@@ -4,8 +4,10 @@
 
 use std::collections::HashMap;
 
+use petgraph::graph::NodeIndex;
+
 use crate::{
-    cfg::{count_instructions, BasicBlock, Cfg},
+    cfg::{count_instructions, Cfg},
     parser::ParsedLine,
 };
 
@@ -46,9 +48,10 @@ pub fn instrument_with_config(
     let mut gas_check_counter = 0;
 
     // Track which line indices have back-edge branches
-    let mut back_edge_lines: HashMap<usize, &BasicBlock> = HashMap::new();
+    let mut back_edge_lines: HashMap<usize, NodeIndex> = HashMap::new();
 
-    for block in &cfg.blocks {
+    for block_idx in cfg.blocks() {
+        let block = cfg.block(block_idx);
         if block.has_back_edge {
             // Find the line with the terminating branch
             if let Some(&branch_line_idx) = block.line_indices.iter().rev().find(|&&idx| {
@@ -58,16 +61,16 @@ pub fn instrument_with_config(
                     .map(|i| i.is_branch())
                     .unwrap_or(false)
             }) {
-                back_edge_lines.insert(branch_line_idx, block);
+                back_edge_lines.insert(branch_line_idx, block_idx);
             }
         }
     }
 
     // Generate output, inserting gas checks where needed
     for (idx, line) in lines.iter().enumerate() {
-        if let Some(block) = back_edge_lines.get(&idx) {
+        if let Some(&block_idx) = back_edge_lines.get(&idx) {
             // This line has a back-edge branch - insert gas check before it
-            let instruction_count = count_instructions(block, lines);
+            let instruction_count = count_instructions(cfg, block_idx, lines);
             let label = format!(".Lok_{}", gas_check_counter);
             gas_check_counter += 1;
 
