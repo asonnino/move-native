@@ -205,9 +205,12 @@ fn gas_decrement_instructions(mut count: usize) -> Vec<String> {
 }
 
 /// Generate gas check instruction sequence as separate lines
+///
+/// Returns the core gas check sequence without bundle directives.
+/// Bundle directives (.bundle_lock/.bundle_unlock) are optional and
+/// handled separately by `instrument_with_config` when needed.
 pub fn gas_check_sequence(instr_count: usize, label: &str) -> Vec<String> {
-    let mut result = vec!["    .bundle_lock".to_string()];
-    result.extend(gas_decrement_instructions(instr_count));
+    let mut result = gas_decrement_instructions(instr_count);
     result.push(format!("    tbz {}, #63, {}", GAS_REGISTER, label));
     result.push("    brk #0".to_string());
     result.push(format!("{}:", label));
@@ -332,12 +335,13 @@ _simple:
     fn test_gas_check_sequence_large_count() {
         let seq = super::gas_check_sequence(5000, ".Lok");
 
-        // Should have bundle_lock, multiple subs, tbz, brk, label
-        assert!(seq.iter().any(|s| s.contains(".bundle_lock")));
+        // Should have multiple subs, tbz, brk, label (no bundle directives)
         assert!(seq.iter().any(|s| s.contains("sub x23, x23, #4095")));
         assert!(seq.iter().any(|s| s.contains("sub x23, x23, #905")));
         assert!(seq.iter().any(|s| s.contains("tbz x23, #63")));
         assert!(seq.iter().any(|s| s.contains("brk #0")));
+        // Bundle directives are handled separately by instrument_with_config
+        assert!(!seq.iter().any(|s| s.contains(".bundle")));
     }
 
     #[test]

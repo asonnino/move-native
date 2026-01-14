@@ -72,6 +72,8 @@ The verifier must confirm:
 2. Every back-edge preceded by gas check sequence (`sub x23` + `tbz x23, #63` + `brk #0`)
 3. `x23` only modified by gas decrements
 4. All branch targets are valid instruction boundaries (trivial on Arm64)
+5. No unreachable code (all basic blocks reachable from entry point) - prevents an unrelated bug from allowing the program to jump into uninstrumented dead code containing an infinite loop
+6. No indirect branches (`br`, `blr`, `bra*`, `blra*`) - these have register targets that can't be statically verified; Move's lack of dynamic dispatch means they shouldn't appear in compiled output
 
 ### Runtime Entry Point
 

@@ -2,6 +2,21 @@
 //!
 //! Builds a CFG from parsed assembly and identifies back-edges for gas instrumentation.
 //! Uses petgraph as the primary graph representation.
+//!
+//! ## Back-Edge Detection
+//!
+//! Back-edges are identified using dominator analysis: an edge A → B is a back-edge
+//! if B dominates A. This is the standard definition used in compiler theory.
+//!
+//! ## Unreachable Code
+//!
+//! Dominator analysis only works for code reachable from the entry point. Loops in
+//! unreachable code will NOT be detected as back-edges and will NOT receive gas checks.
+//!
+//! **This is by design.** The `native-verifier` crate is responsible for rejecting
+//! modules that contain unreachable code. This separation of concerns keeps
+//! `gas-instrument` simple and focused on transformation, while `native-verifier`
+//! handles validation.
 
 use std::collections::HashMap;
 
