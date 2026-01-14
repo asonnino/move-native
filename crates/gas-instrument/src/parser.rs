@@ -38,8 +38,21 @@ impl Instruction {
     pub fn is_branch(&self) -> bool {
         let mnemonic = self.mnemonic.to_lowercase();
 
-        // Unconditional branches
+        // Unconditional direct branches
         if mnemonic == "b" || mnemonic == "bl" {
+            return true;
+        }
+
+        // Indirect branches (branch to register)
+        // br xN  - unconditional indirect branch
+        // blr xN - indirect branch with link (call through register)
+        if mnemonic == "br" || mnemonic == "blr" {
+            return true;
+        }
+
+        // Pointer authentication branch variants (ARMv8.3+)
+        // braaz, brabz, blraaz, blrabz, etc.
+        if mnemonic.starts_with("bra") || mnemonic.starts_with("blra") {
             return true;
         }
 
@@ -59,6 +72,15 @@ impl Instruction {
         }
 
         false
+    }
+
+    /// Check if this is an indirect branch (target is a register, not a label)
+    pub fn is_indirect_branch(&self) -> bool {
+        let mnemonic = self.mnemonic.to_lowercase();
+        mnemonic == "br"
+            || mnemonic == "blr"
+            || mnemonic.starts_with("bra")
+            || mnemonic.starts_with("blra")
     }
 
     /// Check if a branch is conditional (can fall through)
@@ -84,8 +106,9 @@ impl Instruction {
     }
 
     /// Get the branch target label if this is a direct branch
+    /// Returns None for indirect branches (br, blr) since target is a register
     pub fn get_branch_target(&self) -> Option<&str> {
-        if !self.is_branch() {
+        if !self.is_branch() || self.is_indirect_branch() {
             return None;
         }
 
@@ -373,5 +396,62 @@ mod tests {
         let instr = lines[0].instruction.as_ref().unwrap();
         assert_eq!(instr.mnemonic, "ldr");
         assert_eq!(instr.operands, vec!["x0", "[x1, #8]"]);
+    }
+
+    #[test]
+    fn test_indirect_branch_br() {
+        let parser = Parser {};
+        let lines = parser.parse("    br x0\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "br should be recognized as a branch");
+        assert!(
+            instr.is_indirect_branch(),
+            "br should be recognized as indirect"
+        );
+        assert!(
+            !instr.is_conditional_branch(),
+            "br should not be conditional"
+        );
+        assert_eq!(
+            instr.get_branch_target(),
+            None,
+            "indirect branch has no static target"
+        );
+    }
+
+    #[test]
+    fn test_indirect_branch_blr() {
+        let parser = Parser {};
+        let lines = parser.parse("    blr x30\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "blr should be recognized as a branch");
+        assert!(
+            instr.is_indirect_branch(),
+            "blr should be recognized as indirect"
+        );
+        assert_eq!(
+            instr.get_branch_target(),
+            None,
+            "indirect branch has no static target"
+        );
+    }
+
+    #[test]
+    fn test_direct_branch_has_target() {
+        let parser = Parser {};
+
+        // Direct unconditional branch
+        let lines = parser.parse("    b .Llabel\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch());
+        assert!(!instr.is_indirect_branch());
+        assert_eq!(instr.get_branch_target(), Some(".Llabel"));
+
+        // Direct branch with link (call)
+        let lines = parser.parse("    bl _function\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch());
+        assert!(!instr.is_indirect_branch());
+        assert_eq!(instr.get_branch_target(), Some("_function"));
     }
 }
