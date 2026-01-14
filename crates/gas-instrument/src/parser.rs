@@ -222,20 +222,37 @@ impl Parser {
         })
     }
 
-    /// Remove C-style and C++-style comments from a line
+    /// Remove comments from a line
+    /// Supports multiple comment styles:
+    /// - // (C++ style)
+    /// - /* */ (C style, single line only)
+    /// - ; (traditional assembly style)
+    /// - @ (GNU ARM assembler style)
     fn remove_comments<'a>(&self, line: &'a str) -> &'a str {
-        // Handle // comments
+        // Find the earliest comment start position
+        let mut earliest_pos = line.len();
+
+        // C++ style comments
         if let Some(pos) = line.find("//") {
-            return &line[..pos];
+            earliest_pos = earliest_pos.min(pos);
         }
-        // Handle /* */ comments (simplified - assumes single line)
-        if let Some(start) = line.find("/*") {
-            if let Some(_end) = line.find("*/") {
-                // For simplicity, just return up to the comment start
-                return &line[..start];
-            }
+
+        // C style comments (simplified - assumes single line)
+        if let Some(pos) = line.find("/*") {
+            earliest_pos = earliest_pos.min(pos);
         }
-        line
+
+        // Traditional assembly semicolon comments
+        if let Some(pos) = line.find(';') {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        // GNU ARM assembler @ comments
+        if let Some(pos) = line.find('@') {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        &line[..earliest_pos]
     }
 
     /// Find the position of a label-ending colon
@@ -453,5 +470,75 @@ mod tests {
         assert!(instr.is_branch());
         assert!(!instr.is_indirect_branch());
         assert_eq!(instr.get_branch_target(), Some("_function"));
+    }
+
+    #[test]
+    fn test_semicolon_comments() {
+        let parser = Parser {};
+
+        // Semicolon comment at end of line
+        let lines = parser.parse("    mov x0, #0 ; initialize counter\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "mov");
+        assert_eq!(instr.operands, vec!["x0", "#0"]);
+
+        // Semicolon comment on its own line
+        let lines = parser.parse("; this is a comment\n").unwrap();
+        assert!(lines[0].instruction.is_none());
+        assert!(lines[0].label.is_none());
+    }
+
+    #[test]
+    fn test_at_sign_comments() {
+        let parser = Parser {};
+
+        // @ comment at end of line (GNU ARM assembler style)
+        let lines = parser.parse("    add x0, x0, #1 @ increment\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "add");
+        assert_eq!(instr.operands, vec!["x0", "x0", "#1"]);
+
+        // @ comment on its own line
+        let lines = parser.parse("@ GNU style comment\n").unwrap();
+        assert!(lines[0].instruction.is_none());
+    }
+
+    #[test]
+    fn test_cpp_style_comments() {
+        let parser = Parser {};
+
+        // // comment at end of line
+        let lines = parser.parse("    ret // return to caller\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ret");
+    }
+
+    #[test]
+    fn test_c_style_comments() {
+        let parser = Parser {};
+
+        // /* */ comment at end of line
+        let lines = parser.parse("    nop /* do nothing */\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "nop");
+    }
+
+    #[test]
+    fn test_multiple_comment_styles_earliest_wins() {
+        let parser = Parser {};
+
+        // Semicolon appears before //
+        let lines = parser
+            .parse("    mov x0, #1 ; comment // not parsed\n")
+            .unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.operands, vec!["x0", "#1"]);
+
+        // // appears before ;
+        let lines = parser
+            .parse("    mov x0, #2 // comment ; not parsed\n")
+            .unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.operands, vec!["x0", "#2"]);
     }
 }
