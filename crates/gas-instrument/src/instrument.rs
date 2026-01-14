@@ -34,11 +34,16 @@ use crate::{
     parser::ParsedLine,
 };
 
+use std::collections::HashSet;
+
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
 
 /// Maximum immediate value for ARM64 sub instruction (12-bit)
 const MAX_SUB_IMMEDIATE: usize = 4095;
+
+/// Prefix for generated gas check labels (uses double underscore to indicate internal/generated)
+const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 
 /// Configuration for instrumentation
 #[derive(Debug, Clone, Default)]
@@ -73,6 +78,12 @@ pub fn instrument_with_config(
     let mut output = String::new();
     let mut gas_check_counter = 0;
 
+    // Collect all existing labels to avoid collisions
+    let existing_labels: HashSet<String> = lines
+        .iter()
+        .filter_map(|line| line.label.clone())
+        .collect();
+
     // Track which line indices have back-edge branches
     let mut back_edge_lines: HashMap<usize, NodeIndex> = HashMap::new();
 
@@ -97,8 +108,9 @@ pub fn instrument_with_config(
         if let Some(&block_idx) = back_edge_lines.get(&idx) {
             // This line has a back-edge branch - insert gas check before it
             let instruction_count = count_instructions(cfg, block_idx, lines);
-            let label = format!(".Lok_{}", gas_check_counter);
-            gas_check_counter += 1;
+
+            // Generate unique label, avoiding collisions with existing labels
+            let label = generate_unique_label(&existing_labels, &mut gas_check_counter);
 
             // Emit leading whitespace/label from original line if any
             if let Some(ref lbl) = line.label {
@@ -137,6 +149,20 @@ pub fn instrument_with_config(
     }
 
     output
+}
+
+/// Generate a unique label for gas checks, avoiding collisions with existing labels
+fn generate_unique_label(existing_labels: &HashSet<String>, counter: &mut usize) -> String {
+    loop {
+        let label = format!("{}{}", GAS_LABEL_PREFIX, counter);
+        *counter += 1;
+
+        // Check if this label already exists in the input
+        if !existing_labels.contains(&label) {
+            return label;
+        }
+        // If collision, loop will try next counter value
+    }
 }
 
 /// Emit gas decrement instruction(s) to the output
@@ -402,5 +428,81 @@ _nested:
 
         // Total instructions charged per full iteration: 5 (inner) + 3 (outer) = 8
         // NOT 5 + 5 + 3 = 13 (which would be double-charging)
+    }
+
+    #[test]
+    fn test_label_uses_unique_prefix() {
+        // Verify that generated labels use the unique prefix
+        let input = r#"
+.Lloop:
+    add x0, x0, #1
+    b .Lloop
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = build(&lines);
+        let output = instrument(&lines, &cfg);
+
+        // Should use the unique prefix, not the old .Lok_ prefix
+        assert!(
+            output.contains(".L__gas_ok_"),
+            "Should use unique .L__gas_ok_ prefix"
+        );
+        assert!(
+            !output.contains(".Lok_"),
+            "Should not use old .Lok_ prefix"
+        );
+    }
+
+    #[test]
+    fn test_label_collision_avoidance() {
+        // Input has labels that would collide with generated labels
+        // The instrumenter should skip those and use the next available
+        let input = r#"
+.L__gas_ok_0:
+    nop
+.L__gas_ok_1:
+    nop
+.Lloop:
+    add x0, x0, #1
+    b .Lloop
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = build(&lines);
+        let output = instrument(&lines, &cfg);
+
+        // The generated label should skip 0 and 1 (which exist) and use 2
+        assert!(
+            output.contains(".L__gas_ok_2"),
+            "Should skip colliding labels and use .L__gas_ok_2"
+        );
+
+        // Original labels should still be present
+        assert!(output.contains(".L__gas_ok_0:"));
+        assert!(output.contains(".L__gas_ok_1:"));
+    }
+
+    #[test]
+    fn test_generate_unique_label_helper() {
+        // Test the helper function directly
+        let mut existing = HashSet::new();
+        existing.insert(".L__gas_ok_0".to_string());
+        existing.insert(".L__gas_ok_1".to_string());
+        existing.insert(".L__gas_ok_3".to_string());
+
+        let mut counter = 0;
+
+        // First call should skip 0 and 1, return 2
+        let label1 = super::generate_unique_label(&existing, &mut counter);
+        assert_eq!(label1, ".L__gas_ok_2");
+
+        // Second call should skip 3, return 4
+        let label2 = super::generate_unique_label(&existing, &mut counter);
+        assert_eq!(label2, ".L__gas_ok_4");
+
+        // Third call returns 5
+        let label3 = super::generate_unique_label(&existing, &mut counter);
+        assert_eq!(label3, ".L__gas_ok_5");
     }
 }
