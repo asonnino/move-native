@@ -1,6 +1,29 @@
 //! Gas instrumentation pass
 //!
 //! Inserts gas metering sequences at back-edges (loops) to enforce bounded execution.
+//!
+//! ## Gas Semantics for Nested Loops
+//!
+//! Each back-edge charges gas for instructions in its own basic block only.
+//! Basic blocks are disjoint, so no instruction is ever charged twice.
+//!
+//! For nested loops like:
+//! ```asm
+//! .Louter:
+//!     mov x1, #0
+//! .Linner:
+//!     add x1, x1, #1      ; inner block
+//!     cmp x1, #10         ; inner block
+//!     b.lt .Linner        ; inner back-edge charges 3 instructions
+//!     add x0, x0, #1      ; outer block (after inner loop)
+//!     cmp x0, #10         ; outer block
+//!     b.lt .Louter        ; outer back-edge charges 3 instructions
+//! ```
+//!
+//! The inner loop's gas check only charges for the 3 instructions in the inner block.
+//! The outer loop's gas check only charges for the 3 instructions after the inner loop.
+//! There is no double-charging because the inner loop instructions are in a separate
+//! basic block from the outer loop's back-edge block.
 
 use std::collections::HashMap;
 
@@ -289,5 +312,95 @@ _simple:
         assert!(seq.iter().any(|s| s.contains("sub x23, x23, #905")));
         assert!(seq.iter().any(|s| s.contains("tbz x23, #63")));
         assert!(seq.iter().any(|s| s.contains("brk #0")));
+    }
+
+    #[test]
+    fn test_nested_loop_no_double_charging() {
+        // Verify that nested loops charge independently with no overlap
+        // Inner loop: 3 instructions (add, cmp, b.lt)
+        // Outer loop block after inner: 3 instructions (add, cmp, b.lt)
+        let input = r#"
+_nested:
+    mov x0, #0
+.Louter:
+    mov x1, #0
+.Linner:
+    add x1, x1, #1
+    cmp x1, #10
+    b.lt .Linner
+    add x0, x0, #1
+    cmp x0, #10
+    b.lt .Louter
+    ret
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = build(&lines);
+        let output = instrument(&lines, &cfg);
+
+        // Should have exactly 2 gas checks (one per back-edge)
+        let gas_check_count = output.matches("tbz x23, #63").count();
+        assert_eq!(gas_check_count, 2, "Should have exactly 2 gas checks for nested loops");
+
+        // Both should charge for 3 instructions (their own block only)
+        // Count occurrences of "sub x23, x23, #3"
+        let sub_3_count = output.matches("sub x23, x23, #3").count();
+        assert_eq!(
+            sub_3_count, 2,
+            "Both loops should charge for 3 instructions each (no double-charging)"
+        );
+
+        // Verify both back-edges are instrumented
+        assert!(output.contains("b.lt .Linner"), "Inner branch should be present");
+        assert!(output.contains("b.lt .Louter"), "Outer branch should be present");
+    }
+
+    #[test]
+    fn test_nested_loop_instruction_counts() {
+        // More detailed test of instruction counting for nested loops
+        use crate::cfg::count_instructions;
+
+        let input = r#"
+.Louter:
+    mov x1, #0
+.Linner:
+    add x1, x1, #1
+    nop
+    nop
+    cmp x1, #10
+    b.lt .Linner
+    add x0, x0, #1
+    cmp x0, #10
+    b.lt .Louter
+    ret
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = build(&lines);
+
+        // Find the blocks with back-edges and verify their instruction counts
+        let mut inner_count = None;
+        let mut outer_count = None;
+
+        for block_idx in cfg.blocks() {
+            let block = cfg.block(block_idx);
+            if block.has_back_edge {
+                let count = count_instructions(&cfg, block_idx, &lines);
+                if block.back_edge_target == Some(".Linner".to_string()) {
+                    inner_count = Some(count);
+                } else if block.back_edge_target == Some(".Louter".to_string()) {
+                    outer_count = Some(count);
+                }
+            }
+        }
+
+        // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
+        assert_eq!(inner_count, Some(5), "Inner loop block should have 5 instructions");
+
+        // Outer block (after inner): add, cmp, b.lt = 3 instructions
+        assert_eq!(outer_count, Some(3), "Outer loop block should have 3 instructions");
+
+        // Total instructions charged per full iteration: 5 (inner) + 3 (outer) = 8
+        // NOT 5 + 5 + 3 = 13 (which would be double-charging)
     }
 }
