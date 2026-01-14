@@ -14,6 +14,9 @@ use crate::{
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
 
+/// Maximum immediate value for ARM64 sub instruction (12-bit)
+const MAX_SUB_IMMEDIATE: usize = 4095;
+
 /// Configuration for instrumentation
 #[derive(Debug, Clone, Default)]
 pub struct InstrumentConfig {
@@ -84,11 +87,8 @@ pub fn instrument_with_config(
                 output.push_str("    .bundle_lock\n");
             }
 
-            // Emit gas check
-            output.push_str(&format!(
-                "    sub {}, {}, #{}\n",
-                GAS_REGISTER, GAS_REGISTER, instruction_count
-            ));
+            // Emit gas decrement (may need multiple instructions for large counts)
+            emit_gas_decrement(&mut output, instruction_count);
             output.push_str(&format!("    tbz {}, #63, {}\n", GAS_REGISTER, label));
             output.push_str("    brk #0\n");
             output.push_str(&format!("{}:\n", label));
@@ -116,18 +116,53 @@ pub fn instrument_with_config(
     output
 }
 
+/// Emit gas decrement instruction(s) to the output
+/// Handles large instruction counts by emitting multiple sub instructions
+/// (ARM64 sub immediate is limited to 12 bits = 4095 max)
+fn emit_gas_decrement(output: &mut String, mut count: usize) {
+    while count > MAX_SUB_IMMEDIATE {
+        output.push_str(&format!(
+            "    sub {}, {}, #{}\n",
+            GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
+        ));
+        count -= MAX_SUB_IMMEDIATE;
+    }
+    if count > 0 {
+        output.push_str(&format!(
+            "    sub {}, {}, #{}\n",
+            GAS_REGISTER, GAS_REGISTER, count
+        ));
+    }
+}
+
+/// Generate gas decrement instructions as a vector of strings
+/// Handles large instruction counts by emitting multiple sub instructions
+fn gas_decrement_instructions(mut count: usize) -> Vec<String> {
+    let mut instructions = Vec::new();
+    while count > MAX_SUB_IMMEDIATE {
+        instructions.push(format!(
+            "    sub {}, {}, #{}",
+            GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
+        ));
+        count -= MAX_SUB_IMMEDIATE;
+    }
+    if count > 0 {
+        instructions.push(format!(
+            "    sub {}, {}, #{}",
+            GAS_REGISTER, GAS_REGISTER, count
+        ));
+    }
+    instructions
+}
+
 /// Generate gas check instruction sequence as separate lines
 pub fn gas_check_sequence(instr_count: usize, label: &str) -> Vec<String> {
-    vec![
-        "    .bundle_lock".to_string(),
-        format!(
-            "    sub {}, {}, #{}",
-            GAS_REGISTER, GAS_REGISTER, instr_count
-        ),
-        format!("    tbz {}, #63, {}", GAS_REGISTER, label),
-        "    brk #0".to_string(),
-        format!("{}:", label),
-    ]
+    let mut result = vec!["    .bundle_lock".to_string()];
+    result.extend(gas_decrement_instructions(instr_count));
+    result.push(format!("    tbz {}, #63, {}", GAS_REGISTER, label));
+    result.push("    brk #0".to_string());
+    result.push(format!("{}:", label));
+    result
 }
 
 #[cfg(test)]
@@ -200,5 +235,59 @@ _simple:
 
         // Should not have gas checks
         assert!(!output.contains("sub x23"));
+    }
+
+    #[test]
+    fn test_gas_decrement_small_count() {
+        let mut output = String::new();
+        super::emit_gas_decrement(&mut output, 100);
+        assert_eq!(output, "    sub x23, x23, #100\n");
+    }
+
+    #[test]
+    fn test_gas_decrement_max_immediate() {
+        let mut output = String::new();
+        super::emit_gas_decrement(&mut output, 4095);
+        assert_eq!(output, "    sub x23, x23, #4095\n");
+    }
+
+    #[test]
+    fn test_gas_decrement_large_count() {
+        // Test count > 4095 requires multiple sub instructions
+        let mut output = String::new();
+        super::emit_gas_decrement(&mut output, 5000);
+
+        // Should emit: sub x23, x23, #4095 followed by sub x23, x23, #905
+        assert!(output.contains("sub x23, x23, #4095"));
+        assert!(output.contains("sub x23, x23, #905"));
+
+        // Count the number of sub instructions
+        let sub_count = output.matches("sub x23").count();
+        assert_eq!(sub_count, 2);
+    }
+
+    #[test]
+    fn test_gas_decrement_very_large_count() {
+        // Test count requiring 3+ sub instructions
+        let mut output = String::new();
+        super::emit_gas_decrement(&mut output, 10000);
+
+        // 10000 = 4095 + 4095 + 1810
+        let sub_count = output.matches("sub x23").count();
+        assert_eq!(sub_count, 3);
+        assert!(output.contains("sub x23, x23, #4095"));
+        assert!(output.contains("sub x23, x23, #1810"));
+    }
+
+    #[test]
+    fn test_gas_check_sequence_large_count() {
+        let seq = super::gas_check_sequence(5000, ".Lok");
+
+        // Should have bundle_lock, multiple subs, tbz, brk, label
+        assert!(seq.iter().any(|s| s.contains(".bundle_lock")));
+        assert!(seq.iter().any(|s| s.contains("sub x23, x23, #4095")));
+        assert!(seq.iter().any(|s| s.contains("sub x23, x23, #905")));
+        assert!(seq.iter().any(|s| s.contains("tbz x23, #63")));
+        assert!(seq.iter().any(|s| s.contains("brk #0")));
     }
 }
