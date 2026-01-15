@@ -263,30 +263,33 @@ impl Cfg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{parser::Parser, Cfg};
+    use indoc::indoc;
 
-    #[test]
-    fn test_simple_loop() {
-        let input = r#"
-_test_loop:
-    mov x0, #0
-    mov x1, #1000000
+    use crate::{parser::ParsedLine, parser::Parser, Cfg};
 
-.Lloop:
-    add x0, x0, #1
-    cmp x0, x1
-    b.lt .Lloop
-
-    ret
-"#;
+    /// Helper to reduce test boilerplate: parses assembly and builds CFG
+    fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
         let cfg = Cfg::from_lines(&lines);
+        (cfg, lines)
+    }
 
-        // Should have multiple blocks
+    #[test]
+    fn test_simple_loop() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _test_loop:
+                mov x0, #0
+                mov x1, #1000000
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, x1
+                b.lt .Lloop
+                ret
+        "});
+
         assert!(cfg.block_count() >= 2);
 
-        // Find the block with the back-edge
         let back_edge_block = cfg
             .blocks()
             .find(|&b| cfg.block(b).back_edge_target.is_some());
@@ -298,16 +301,13 @@ _test_loop:
 
     #[test]
     fn test_label_mapping() {
-        let input = r#"
-.Lstart:
-    mov x0, #0
-.Lloop:
-    add x0, x0, #1
-    b .Lloop
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            .Lstart:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                b .Lloop
+        "});
 
         assert!(cfg.has_label(".Lstart"));
         assert!(cfg.has_label(".Lloop"));
@@ -315,33 +315,27 @@ _test_loop:
 
     #[test]
     fn test_nested_loops() {
-        // Outer loop with inner loop - both should have back-edges
-        let input = r#"
-_nested:
-    mov x0, #0
-.Louter:
-    mov x1, #0
-.Linner:
-    add x1, x1, #1
-    cmp x1, #10
-    b.lt .Linner
-    add x0, x0, #1
-    cmp x0, #10
-    b.lt .Louter
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _nested:
+                mov x0, #0
+            .Louter:
+                mov x1, #0
+            .Linner:
+                add x1, x1, #1
+                cmp x1, #10
+                b.lt .Linner
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Louter
+                ret
+        "});
 
-        // Should have exactly 2 back-edges
         let back_edge_count = cfg
             .blocks()
             .filter(|&b| cfg.block(b).back_edge_target.is_some())
             .count();
         assert_eq!(back_edge_count, 2, "Expected 2 back-edges for nested loops");
 
-        // Verify targets
         let inner_be = cfg
             .blocks()
             .find(|&b| cfg.block(b).back_edge_target == Some(".Linner".to_string()));
@@ -354,24 +348,18 @@ _nested:
 
     #[test]
     fn test_diamond_no_back_edge() {
-        // Diamond pattern: entry -> then/else -> end
-        // No back-edges should be detected (all forward branches)
-        let input = r#"
-_diamond:
-    cmp x0, #0
-    b.eq .Lthen
-    mov x1, #1
-    b .Lend
-.Lthen:
-    mov x1, #2
-.Lend:
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _diamond:
+                cmp x0, #0
+                b.eq .Lthen
+                mov x1, #1
+                b .Lend
+            .Lthen:
+                mov x1, #2
+            .Lend:
+                ret
+        "});
 
-        // No back-edges in a diamond pattern
         let back_edge_count = cfg
             .blocks()
             .filter(|&b| cfg.block(b).back_edge_target.is_some())
@@ -384,15 +372,11 @@ _diamond:
 
     #[test]
     fn test_self_loop() {
-        // Degenerate case: block branches to itself
-        let input = r#"
-_spin:
-.Lspin:
-    b .Lspin
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _spin:
+            .Lspin:
+                b .Lspin
+        "});
 
         let back_edge_block = cfg
             .blocks()
@@ -409,18 +393,14 @@ _spin:
 
     #[test]
     fn test_do_while_loop() {
-        // Do-while style: body executes at least once, check at end
-        let input = r#"
-_do_while:
-.Lbody:
-    add x0, x0, #1
-    cmp x0, #100
-    b.lt .Lbody
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _do_while:
+            .Lbody:
+                add x0, x0, #1
+                cmp x0, #100
+                b.lt .Lbody
+                ret
+        "});
 
         let back_edge_block = cfg
             .blocks()
@@ -437,27 +417,21 @@ _do_while:
 
     #[test]
     fn test_multiple_independent_loops() {
-        // Two separate loops in sequence
-        let input = r#"
-_two_loops:
-    mov x0, #0
-.Lloop1:
-    add x0, x0, #1
-    cmp x0, #10
-    b.lt .Lloop1
+        let (cfg, _) = build_cfg(indoc! {"
+            _two_loops:
+                mov x0, #0
+            .Lloop1:
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Lloop1
+                mov x1, #0
+            .Lloop2:
+                add x1, x1, #1
+                cmp x1, #10
+                b.lt .Lloop2
+                ret
+        "});
 
-    mov x1, #0
-.Lloop2:
-    add x1, x1, #1
-    cmp x1, #10
-    b.lt .Lloop2
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-
-        // Should have exactly 2 back-edges
         let back_edge_count = cfg
             .blocks()
             .filter(|&b| cfg.block(b).back_edge_target.is_some())
@@ -479,49 +453,38 @@ _two_loops:
 
     #[test]
     fn test_is_back_edge_method() {
-        let input = r#"
-_test:
-    mov x0, #0
-.Lloop:
-    add x0, x0, #1
-    b.lt .Lloop
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _test:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                b.lt .Lloop
+                ret
+        "});
 
-        // Find the block that has the back-edge
         let back_edge_node = cfg
             .blocks()
             .find(|&b| cfg.block(b).back_edge_target.is_some())
             .unwrap();
 
-        // is_back_edge should return true for the correct block/target
         assert!(cfg.is_back_edge(back_edge_node, ".Lloop"));
-
-        // is_back_edge should return false for other targets
         assert!(!cfg.is_back_edge(back_edge_node, ".Lnonexistent"));
     }
 
     #[test]
     fn test_successors() {
-        let input = r#"
-_test:
-    cmp x0, #0
-    b.eq .Lthen
-    mov x1, #1
-    b .Lend
-.Lthen:
-    mov x1, #2
-.Lend:
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _test:
+                cmp x0, #0
+                b.eq .Lthen
+                mov x1, #1
+                b .Lend
+            .Lthen:
+                mov x1, #2
+            .Lend:
+                ret
+        "});
 
-        // Entry block should have 2 successors (conditional branch + fall-through)
         let entry = cfg.blocks().next().unwrap();
         let successor_count = cfg.successors(entry).count();
         assert_eq!(successor_count, 2, "Entry block should have 2 successors");
@@ -529,21 +492,16 @@ _test:
 
     #[test]
     fn test_call_falls_through() {
-        // bl (call) should fall through to next instruction, not branch to target
-        let input = r#"
-_caller:
-    mov x0, #1
-    bl _callee
-    add x0, x0, #1
-    ret
-_callee:
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, lines) = build_cfg(indoc! {"
+            _caller:
+                mov x0, #1
+                bl _callee
+                add x0, x0, #1
+                ret
+            _callee:
+                ret
+        "});
 
-        // Find the block containing "bl _callee"
         let caller_block = cfg.blocks().find(|&b| {
             let block = cfg.block(b);
             block.line_indices.clone().any(|idx| {
@@ -556,15 +514,12 @@ _callee:
         });
         assert!(caller_block.is_some(), "Should find block with bl");
 
-        // The bl block should have exactly 1 successor (fall-through to add)
-        // NOT 2 (which would include edge to _callee)
         let successor_count = cfg.successors(caller_block.unwrap()).count();
         assert_eq!(
             successor_count, 1,
             "bl should only fall through, not branch to callee"
         );
 
-        // No back-edges (recursive call should not create one)
         let back_edge_count = cfg
             .blocks()
             .filter(|&b| cfg.block(b).back_edge_target.is_some())
@@ -574,24 +529,19 @@ _callee:
 
     #[test]
     fn test_recursive_call_no_back_edge() {
-        // Recursive bl should NOT be detected as a back-edge
-        let input = r#"
-_factorial:
-    cmp x0, #1
-    b.le .Lbase
-    sub x0, x0, #1
-    bl _factorial
-    mul x0, x0, x1
-    ret
-.Lbase:
-    mov x0, #1
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let (cfg, _) = build_cfg(indoc! {"
+            _factorial:
+                cmp x0, #1
+                b.le .Lbase
+                sub x0, x0, #1
+                bl _factorial
+                mul x0, x0, x1
+                ret
+            .Lbase:
+                mov x0, #1
+                ret
+        "});
 
-        // No back-edges - the recursive call is not a loop
         let back_edge_count = cfg
             .blocks()
             .filter(|&b| cfg.block(b).back_edge_target.is_some())
