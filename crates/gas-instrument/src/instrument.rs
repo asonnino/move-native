@@ -193,12 +193,12 @@ impl<'a> Instrumenter<'a> {
 mod tests {
     use indoc::indoc;
 
-    use crate::{cfg::Cfg, instrument::Instrumenter, parser, ParsedLine};
+    use crate::{cfg, cfg::Cfg, instrument::Instrumenter, parser, ParsedLine};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
         let lines = parser::parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let cfg = cfg::build(&lines);
         (cfg, lines)
     }
 

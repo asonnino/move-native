@@ -18,7 +18,7 @@
 use std::{collections::HashMap, ops::Range};
 
 use petgraph::{
-    algo::dominators::{self},
+    algo::dominators,
     graph::{DiGraph, NodeIndex},
 };
 
@@ -55,163 +55,186 @@ pub struct Cfg {
     label_to_block: HashMap<String, NodeIndex>,
 }
 
-impl Cfg {
-    /// Build a CFG from parsed assembly lines
-    pub fn from_lines(lines: &[ParsedLine]) -> Self {
-        // First pass: identify all labels and their positions
-        let mut label_positions: HashMap<String, usize> = HashMap::new();
-        for (idx, line) in lines.iter().enumerate() {
-            if let Some(label) = line.label {
-                label_positions.insert(label.to_string(), idx);
-            }
-        }
+/// Build a CFG from parsed assembly lines
+pub fn build(lines: &[ParsedLine]) -> Cfg {
+    CfgBuilder::new(lines).build()
+}
 
-        // Second pass: identify basic block boundaries
-        // A new block starts at:
-        // - The beginning of the file
-        // - Any label
-        // - The instruction after a branch
-        let mut block_starts: Vec<usize> = Vec::new();
+/// Builder for constructing a CFG from parsed assembly lines
+struct CfgBuilder<'a> {
+    lines: &'a [ParsedLine<'a>],
+    graph: DiGraph<BlockData, ()>,
+    label_to_block: HashMap<String, NodeIndex>,
+    nodes: Vec<NodeIndex>,
+}
+
+impl<'a> CfgBuilder<'a> {
+    fn new(lines: &'a [ParsedLine<'a>]) -> Self {
+        Self {
+            lines,
+            graph: DiGraph::new(),
+            label_to_block: HashMap::new(),
+            nodes: Vec::new(),
+        }
+    }
+
+    fn build(mut self) -> Cfg {
+        let block_starts = self.find_block_boundaries();
+        self.create_blocks(&block_starts);
+        self.add_edges();
+        self.identify_back_edges();
+
+        Cfg {
+            graph: self.graph,
+            label_to_block: self.label_to_block,
+        }
+    }
+
+    /// Find basic block boundaries.
+    /// A new block starts at:
+    /// - The beginning of the file
+    /// - Any label
+    /// - The instruction after a branch
+    fn find_block_boundaries(&self) -> Vec<usize> {
+        let mut block_starts = Vec::new();
         let mut previous_was_branch = false;
 
-        for (idx, line) in lines.iter().enumerate() {
+        for (idx, line) in self.lines.iter().enumerate() {
             let is_start = idx == 0 || line.label.is_some() || previous_was_branch;
 
-            if is_start && Self::has_code(line, lines, idx) {
+            if is_start && self.has_code_at(idx) {
                 block_starts.push(idx);
             }
 
             previous_was_branch = line
                 .instruction
                 .as_ref()
-                .map(|i| i.is_branch() || i.is_return())
-                .unwrap_or(false);
+                .is_some_and(|i| i.is_branch() || i.is_return());
         }
 
-        // Third pass: create graph nodes for basic blocks
-        let mut graph: DiGraph<BlockData, ()> = DiGraph::new();
-        let mut label_to_block: HashMap<String, NodeIndex> = HashMap::new();
-        let mut nodes: Vec<NodeIndex> = Vec::new();
+        block_starts
+    }
 
+    /// Create graph nodes for each basic block.
+    fn create_blocks(&mut self, block_starts: &[usize]) {
         for (block_idx, &start_idx) in block_starts.iter().enumerate() {
             let end_idx = block_starts
                 .get(block_idx + 1)
                 .copied()
-                .unwrap_or(lines.len());
+                .unwrap_or(self.lines.len());
 
-            // Line indices for this block
             let line_indices = start_idx..end_idx;
+            let label = self.lines[start_idx].label.map(|s| s.to_string());
 
-            // Find the label for this block (if any)
-            let label = lines[start_idx].label.map(|s| s.to_string());
-
-            // Count actual instructions (not directives, labels, or empty lines)
             let instruction_count = line_indices
                 .clone()
-                .filter(|&idx| lines[idx].instruction.is_some())
+                .filter(|&idx| self.lines[idx].instruction.is_some())
                 .count();
 
-            // Create the node
-            let node = graph.add_node(BlockData {
+            let node = self.graph.add_node(BlockData {
                 label,
                 line_indices: line_indices.clone(),
                 back_edge_target: None,
                 terminator_line: None,
                 instruction_count,
             });
-            nodes.push(node);
+            self.nodes.push(node);
 
-            // Register this block for any labels it contains
+            // Register all labels in this block
             for idx in line_indices {
-                if let Some(lbl) = lines[idx].label {
-                    label_to_block.insert(lbl.to_string(), node);
+                if let Some(lbl) = self.lines[idx].label {
+                    self.label_to_block.insert(lbl.to_string(), node);
                 }
             }
         }
+    }
 
-        // Fourth pass: add edges based on control flow and record terminator lines
-        for (block_idx, &node) in nodes.iter().enumerate() {
-            let block = &graph[node];
+    /// Add edges based on control flow and record terminator lines.
+    fn add_edges(&mut self) {
+        for (block_idx, &node) in self.nodes.iter().enumerate() {
+            let block = &self.graph[node];
 
-            // Find the terminating instruction and its line index
             let terminator = block
                 .line_indices
                 .clone()
                 .rev()
-                .find(|&idx| lines[idx].instruction.is_some());
+                .find(|&idx| self.lines[idx].instruction.is_some());
 
             if let Some(terminator_line) = terminator {
-                let instruction = lines[terminator_line].instruction.as_ref().unwrap();
+                let instruction = self.lines[terminator_line].instruction.as_ref().unwrap();
 
-                // Record the terminator line if it's a branch or return
                 if instruction.is_branch() || instruction.is_return() {
-                    graph[node].terminator_line = Some(terminator_line);
+                    self.graph[node].terminator_line = Some(terminator_line);
                 }
 
-                // Add edge to branch target (but not for calls - they return to next instruction)
                 if instruction.is_branch() && !instruction.is_call() {
                     if let Some(target) = instruction.get_branch_target() {
-                        if let Some(&target_node) = label_to_block.get(target) {
-                            graph.add_edge(node, target_node, ());
+                        if let Some(&target_node) = self.label_to_block.get(target) {
+                            self.graph.add_edge(node, target_node, ());
                         }
                     }
                 }
 
-                // Fall through unless it's a return or unconditional jump
                 if !instruction.is_return() && !instruction.is_unconditional_jump() {
-                    if block_idx + 1 < nodes.len() {
-                        graph.add_edge(node, nodes[block_idx + 1], ());
+                    if let Some(&next_node) = self.nodes.get(block_idx + 1) {
+                        self.graph.add_edge(node, next_node, ());
                     }
                 }
-            } else {
-                // No terminating instruction, fall through
-                if block_idx + 1 < nodes.len() {
-                    graph.add_edge(node, nodes[block_idx + 1], ());
-                }
+            } else if let Some(&next_node) = self.nodes.get(block_idx + 1) {
+                self.graph.add_edge(node, next_node, ());
             }
-        }
-
-        // Fifth pass: compute dominators and identify back-edges
-        // A back-edge is an edge A → B where B dominates A
-        if nodes.is_empty() {
-            return Self {
-                graph,
-                label_to_block,
-            };
-        }
-
-        // Compute dominator tree: B dominates A if every path from entry to A goes through B
-        let entry = nodes[0];
-        let dominators = dominators::simple_fast(&graph, entry);
-
-        // Collect back-edge information
-        let mut back_edge_info: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-        for &node in &nodes {
-            for successor in graph.neighbors(node) {
-                // Check if successor dominates this block
-                let successor_dominates_block = dominators
-                    .dominators(node)
-                    .map(|mut iter| iter.any(|d| d == successor))
-                    .unwrap_or(false);
-
-                if successor_dominates_block {
-                    back_edge_info.push((node, successor));
-                    break; // Only need to mark one back-edge per block
-                }
-            }
-        }
-
-        // Apply back-edge information
-        for (node, target) in back_edge_info {
-            graph[node].back_edge_target = Some(target);
-        }
-
-        Self {
-            graph,
-            label_to_block,
         }
     }
 
+    /// Compute dominators and mark back-edges.
+    /// A back-edge is an edge A → B where B dominates A.
+    fn identify_back_edges(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+
+        let entry = self.nodes[0];
+        let dominators = dominators::simple_fast(&self.graph, entry);
+
+        let back_edges: Vec<_> = self
+            .nodes
+            .iter()
+            .filter_map(|&node| {
+                self.graph
+                    .neighbors(node)
+                    .find(|&successor| {
+                        dominators
+                            .dominators(node)
+                            .is_some_and(|mut iter| iter.any(|d| d == successor))
+                    })
+                    .map(|target| (node, target))
+            })
+            .collect();
+
+        for (node, target) in back_edges {
+            debug_assert!(
+                self.graph[node].instruction_count > 0,
+                "back-edge should have instructions"
+            );
+            self.graph[node].back_edge_target = Some(target);
+        }
+    }
+
+    /// Check if there's any code at or after this position before the next label.
+    fn has_code_at(&self, idx: usize) -> bool {
+        if self.lines[idx].instruction.is_some() {
+            return true;
+        }
+
+        self.lines
+            .iter()
+            .skip(idx + 1)
+            .take_while(|line| line.label.is_none())
+            .any(|line| line.instruction.is_some())
+    }
+}
+
+impl Cfg {
     /// Iterate over all block indices
     pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
         self.graph.node_indices()
@@ -263,38 +286,18 @@ impl Cfg {
     pub fn has_back_edge(&self, block: NodeIndex) -> bool {
         self.graph[block].back_edge_target.is_some()
     }
-
-    /// Check if there's any code at or after this position in the same logical block
-    fn has_code(line: &ParsedLine, lines: &[ParsedLine], idx: usize) -> bool {
-        // Check current line
-        if line.instruction.is_some() {
-            return true;
-        }
-
-        // Look ahead for code before the next label
-        for future_line in lines.iter().skip(idx + 1) {
-            if future_line.label.is_some() {
-                break;
-            }
-            if future_line.instruction.is_some() {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
 
-    use crate::{parser, parser::ParsedLine, Cfg};
+    use crate::{cfg, parser, parser::ParsedLine, Cfg};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
         let lines = parser::parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
+        let cfg = cfg::build(&lines);
         (cfg, lines)
     }
 

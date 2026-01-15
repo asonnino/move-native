@@ -40,7 +40,7 @@ fn main() {
     };
 
     // Build CFG
-    let cfg = cfg::Cfg::from_lines(&lines);
+    let cfg = cfg::build(&lines);
 
     // Instrument
     let output = instrument::instrument(&lines, &cfg);
