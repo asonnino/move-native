@@ -14,4 +14,4 @@ pub mod parser;
 
 pub use cfg::Cfg;
 pub use instrument::instrument;
-pub use parser::ParsedLine;
+pub use parser::{parse, Directive, Instruction, ParseError, ParsedLine};

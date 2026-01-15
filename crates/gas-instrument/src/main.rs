@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use gas_instrument::{cfg, instrument, parser::Parser};
+use gas_instrument::{cfg, instrument, parse};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -31,8 +31,7 @@ fn main() {
     }
 
     // Parse assembly
-    let parser = Parser {};
-    let lines = match parser.parse(&input) {
+    let lines = match parse(&input) {
         Ok(lines) => lines,
         Err(e) => {
             eprintln!("Parse error: {}", e);

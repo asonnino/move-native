@@ -56,7 +56,7 @@ pub fn instrument(lines: &[ParsedLine], cfg: &Cfg) -> String {
 
 /// State for instrumenting assembly with gas checks
 struct Instrumenter<'a> {
-    lines: &'a [ParsedLine],
+    lines: &'a [ParsedLine<'a>],
     cfg: &'a Cfg,
     existing_labels: HashSet<String>,
     label_counter: usize,
@@ -65,8 +65,11 @@ struct Instrumenter<'a> {
 
 impl<'a> Instrumenter<'a> {
     /// Creates a new instrumenter, collecting existing labels to avoid collisions.
-    fn new(lines: &'a [ParsedLine], cfg: &'a Cfg) -> Self {
-        let existing_labels = lines.iter().filter_map(|line| line.label.clone()).collect();
+    fn new(lines: &'a [ParsedLine<'a>], cfg: &'a Cfg) -> Self {
+        let existing_labels = lines
+            .iter()
+            .filter_map(|line| line.label.map(|s| s.to_string()))
+            .collect();
         Self {
             lines,
             cfg,
@@ -188,54 +191,52 @@ impl<'a> Instrumenter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{cfg::Cfg, parser::Parser};
+    use indoc::indoc;
+
+    use crate::{cfg::Cfg, instrument::Instrumenter, parser, ParsedLine};
+
+    /// Helper to reduce test boilerplate: parses assembly and builds CFG
+    fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
+        let lines = parser::parse(input).unwrap();
+        let cfg = Cfg::from_lines(&lines);
+        (cfg, lines)
+    }
 
     #[test]
     fn test_instrument_simple_loop() {
-        let input = r#".global _test_loop
-.align 4
+        let (cfg, lines) = build_cfg(indoc! {"
+            .global _test_loop
+            .align 4
 
-_test_loop:
-    mov x0, #0
-    mov x1, #1000000
+            _test_loop:
+                mov x0, #0
+                mov x1, #1000000
 
-.Lloop:
-    add x0, x0, #1
-    cmp x0, x1
-    b.lt .Lloop
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, x1
+                b.lt .Lloop
 
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let output = instrument(&lines, &cfg);
+                ret
+        "});
+        let output = crate::instrument(&lines, &cfg);
 
-        // Check that gas check was inserted
         assert!(output.contains("sub x23, x23, #"));
         assert!(output.contains("tbz x23, #63,"));
         assert!(output.contains("brk #0"));
-
-        // Check that original branch is still there
         assert!(output.contains("b.lt .Lloop"));
-
-        println!("Instrumented output:\n{}", output);
     }
 
     #[test]
     fn test_no_instrumentation_without_loops() {
-        let input = r#".global _simple
-_simple:
-    mov x0, #42
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let output = instrument(&lines, &cfg);
+        let (cfg, lines) = build_cfg(indoc! {"
+            .global _simple
+            _simple:
+                mov x0, #42
+                ret
+        "});
+        let output = crate::instrument(&lines, &cfg);
 
-        // Should not have gas checks
         assert!(!output.contains("sub x23"));
     }
 
@@ -255,100 +256,72 @@ _simple:
 
     #[test]
     fn test_gas_decrement_large_count() {
-        // Test count > 4095 requires multiple sub instructions
         let instrumenter = Instrumenter::gas_decrement_instructions(5000);
-
-        // Should emit: sub x23, x23, #4095 followed by sub x23, x23, #905
+        // 5000 = 4095 + 905
         assert_eq!(instrumenter.len(), 2);
-        assert!(instrumenter[0].contains("sub x23, x23, #4095"));
-        assert!(instrumenter[1].contains("sub x23, x23, #905"));
+        assert_eq!(instrumenter[0], "    sub x23, x23, #4095");
+        assert_eq!(instrumenter[1], "    sub x23, x23, #905");
     }
 
     #[test]
     fn test_gas_decrement_very_large_count() {
-        // Test count requiring 3+ sub instructions
         let instrumenter = Instrumenter::gas_decrement_instructions(10000);
-
         // 10000 = 4095 + 4095 + 1810
         assert_eq!(instrumenter.len(), 3);
-        assert!(instrumenter[0].contains("sub x23, x23, #4095"));
-        assert!(instrumenter[1].contains("sub x23, x23, #4095"));
-        assert!(instrumenter[2].contains("sub x23, x23, #1810"));
+        assert_eq!(instrumenter[0], "    sub x23, x23, #4095");
+        assert_eq!(instrumenter[1], "    sub x23, x23, #4095");
+        assert_eq!(instrumenter[2], "    sub x23, x23, #1810");
     }
 
     #[test]
     fn test_nested_loop_no_double_charging() {
-        // Verify that nested loops charge independently with no overlap
         // Inner loop: 3 instructions (add, cmp, b.lt)
-        // Outer loop block after inner: 3 instructions (add, cmp, b.lt)
-        let input = r#"
-_nested:
-    mov x0, #0
-.Louter:
-    mov x1, #0
-.Linner:
-    add x1, x1, #1
-    cmp x1, #10
-    b.lt .Linner
-    add x0, x0, #1
-    cmp x0, #10
-    b.lt .Louter
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let output = instrument(&lines, &cfg);
+        // Outer loop: 3 instructions (add, cmp, b.lt)
+        let (cfg, lines) = build_cfg(indoc! {"
+            _nested:
+                mov x0, #0
+            .Louter:
+                mov x1, #0
+            .Linner:
+                add x1, x1, #1
+                cmp x1, #10
+                b.lt .Linner
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Louter
+                ret
+        "});
+        let output = crate::instrument(&lines, &cfg);
 
         // Should have exactly 2 gas checks (one per back-edge)
-        let gas_check_count = output.matches("tbz x23, #63").count();
-        assert_eq!(
-            gas_check_count, 2,
-            "Should have exactly 2 gas checks for nested loops"
-        );
+        assert_eq!(output.matches("tbz x23, #63").count(), 2);
 
-        // Both should charge for 3 instructions (their own block only)
-        // Count occurrences of "sub x23, x23, #3"
-        let sub_3_count = output.matches("sub x23, x23, #3").count();
-        assert_eq!(
-            sub_3_count, 2,
-            "Both loops should charge for 3 instructions each (no double-charging)"
-        );
+        // Both should charge for 3 instructions (no double-charging)
+        assert_eq!(output.matches("sub x23, x23, #3").count(), 2);
 
-        // Verify both back-edges are instrumented
-        assert!(
-            output.contains("b.lt .Linner"),
-            "Inner branch should be present"
-        );
-        assert!(
-            output.contains("b.lt .Louter"),
-            "Outer branch should be present"
-        );
+        assert!(output.contains("b.lt .Linner"));
+        assert!(output.contains("b.lt .Louter"));
     }
 
     #[test]
     fn test_nested_loop_instruction_counts() {
-        // More detailed test of instruction counting for nested loops
+        // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
+        // Outer block: add, cmp, b.lt = 3 instructions
+        let (cfg, _) = build_cfg(indoc! {"
+            .Louter:
+                mov x1, #0
+            .Linner:
+                add x1, x1, #1
+                nop
+                nop
+                cmp x1, #10
+                b.lt .Linner
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Louter
+                ret
+        "});
 
-        let input = r#"
-.Louter:
-    mov x1, #0
-.Linner:
-    add x1, x1, #1
-    nop
-    nop
-    cmp x1, #10
-    b.lt .Linner
-    add x0, x0, #1
-    cmp x0, #10
-    b.lt .Louter
-    ret
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-
-        // Find the blocks with back-edges and verify their instruction counts
         let mut inner_count = None;
         let mut outer_count = None;
 
@@ -363,71 +336,149 @@ _nested:
             }
         }
 
-        // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
-        assert_eq!(
-            inner_count,
-            Some(5),
-            "Inner loop block should have 5 instructions"
-        );
-
-        // Outer block (after inner): add, cmp, b.lt = 3 instructions
-        assert_eq!(
-            outer_count,
-            Some(3),
-            "Outer loop block should have 3 instructions"
-        );
-
-        // Total instructions charged per full iteration: 5 (inner) + 3 (outer) = 8
-        // NOT 5 + 5 + 3 = 13 (which would be double-charging)
+        assert_eq!(inner_count, Some(5));
+        assert_eq!(outer_count, Some(3));
     }
 
     #[test]
     fn test_label_uses_unique_prefix() {
-        // Verify that generated labels use the unique prefix
-        let input = r#"
-.Lloop:
-    add x0, x0, #1
-    b .Lloop
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let output = instrument(&lines, &cfg);
+        let (cfg, lines) = build_cfg(indoc! {"
+            .Lloop:
+                add x0, x0, #1
+                b .Lloop
+        "});
+        let output = crate::instrument(&lines, &cfg);
 
-        // Should use the unique prefix, not the old .Lok_ prefix
-        assert!(
-            output.contains(".L__gas_ok_"),
-            "Should use unique .L__gas_ok_ prefix"
-        );
-        assert!(!output.contains(".Lok_"), "Should not use old .Lok_ prefix");
+        assert!(output.contains(".L__gas_ok_"));
+        assert!(!output.contains(".Lok_"));
     }
 
     #[test]
     fn test_label_collision_avoidance() {
-        // Input has labels that would collide with generated labels
-        // The instrumenter should skip those and use the next available
-        let input = r#"
-.L__gas_ok_0:
-    nop
-.L__gas_ok_1:
-    nop
-.Lloop:
-    add x0, x0, #1
-    b .Lloop
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let output = instrument(&lines, &cfg);
+        let (cfg, lines) = build_cfg(indoc! {"
+            .L__gas_ok_0:
+                nop
+            .L__gas_ok_1:
+                nop
+            .Lloop:
+                add x0, x0, #1
+                b .Lloop
+        "});
+        let output = crate::instrument(&lines, &cfg);
 
-        // The generated label should skip 0 and 1 (which exist) and use 2
-        assert!(
-            output.contains(".L__gas_ok_2"),
-            "Should skip colliding labels and use .L__gas_ok_2"
-        );
+        // Should skip 0 and 1 (existing) and use 2
+        assert!(output.contains(".L__gas_ok_2"));
 
-        // Original labels should still be present
+        // Original labels preserved
         assert!(output.contains(".L__gas_ok_0:"));
         assert!(output.contains(".L__gas_ok_1:"));
+    }
+
+    #[test]
+    fn test_gas_decrement_zero_count() {
+        let instrumenter = Instrumenter::gas_decrement_instructions(0);
+        assert!(instrumenter.is_empty());
+    }
+
+    #[test]
+    fn test_gas_decrement_exact_multiple() {
+        let instrumenter = Instrumenter::gas_decrement_instructions(8190);
+        // 8190 = 4095 * 2, exactly 2 subs with no remainder
+        assert_eq!(instrumenter.len(), 2);
+        assert_eq!(instrumenter[0], "    sub x23, x23, #4095");
+        assert_eq!(instrumenter[1], "    sub x23, x23, #4095");
+    }
+
+    #[test]
+    fn test_self_loop_instrumentation() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            .Lspin:
+                b .Lspin
+        "});
+        let output = crate::instrument(&lines, &cfg);
+
+        assert!(output.contains("sub x23, x23, #1"));
+        assert!(output.contains("tbz x23, #63"));
+        assert!(output.contains("brk #0"));
+        assert!(output.contains("b .Lspin"));
+    }
+
+    #[test]
+    fn test_cbz_loop_instrumentation() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            _loop:
+                mov x0, #10
+            .Lloop:
+                sub x0, x0, #1
+                cbnz x0, .Lloop
+                ret
+        "});
+        let output = crate::instrument(&lines, &cfg);
+
+        assert!(output.contains("sub x23, x23, #2"));
+        assert!(output.contains("cbnz x0, .Lloop"));
+    }
+
+    #[test]
+    fn test_exact_gas_check_sequence() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            .Lloop:
+                nop
+                b .Lloop
+        "});
+        let output = crate::instrument(&lines, &cfg);
+
+        // Verify exact sequence: original instructions, then gas check before back-edge
+        let expected_sequence = indoc! {"
+            .Lloop:
+                nop
+                sub x23, x23, #2
+                tbz x23, #63, .L__gas_ok_0
+                brk #0
+            .L__gas_ok_0:
+                b .Lloop
+        "};
+        assert_eq!(output.trim(), expected_sequence.trim());
+    }
+
+    #[test]
+    fn test_label_on_back_edge_preserved() {
+        // When the back-edge instruction has a label, it should be preserved
+        let (cfg, lines) = build_cfg(indoc! {"
+            .Lloop:
+                nop
+            .Lback:
+                b .Lloop
+        "});
+        let output = crate::instrument(&lines, &cfg);
+
+        // The .Lback label should appear before the gas check
+        assert!(output.contains(".Lback:"));
+        // The branch should come after the gas check
+        assert!(output.contains("b .Lloop"));
+    }
+
+    #[test]
+    fn test_multiple_independent_loops() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            _func:
+                mov x0, #0
+            .Lloop1:
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Lloop1
+                mov x1, #0
+            .Lloop2:
+                add x1, x1, #1
+                cmp x1, #20
+                b.lt .Lloop2
+                ret
+        "});
+        let output = crate::instrument(&lines, &cfg);
+
+        // Both loops should be instrumented
+        assert_eq!(output.matches("tbz x23, #63").count(), 2);
+        assert!(output.contains("b.lt .Lloop1"));
+        assert!(output.contains("b.lt .Lloop2"));
     }
 }

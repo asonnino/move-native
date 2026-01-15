@@ -61,8 +61,8 @@ impl Cfg {
         // First pass: identify all labels and their positions
         let mut label_positions: HashMap<String, usize> = HashMap::new();
         for (idx, line) in lines.iter().enumerate() {
-            if let Some(ref label) = line.label {
-                label_positions.insert(label.clone(), idx);
+            if let Some(label) = line.label {
+                label_positions.insert(label.to_string(), idx);
             }
         }
 
@@ -103,7 +103,7 @@ impl Cfg {
             let line_indices = start_idx..end_idx;
 
             // Find the label for this block (if any)
-            let label = lines[start_idx].label.clone();
+            let label = lines[start_idx].label.map(|s| s.to_string());
 
             // Count actual instructions (not directives, labels, or empty lines)
             let instruction_count = line_indices
@@ -123,8 +123,8 @@ impl Cfg {
 
             // Register this block for any labels it contains
             for idx in line_indices {
-                if let Some(ref lbl) = lines[idx].label {
-                    label_to_block.insert(lbl.clone(), node);
+                if let Some(lbl) = lines[idx].label {
+                    label_to_block.insert(lbl.to_string(), node);
                 }
             }
         }
@@ -289,15 +289,11 @@ impl Cfg {
 mod tests {
     use indoc::indoc;
 
-    use crate::{
-        parser::{ParsedLine, Parser},
-        Cfg,
-    };
+    use crate::{parser, parser::ParsedLine, Cfg};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
+        let lines = parser::parse(input).unwrap();
         let cfg = Cfg::from_lines(&lines);
         (cfg, lines)
     }
