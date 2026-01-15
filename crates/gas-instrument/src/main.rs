@@ -4,28 +4,21 @@
 //!
 //! Usage:
 //!     cat test.s | gas-instrument > test_instrumented.s
-//!     cat test.s | gas-instrument --bundle > test_instrumented.s  # with .bundle_lock directives
 
 use std::io::{self, Read};
 
-use gas_instrument::{cfg, instrument, parser::Parser, InstrumentConfig};
+use gas_instrument::{cfg, instrument, parser::Parser};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-
-    // Check for --bundle flag
-    let emit_bundle = args.iter().any(|a| a == "--bundle");
 
     // Check for --help
     if args.iter().any(|a| a == "--help" || a == "-h") {
         eprintln!("gas-instrument - Arm64 assembly gas instrumentation tool");
         eprintln!();
-        eprintln!("Usage: cat input.s | gas-instrument [OPTIONS] > output.s");
+        eprintln!("Usage: cat input.s | gas-instrument > output.s");
         eprintln!();
         eprintln!("Options:");
-        eprintln!(
-            "  --bundle    Emit .bundle_lock/.bundle_unlock directives (requires LLVM assembler)"
-        );
         eprintln!("  --help, -h  Show this help message");
         std::process::exit(0);
     }
@@ -50,13 +43,8 @@ fn main() {
     // Build CFG
     let cfg = cfg::Cfg::from_lines(&lines);
 
-    // Configure instrumentation
-    let config = InstrumentConfig {
-        emit_bundle_directives: emit_bundle,
-    };
-
     // Instrument
-    let output = instrument::instrument_with_config(&lines, &cfg, &config);
+    let output = instrument::instrument(&lines, &cfg);
 
     // Write to stdout
     print!("{}", output);

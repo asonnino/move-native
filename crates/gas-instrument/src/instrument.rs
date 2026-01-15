@@ -40,140 +40,136 @@ const MAX_SUB_IMMEDIATE: usize = 4095;
 /// Prefix for generated gas check labels (uses double underscore to indicate internal/generated)
 const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 
-/// Configuration for instrumentation
-#[derive(Default)]
-pub struct InstrumentConfig {
-    /// Whether to emit .bundle_lock/.bundle_unlock directives
-    /// These require LLVM's integrated assembler; Apple's as doesn't support them
-    pub emit_bundle_directives: bool,
-}
-
 /// Instrument assembly with gas checks at back-edges
 ///
 /// For each basic block that ends with a back-edge branch, inserts:
 /// ```asm
-/// .bundle_lock          // (optional, if config.emit_bundle_directives)
 /// sub x23, x23, #N      // N = instructions in block
 /// tbz x23, #63, .Lok_M  // if positive, continue
 /// brk #0                // trap - out of gas
 /// .Lok_M:
 /// <original branch>
-/// .bundle_unlock        // (optional, if config.emit_bundle_directives)
 /// ```
 pub fn instrument(lines: &[ParsedLine], cfg: &Cfg) -> String {
-    instrument_with_config(lines, cfg, &InstrumentConfig::default())
+    Instrumenter::new(lines, cfg).run()
 }
 
-/// Instrument assembly with gas checks at back-edges (with configuration)
-pub fn instrument_with_config(
-    lines: &[ParsedLine],
-    cfg: &Cfg,
-    config: &InstrumentConfig,
-) -> String {
-    let mut output = String::new();
-    let mut gas_check_counter = 0;
+/// State for instrumenting assembly with gas checks
+struct Instrumenter<'a> {
+    lines: &'a [ParsedLine],
+    cfg: &'a Cfg,
+    existing_labels: HashSet<String>,
+    label_counter: usize,
+    output: String,
+}
 
-    // Collect all existing labels to avoid collisions
-    let existing_labels: HashSet<String> =
-        lines.iter().filter_map(|line| line.label.clone()).collect();
+impl<'a> Instrumenter<'a> {
+    /// Creates a new instrumenter, collecting existing labels to avoid collisions.
+    fn new(lines: &'a [ParsedLine], cfg: &'a Cfg) -> Self {
+        let existing_labels = lines.iter().filter_map(|line| line.label.clone()).collect();
+        Self {
+            lines,
+            cfg,
+            existing_labels,
+            label_counter: 0,
+            output: String::new(),
+        }
+    }
 
-    // Track which line indices have back-edge branches
-    let mut back_edge_lines: HashMap<usize, NodeIndex> = HashMap::new();
+    /// Processes all lines, inserting gas checks at back-edges.
+    fn run(mut self) -> String {
+        let back_edge_lines = self.find_back_edge_lines();
 
-    for block_idx in cfg.blocks() {
-        if cfg.has_back_edge(block_idx) {
-            let block = cfg.block(block_idx);
-            // Find the line with the terminating branch
-            if let Some(branch_line_idx) = block.line_indices.clone().rev().find(|&idx| {
-                lines[idx]
-                    .instruction
-                    .as_ref()
-                    .map(|i| i.is_branch())
-                    .unwrap_or(false)
-            }) {
-                back_edge_lines.insert(branch_line_idx, block_idx);
+        for (idx, line) in self.lines.iter().enumerate() {
+            if let Some(&block_idx) = back_edge_lines.get(&idx) {
+                self.emit_instrumented_line(line, block_idx);
+            } else {
+                self.emit_original_line(line);
+            }
+        }
+
+        self.output
+    }
+
+    /// Maps line indices to block indices for lines containing back-edge branches.
+    fn find_back_edge_lines(&self) -> HashMap<usize, NodeIndex> {
+        let mut back_edge_lines = HashMap::new();
+
+        for block_idx in self.cfg.blocks() {
+            if self.cfg.has_back_edge(block_idx) {
+                let block = self.cfg.block(block_idx);
+                if let Some(branch_line_idx) = block.line_indices.clone().rev().find(|&idx| {
+                    self.lines[idx]
+                        .instruction
+                        .as_ref()
+                        .map(|i| i.is_branch())
+                        .unwrap_or(false)
+                }) {
+                    back_edge_lines.insert(branch_line_idx, block_idx);
+                }
+            }
+        }
+
+        back_edge_lines
+    }
+
+    /// Emits gas check sequence followed by the original branch instruction.
+    fn emit_instrumented_line(&mut self, line: &ParsedLine, block_idx: NodeIndex) {
+        let instruction_count = self.cfg.count_instructions(block_idx, self.lines);
+        let label = self.generate_unique_label();
+
+        if let Some(ref lbl) = line.label {
+            self.output.push_str(&format!("{}:\n", lbl));
+        }
+
+        self.emit_gas_decrement(instruction_count);
+        self.output
+            .push_str(&format!("    tbz {}, #63, {}\n", GAS_REGISTER, label));
+        self.output.push_str("    brk #0\n");
+        self.output.push_str(&format!("{}:\n", label));
+
+        if let Some(ref instr) = line.instruction {
+            self.output.push_str(&format!(
+                "    {} {}\n",
+                instr.mnemonic,
+                instr.operands.join(", ")
+            ));
+        }
+    }
+
+    /// Emits a line unchanged (no gas check needed).
+    fn emit_original_line(&mut self, line: &ParsedLine) {
+        self.output.push_str(&line.original);
+        self.output.push('\n');
+    }
+
+    /// Generates a unique label, skipping any that collide with existing labels.
+    fn generate_unique_label(&mut self) -> String {
+        loop {
+            let label = format!("{}{}", GAS_LABEL_PREFIX, self.label_counter);
+            self.label_counter += 1;
+
+            if !self.existing_labels.contains(&label) {
+                return label;
             }
         }
     }
 
-    // Generate output, inserting gas checks where needed
-    for (idx, line) in lines.iter().enumerate() {
-        if let Some(&block_idx) = back_edge_lines.get(&idx) {
-            // This line has a back-edge branch - insert gas check before it
-            let instruction_count = cfg.count_instructions(block_idx, lines);
-
-            // Generate unique label, avoiding collisions with existing labels
-            let label = generate_unique_label(&existing_labels, &mut gas_check_counter);
-
-            // Emit leading whitespace/label from original line if any
-            if let Some(ref lbl) = line.label {
-                output.push_str(&format!("{}:\n", lbl));
-            }
-
-            // Emit bundle lock (optional)
-            if config.emit_bundle_directives {
-                output.push_str("    .bundle_lock\n");
-            }
-
-            // Emit gas decrement (may need multiple instructions for large counts)
-            emit_gas_decrement(&mut output, instruction_count);
-            output.push_str(&format!("    tbz {}, #63, {}\n", GAS_REGISTER, label));
-            output.push_str("    brk #0\n");
-            output.push_str(&format!("{}:\n", label));
-
-            // Emit original branch instruction
-            if let Some(ref instr) = line.instruction {
-                output.push_str(&format!(
-                    "    {} {}\n",
-                    instr.mnemonic,
-                    instr.operands.join(", ")
-                ));
-            }
-
-            // Emit bundle unlock (optional)
-            if config.emit_bundle_directives {
-                output.push_str("    .bundle_unlock\n");
-            }
-        } else {
-            // Regular line - emit as-is
-            output.push_str(&line.original);
-            output.push('\n');
+    /// Emits sub instruction(s) to decrement gas counter (splits if count > 4095).
+    fn emit_gas_decrement(&mut self, mut count: usize) {
+        while count > MAX_SUB_IMMEDIATE {
+            self.output.push_str(&format!(
+                "    sub {}, {}, #{}\n",
+                GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
+            ));
+            count -= MAX_SUB_IMMEDIATE;
         }
-    }
-
-    output
-}
-
-/// Generate a unique label for gas checks, avoiding collisions with existing labels
-fn generate_unique_label(existing_labels: &HashSet<String>, counter: &mut usize) -> String {
-    loop {
-        let label = format!("{}{}", GAS_LABEL_PREFIX, counter);
-        *counter += 1;
-
-        // Check if this label already exists in the input
-        if !existing_labels.contains(&label) {
-            return label;
+        if count > 0 {
+            self.output.push_str(&format!(
+                "    sub {}, {}, #{}\n",
+                GAS_REGISTER, GAS_REGISTER, count
+            ));
         }
-        // If collision, loop will try next counter value
-    }
-}
-
-/// Emit gas decrement instruction(s) to the output
-/// Handles large instruction counts by emitting multiple sub instructions
-/// (ARM64 sub immediate is limited to 12 bits = 4095 max)
-fn emit_gas_decrement(output: &mut String, mut count: usize) {
-    while count > MAX_SUB_IMMEDIATE {
-        output.push_str(&format!(
-            "    sub {}, {}, #{}\n",
-            GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
-        ));
-        count -= MAX_SUB_IMMEDIATE;
-    }
-    if count > 0 {
-        output.push_str(&format!(
-            "    sub {}, {}, #{}\n",
-            GAS_REGISTER, GAS_REGISTER, count
-        ));
     }
 }
 
@@ -198,10 +194,6 @@ fn gas_decrement_instructions(mut count: usize) -> Vec<String> {
 }
 
 /// Generate gas check instruction sequence as separate lines
-///
-/// Returns the core gas check sequence without bundle directives.
-/// Bundle directives (.bundle_lock/.bundle_unlock) are optional and
-/// handled separately by `instrument_with_config` when needed.
 pub fn gas_check_sequence(instr_count: usize, label: &str) -> Vec<String> {
     let mut result = gas_decrement_instructions(instr_count);
     result.push(format!("    tbz {}, #63, {}", GAS_REGISTER, label));
@@ -236,7 +228,7 @@ _test_loop:
         let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
-        // Check that gas check was inserted (without bundle directives by default)
+        // Check that gas check was inserted
         assert!(output.contains("sub x23, x23, #"));
         assert!(output.contains("tbz x23, #63,"));
         assert!(output.contains("brk #0"));
@@ -245,25 +237,6 @@ _test_loop:
         assert!(output.contains("b.lt .Lloop"));
 
         println!("Instrumented output:\n{}", output);
-    }
-
-    #[test]
-    fn test_instrument_with_bundle_directives() {
-        let input = r#".Lloop:
-    add x0, x0, #1
-    b .Lloop
-"#;
-        let parser = Parser {};
-        let lines = parser.parse(input).unwrap();
-        let cfg = Cfg::from_lines(&lines);
-        let config = InstrumentConfig {
-            emit_bundle_directives: true,
-        };
-        let output = instrument_with_config(&lines, &cfg, &config);
-
-        // Check bundle directives are present
-        assert!(output.contains(".bundle_lock"));
-        assert!(output.contains(".bundle_unlock"));
     }
 
     #[test]
@@ -284,57 +257,50 @@ _simple:
 
     #[test]
     fn test_gas_decrement_small_count() {
-        let mut output = String::new();
-        super::emit_gas_decrement(&mut output, 100);
-        assert_eq!(output, "    sub x23, x23, #100\n");
+        let instrs = gas_decrement_instructions(100);
+        assert_eq!(instrs.len(), 1);
+        assert_eq!(instrs[0], "    sub x23, x23, #100");
     }
 
     #[test]
     fn test_gas_decrement_max_immediate() {
-        let mut output = String::new();
-        super::emit_gas_decrement(&mut output, 4095);
-        assert_eq!(output, "    sub x23, x23, #4095\n");
+        let instrs = gas_decrement_instructions(4095);
+        assert_eq!(instrs.len(), 1);
+        assert_eq!(instrs[0], "    sub x23, x23, #4095");
     }
 
     #[test]
     fn test_gas_decrement_large_count() {
         // Test count > 4095 requires multiple sub instructions
-        let mut output = String::new();
-        super::emit_gas_decrement(&mut output, 5000);
+        let instrs = gas_decrement_instructions(5000);
 
         // Should emit: sub x23, x23, #4095 followed by sub x23, x23, #905
-        assert!(output.contains("sub x23, x23, #4095"));
-        assert!(output.contains("sub x23, x23, #905"));
-
-        // Count the number of sub instructions
-        let sub_count = output.matches("sub x23").count();
-        assert_eq!(sub_count, 2);
+        assert_eq!(instrs.len(), 2);
+        assert!(instrs[0].contains("sub x23, x23, #4095"));
+        assert!(instrs[1].contains("sub x23, x23, #905"));
     }
 
     #[test]
     fn test_gas_decrement_very_large_count() {
         // Test count requiring 3+ sub instructions
-        let mut output = String::new();
-        super::emit_gas_decrement(&mut output, 10000);
+        let instrs = gas_decrement_instructions(10000);
 
         // 10000 = 4095 + 4095 + 1810
-        let sub_count = output.matches("sub x23").count();
-        assert_eq!(sub_count, 3);
-        assert!(output.contains("sub x23, x23, #4095"));
-        assert!(output.contains("sub x23, x23, #1810"));
+        assert_eq!(instrs.len(), 3);
+        assert!(instrs[0].contains("sub x23, x23, #4095"));
+        assert!(instrs[1].contains("sub x23, x23, #4095"));
+        assert!(instrs[2].contains("sub x23, x23, #1810"));
     }
 
     #[test]
     fn test_gas_check_sequence_large_count() {
         let seq = super::gas_check_sequence(5000, ".Lok");
 
-        // Should have multiple subs, tbz, brk, label (no bundle directives)
+        // Should have multiple subs, tbz, brk, label
         assert!(seq.iter().any(|s| s.contains("sub x23, x23, #4095")));
         assert!(seq.iter().any(|s| s.contains("sub x23, x23, #905")));
         assert!(seq.iter().any(|s| s.contains("tbz x23, #63")));
         assert!(seq.iter().any(|s| s.contains("brk #0")));
-        // Bundle directives are handled separately by instrument_with_config
-        assert!(!seq.iter().any(|s| s.contains(".bundle")));
     }
 
     #[test]
@@ -490,28 +456,5 @@ _nested:
         // Original labels should still be present
         assert!(output.contains(".L__gas_ok_0:"));
         assert!(output.contains(".L__gas_ok_1:"));
-    }
-
-    #[test]
-    fn test_generate_unique_label_helper() {
-        // Test the helper function directly
-        let mut existing = HashSet::new();
-        existing.insert(".L__gas_ok_0".to_string());
-        existing.insert(".L__gas_ok_1".to_string());
-        existing.insert(".L__gas_ok_3".to_string());
-
-        let mut counter = 0;
-
-        // First call should skip 0 and 1, return 2
-        let label1 = super::generate_unique_label(&existing, &mut counter);
-        assert_eq!(label1, ".L__gas_ok_2");
-
-        // Second call should skip 3, return 4
-        let label2 = super::generate_unique_label(&existing, &mut counter);
-        assert_eq!(label2, ".L__gas_ok_4");
-
-        // Third call returns 5
-        let label3 = super::generate_unique_label(&existing, &mut counter);
-        assert_eq!(label3, ".L__gas_ok_5");
     }
 }

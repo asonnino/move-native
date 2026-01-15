@@ -13,5 +13,5 @@ pub mod instrument;
 pub mod parser;
 
 pub use cfg::Cfg;
-pub use instrument::{instrument, instrument_with_config, InstrumentConfig};
+pub use instrument::instrument;
 pub use parser::ParsedLine;
