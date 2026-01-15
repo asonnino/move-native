@@ -77,6 +77,7 @@ impl Cfg {
     }
 
     /// Get successors of a block
+    #[cfg(test)]
     pub fn successors(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
         self.graph.neighbors(idx)
     }

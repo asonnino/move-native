@@ -335,6 +335,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::parse;
+    use indoc::indoc;
 
     #[test]
     fn test_parse_label() {
@@ -584,15 +585,16 @@ mod tests {
 
     #[test]
     fn test_multi_line_parsing() {
-        let input = ".global _start
-_start:
-    mov x0, #0
-.Lloop:
-    add x0, x0, #1
-    cmp x0, #10
-    b.lt .Lloop
-    ret
-";
+        let input = indoc! {"
+            .global _start
+            _start:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Lloop
+                ret
+        "};
         let lines = parse(input);
         assert_eq!(lines.len(), 8);
 
