@@ -263,8 +263,7 @@ impl Cfg {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::parser::Parser;
+    use crate::{parser::Parser, Cfg};
 
     #[test]
     fn test_simple_loop() {
@@ -524,8 +523,8 @@ _test:
 
         // Entry block should have 2 successors (conditional branch + fall-through)
         let entry = cfg.blocks().next().unwrap();
-        let succ_count = cfg.successors(entry).count();
-        assert_eq!(succ_count, 2, "Entry block should have 2 successors");
+        let successor_count = cfg.successors(entry).count();
+        assert_eq!(successor_count, 2, "Entry block should have 2 successors");
     }
 
     #[test]
@@ -559,9 +558,9 @@ _callee:
 
         // The bl block should have exactly 1 successor (fall-through to add)
         // NOT 2 (which would include edge to _callee)
-        let succ_count = cfg.successors(caller_block.unwrap()).count();
+        let successor_count = cfg.successors(caller_block.unwrap()).count();
         assert_eq!(
-            succ_count, 1,
+            successor_count, 1,
             "bl should only fall through, not branch to callee"
         );
 
