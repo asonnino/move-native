@@ -90,3 +90,69 @@ fn test_nested_loops_instrumentation() {
     let gas_check_count = output.matches("brk #0").count();
     assert_eq!(gas_check_count, 2, "expected two gas check sequences");
 }
+
+/// Tests that the full pipeline handles malformed/garbage input without panicking.
+#[test]
+fn test_malformed_input_does_not_panic() {
+    let garbage_inputs = [
+        // Empty and whitespace
+        "",
+        "   ",
+        "\n\n\n",
+        // Malformed labels
+        ":",
+        ":::",
+        "foo:::",
+        // Unmatched brackets
+        "ldr x0, [[[",
+        "ldr x0, ]]]",
+        "ldr x0, [x1, x2",
+        // Nonsense instructions
+        "asdfghjkl x0, x1",
+        "🔥 x0, x1",
+        // Branch to non-existent label
+        ".Lloop:\n    add x0, x0, #1\n    b .Ltypo\n",
+        // Only comments
+        "; comment\n// another\n@ gnu style",
+        // Directives only
+        ".global\n.align\n.",
+        // Mixed garbage
+        "foo: ::: [[[ ]]] \n.Lloop: b .Lloop",
+    ];
+
+    for input in garbage_inputs {
+        let lines = parser::parse(input);
+        let cfg = cfg::build(&lines);
+        let _ = instrument::instrument(&lines, &cfg);
+    }
+}
+
+/// Tests that large input completes without hanging.
+#[test]
+fn test_large_input_does_not_hang() {
+    let large_input = "nop\n".repeat(10_000);
+
+    let lines = parser::parse(&large_input);
+    let cfg = cfg::build(&lines);
+    let _ = instrument::instrument(&lines, &cfg);
+
+    assert_eq!(lines.len(), 10_000);
+}
+
+/// Tests label collision handling doesn't loop forever.
+#[test]
+fn test_label_collision_does_not_hang() {
+    // Pre-populate labels that would collide with generated gas check labels
+    let mut input = String::new();
+    for i in 0..100 {
+        input.push_str(&format!(".L__gas_ok_{}:\n    nop\n", i));
+    }
+    input.push_str(".Lloop:\n    b .Lloop\n");
+
+    let lines = parser::parse(&input);
+    let cfg = cfg::build(&lines);
+    let output = instrument::instrument(&lines, &cfg);
+
+    // Should skip 0-99 and use 100
+    assert!(output.contains(".L__gas_ok_100:"));
+}

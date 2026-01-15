@@ -85,8 +85,10 @@ impl Instruction<'_> {
 
     /// Case-insensitive check if mnemonic starts with the given prefix
     fn mnemonic_starts_with(&self, prefix: &str) -> bool {
-        self.mnemonic.len() >= prefix.len()
-            && self.mnemonic[..prefix.len()].eq_ignore_ascii_case(prefix)
+        // Use get() to avoid panicking on multi-byte UTF-8 boundaries
+        self.mnemonic
+            .get(..prefix.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
     }
 
     /// Check if an instruction is a return
@@ -334,8 +336,9 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
     use indoc::indoc;
+
+    use super::parse;
 
     #[test]
     fn test_parse_label() {
@@ -724,5 +727,91 @@ mod tests {
         let instr = lines[0].instruction.as_ref().unwrap();
         assert_eq!(instr.mnemonic, "stp");
         assert_eq!(instr.operands, vec!["x29", "x30", "[sp, #-16]!"]);
+    }
+
+    #[test]
+    fn test_malformed_empty_mnemonic() {
+        // Just a colon - creates empty label, no instruction
+        let lines = parse(":\n");
+        assert_eq!(lines[0].label, Some(""));
+        assert!(lines[0].instruction.is_none());
+
+        // Whitespace then colon - still finds the colon as label end
+        let lines = parse("   :\n");
+        assert_eq!(lines[0].label, Some("")); // empty label after trimming
+    }
+
+    #[test]
+    fn test_malformed_multiple_colons() {
+        let lines = parse("foo:::\n");
+        // First colon ends the label, rest is parsed as instruction
+        assert_eq!(lines[0].label, Some("foo"));
+        assert!(lines[0].instruction.is_some());
+        assert_eq!(lines[0].instruction.as_ref().unwrap().mnemonic, "::");
+    }
+
+    #[test]
+    fn test_malformed_unmatched_brackets() {
+        // Extra closing brackets - doesn't panic due to saturating_sub
+        let lines = parse("    ldr x0, ]]]x1, x2\n");
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ldr");
+        // Parser handles this gracefully (exact output doesn't matter, just no panic)
+        assert!(!instr.operands.is_empty());
+
+        // Unclosed opening brackets - comma inside isn't a separator
+        let lines = parse("    ldr x0, [x1, x2\n");
+        let instr = lines[0].instruction.as_ref().unwrap();
+        // The entire "[x1, x2" is one operand because bracket never closed
+        assert_eq!(instr.operands, vec!["x0", "[x1, x2"]);
+    }
+
+    #[test]
+    fn test_malformed_unicode_and_emoji() {
+        // Emoji is not a valid label char (only alphanumeric, _, ., $)
+        // So "🔥:" is parsed as instruction "🔥:" with no label
+        let lines = parse("🔥:\n");
+        assert!(lines[0].label.is_none());
+        assert!(lines[0].instruction.is_some());
+        assert_eq!(lines[0].instruction.as_ref().unwrap().mnemonic, "🔥:");
+
+        // Unicode letters ARE alphanumeric, so they work in instructions
+        let lines = parse("    日本語 x0, x1\n");
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "日本語");
+    }
+
+    #[test]
+    fn test_malformed_only_whitespace_and_comments() {
+        let lines = parse("    ; just a comment\n");
+        assert!(lines[0].instruction.is_none());
+        assert!(lines[0].label.is_none());
+
+        let lines = parse("    \t   \n");
+        assert!(lines[0].instruction.is_none());
+    }
+
+    #[test]
+    fn test_malformed_directive_edge_cases() {
+        // Just a dot
+        let lines = parse(".\n");
+        let dir = lines[0].directive.as_ref().unwrap();
+        assert_eq!(dir.name, "");
+        assert!(dir.args.is_empty());
+
+        // Dot with spaces but no name
+        let lines = parse(".   \n");
+        let dir = lines[0].directive.as_ref().unwrap();
+        assert_eq!(dir.name, "");
+    }
+
+    #[test]
+    fn test_malformed_nonsense_mnemonic() {
+        // Completely made up instruction - parser doesn't validate
+        let lines = parse("    asdfghjkl x0, x1, #999\n");
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "asdfghjkl");
+        assert!(!instr.is_branch());
+        assert!(!instr.is_return());
     }
 }
