@@ -14,4 +14,4 @@ pub mod parser;
 
 pub use cfg::{build as build_cfg, Cfg};
 pub use instrument::instrument;
-pub use parser::{parse, Directive, Instruction, ParseError, ParsedLine};
+pub use parser::{parse, Directive, Instruction, ParsedLine};

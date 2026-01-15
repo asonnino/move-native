@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use gas_instrument::{cfg, instrument, parse};
+use gas_instrument::{cfg, instrument, parser};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -26,18 +26,12 @@ fn main() {
     // Read input from stdin
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
-        eprintln!("Error reading stdin: {}", e);
+        eprintln!("Error reading stdin: {e}");
         std::process::exit(1);
     }
 
     // Parse assembly
-    let lines = match parse(&input) {
-        Ok(lines) => lines,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let lines = parser::parse(&input);
 
     // Build CFG
     let cfg = cfg::build(&lines);
@@ -46,5 +40,5 @@ fn main() {
     let output = instrument::instrument(&lines, &cfg);
 
     // Write to stdout
-    print!("{}", output);
+    print!("{output}");
 }

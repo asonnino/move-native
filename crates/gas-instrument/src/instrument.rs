@@ -197,7 +197,7 @@ mod tests {
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
-        let lines = parser::parse(input).unwrap();
+        let lines = parser::parse(input);
         let cfg = cfg::build(&lines);
         (cfg, lines)
     }

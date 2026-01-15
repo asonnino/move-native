@@ -55,6 +55,60 @@ pub struct Cfg {
     label_to_block: HashMap<String, NodeIndex>,
 }
 
+impl Cfg {
+    /// Iterate over all block indices
+    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.graph.node_indices()
+    }
+
+    /// Get the number of blocks
+    pub fn block_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
+    /// Get block data by node index
+    pub fn block(&self, idx: NodeIndex) -> &BlockData {
+        &self.graph[idx]
+    }
+
+    /// Get block by label
+    pub fn block_by_label(&self, label: &str) -> Option<NodeIndex> {
+        self.label_to_block.get(label).copied()
+    }
+
+    /// Get successors of a block
+    pub fn successors(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.graph.neighbors(idx)
+    }
+
+    /// Get the label of the back-edge target (for assembly emission)
+    pub fn back_edge_target_label(&self, block: NodeIndex) -> Option<&str> {
+        self.graph[block]
+            .back_edge_target
+            .and_then(|target| self.graph[target].label.as_deref())
+    }
+
+    /// Get the line index of the block's terminator (branch or return)
+    pub fn terminator_line(&self, block: NodeIndex) -> Option<usize> {
+        self.graph[block].terminator_line
+    }
+
+    /// Get the number of actual instructions in a block (excluding directives, labels, empty lines)
+    pub fn instruction_count(&self, block: NodeIndex) -> usize {
+        self.graph[block].instruction_count
+    }
+
+    /// Check if a label exists in the CFG
+    pub fn has_label(&self, label: &str) -> bool {
+        self.label_to_block.contains_key(label)
+    }
+
+    /// Check if a block has a back-edge
+    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
+        self.graph[block].back_edge_target.is_some()
+    }
+}
+
 /// Build a CFG from parsed assembly lines
 pub fn build(lines: &[ParsedLine]) -> Cfg {
     CfgBuilder::new(lines).build()
@@ -234,60 +288,6 @@ impl<'a> CfgBuilder<'a> {
     }
 }
 
-impl Cfg {
-    /// Iterate over all block indices
-    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.graph.node_indices()
-    }
-
-    /// Get the number of blocks
-    pub fn block_count(&self) -> usize {
-        self.graph.node_count()
-    }
-
-    /// Get block data by node index
-    pub fn block(&self, idx: NodeIndex) -> &BlockData {
-        &self.graph[idx]
-    }
-
-    /// Get block by label
-    pub fn block_by_label(&self, label: &str) -> Option<NodeIndex> {
-        self.label_to_block.get(label).copied()
-    }
-
-    /// Get successors of a block
-    pub fn successors(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.graph.neighbors(idx)
-    }
-
-    /// Get the label of the back-edge target (for assembly emission)
-    pub fn back_edge_target_label(&self, block: NodeIndex) -> Option<&str> {
-        self.graph[block]
-            .back_edge_target
-            .and_then(|target| self.graph[target].label.as_deref())
-    }
-
-    /// Get the line index of the block's terminator (branch or return)
-    pub fn terminator_line(&self, block: NodeIndex) -> Option<usize> {
-        self.graph[block].terminator_line
-    }
-
-    /// Get the number of actual instructions in a block (excluding directives, labels, empty lines)
-    pub fn instruction_count(&self, block: NodeIndex) -> usize {
-        self.graph[block].instruction_count
-    }
-
-    /// Check if a label exists in the CFG
-    pub fn has_label(&self, label: &str) -> bool {
-        self.label_to_block.contains_key(label)
-    }
-
-    /// Check if a block has a back-edge
-    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
-        self.graph[block].back_edge_target.is_some()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
@@ -296,7 +296,7 @@ mod tests {
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
-        let lines = parser::parse(input).unwrap();
+        let lines = parser::parse(input);
         let cfg = cfg::build(&lines);
         (cfg, lines)
     }
