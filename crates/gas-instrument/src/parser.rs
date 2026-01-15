@@ -477,7 +477,9 @@ mod tests {
         let parser = Parser {};
 
         // Semicolon comment at end of line
-        let lines = parser.parse("    mov x0, #0 ; initialize counter\n").unwrap();
+        let lines = parser
+            .parse("    mov x0, #0 ; initialize counter\n")
+            .unwrap();
         let instr = lines[0].instruction.as_ref().unwrap();
         assert_eq!(instr.mnemonic, "mov");
         assert_eq!(instr.operands, vec!["x0", "#0"]);
@@ -540,5 +542,261 @@ mod tests {
             .unwrap();
         let instr = lines[0].instruction.as_ref().unwrap();
         assert_eq!(instr.operands, vec!["x0", "#2"]);
+    }
+
+    #[test]
+    fn test_is_return() {
+        let parser = Parser {};
+        let lines = parser.parse("    ret\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_return());
+        assert!(!instr.is_branch());
+
+        // Case insensitivity
+        let lines = parser.parse("    RET\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_return());
+    }
+
+    #[test]
+    fn test_cbz_cbnz_branches() {
+        let parser = Parser {};
+
+        // cbz - compare and branch if zero
+        let lines = parser.parse("    cbz x0, .Lzero\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "cbz should be a branch");
+        assert!(instr.is_conditional_branch(), "cbz should be conditional");
+        assert!(!instr.is_indirect_branch(), "cbz should not be indirect");
+        assert_eq!(instr.get_branch_target(), Some(".Lzero"));
+
+        // cbnz - compare and branch if not zero
+        let lines = parser.parse("    cbnz w5, .Lnonzero\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "cbnz should be a branch");
+        assert!(instr.is_conditional_branch(), "cbnz should be conditional");
+        assert_eq!(instr.get_branch_target(), Some(".Lnonzero"));
+    }
+
+    #[test]
+    fn test_tbz_tbnz_branches() {
+        let parser = Parser {};
+
+        // tbz - test bit and branch if zero (3 operands)
+        let lines = parser.parse("    tbz x0, #63, .Lpositive\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "tbz should be a branch");
+        assert!(instr.is_conditional_branch(), "tbz should be conditional");
+        assert!(!instr.is_indirect_branch(), "tbz should not be indirect");
+        assert_eq!(instr.get_branch_target(), Some(".Lpositive"));
+        assert_eq!(instr.operands.len(), 3);
+
+        // tbnz - test bit and branch if not zero
+        let lines = parser.parse("    tbnz w1, #0, .Lodd\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "tbnz should be a branch");
+        assert!(instr.is_conditional_branch(), "tbnz should be conditional");
+        assert_eq!(instr.get_branch_target(), Some(".Lodd"));
+    }
+
+    #[test]
+    fn test_pac_branches() {
+        let parser = Parser {};
+
+        // braaz - branch to register with pointer authentication
+        let lines = parser.parse("    braaz x0\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "braaz should be a branch");
+        assert!(instr.is_indirect_branch(), "braaz should be indirect");
+        assert_eq!(instr.get_branch_target(), None);
+
+        // blraaz - branch with link, pointer authentication
+        let lines = parser.parse("    blraaz x1\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch(), "blraaz should be a branch");
+        assert!(instr.is_indirect_branch(), "blraaz should be indirect");
+    }
+
+    #[test]
+    fn test_label_with_directive() {
+        let parser = Parser {};
+        let lines = parser.parse("my_data: .quad 0x1234\n").unwrap();
+        assert_eq!(lines[0].label, Some("my_data".to_string()));
+        let dir = lines[0].directive.as_ref().unwrap();
+        assert_eq!(dir.name, "quad");
+        assert_eq!(dir.args, vec!["0x1234"]);
+        assert!(lines[0].instruction.is_none());
+    }
+
+    #[test]
+    fn test_empty_and_whitespace_lines() {
+        let parser = Parser {};
+
+        // Empty line
+        let lines = parser.parse("\n").unwrap();
+        assert!(lines[0].label.is_none());
+        assert!(lines[0].instruction.is_none());
+        assert!(lines[0].directive.is_none());
+
+        // Whitespace only
+        let lines = parser.parse("    \t  \n").unwrap();
+        assert!(lines[0].label.is_none());
+        assert!(lines[0].instruction.is_none());
+    }
+
+    #[test]
+    fn test_multi_line_parsing() {
+        let parser = Parser {};
+        let input = ".global _start
+_start:
+    mov x0, #0
+.Lloop:
+    add x0, x0, #1
+    cmp x0, #10
+    b.lt .Lloop
+    ret
+";
+        let lines = parser.parse(input).unwrap();
+        assert_eq!(lines.len(), 8);
+
+        // Check line numbers
+        assert_eq!(lines[0].line_number, 1);
+        assert_eq!(lines[1].line_number, 2);
+        assert_eq!(lines[7].line_number, 8);
+
+        // Check content
+        assert!(lines[0].directive.is_some()); // .global
+        assert_eq!(lines[1].label, Some("_start".to_string()));
+        assert_eq!(lines[3].label, Some(".Lloop".to_string()));
+        assert!(lines[7].instruction.as_ref().unwrap().is_return());
+    }
+
+    #[test]
+    fn test_original_field_preserves_comments() {
+        let parser = Parser {};
+        let input = "    mov x0, #0 ; this is a comment\n";
+        let lines = parser.parse(input).unwrap();
+        assert_eq!(lines[0].original, "    mov x0, #0 ; this is a comment");
+    }
+
+    #[test]
+    fn test_post_index_addressing() {
+        let parser = Parser {};
+        // Post-indexed: ldr x0, [x1], #8 - comma is outside brackets
+        let lines = parser.parse("    ldr x0, [x1], #8\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ldr");
+        assert_eq!(instr.operands, vec!["x0", "[x1]", "#8"]);
+    }
+
+    #[test]
+    fn test_pre_index_writeback() {
+        let parser = Parser {};
+        // Pre-indexed with writeback: ldr x0, [x1, #8]!
+        let lines = parser.parse("    ldr x0, [x1, #8]!\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ldr");
+        assert_eq!(instr.operands, vec!["x0", "[x1, #8]!"]);
+    }
+
+    #[test]
+    fn test_case_insensitivity_branches() {
+        let parser = Parser {};
+
+        // Uppercase
+        let lines = parser.parse("    B.LT .Lloop\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional_branch());
+
+        // Mixed case
+        let lines = parser.parse("    Cbz x0, .Lzero\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch());
+    }
+
+    #[test]
+    fn test_non_branch_non_return() {
+        let parser = Parser {};
+        let lines = parser.parse("    add x0, x1, x2\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(!instr.is_branch());
+        assert!(!instr.is_return());
+        assert!(!instr.is_conditional_branch());
+        assert!(!instr.is_indirect_branch());
+        assert_eq!(instr.get_branch_target(), None);
+    }
+
+    #[test]
+    fn test_bl_is_unconditional() {
+        let parser = Parser {};
+        let lines = parser.parse("    bl _function\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert!(instr.is_branch());
+        assert!(
+            !instr.is_conditional_branch(),
+            "bl is a call, not conditional"
+        );
+    }
+
+    #[test]
+    fn test_instruction_no_operands() {
+        let parser = Parser {};
+
+        let lines = parser.parse("    ret\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ret");
+        assert!(instr.operands.is_empty());
+
+        let lines = parser.parse("    nop\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "nop");
+        assert!(instr.operands.is_empty());
+    }
+
+    #[test]
+    fn test_label_with_dollar_sign() {
+        let parser = Parser {};
+        let lines = parser.parse("$Lfoo$bar:\n").unwrap();
+        assert_eq!(lines[0].label, Some("$Lfoo$bar".to_string()));
+    }
+
+    #[test]
+    fn test_all_conditional_branch_variants() {
+        let parser = Parser {};
+        let conditions = [
+            "b.eq", "b.ne", "b.cs", "b.cc", "b.mi", "b.pl", "b.vs", "b.vc", "b.hi", "b.ls", "b.ge",
+            "b.lt", "b.gt", "b.le", "b.al",
+        ];
+
+        for cond in conditions {
+            let input = format!("    {} .Ltarget\n", cond);
+            let lines = parser.parse(&input).unwrap();
+            let instr = lines[0].instruction.as_ref().unwrap();
+            assert!(instr.is_branch(), "{} should be a branch", cond);
+            assert!(
+                instr.is_conditional_branch(),
+                "{} should be conditional",
+                cond
+            );
+            assert_eq!(instr.get_branch_target(), Some(".Ltarget"));
+        }
+    }
+
+    #[test]
+    fn test_ldp_stp_pair_operations() {
+        let parser = Parser {};
+
+        // Load pair
+        let lines = parser.parse("    ldp x0, x1, [sp, #16]\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "ldp");
+        assert_eq!(instr.operands, vec!["x0", "x1", "[sp, #16]"]);
+
+        // Store pair
+        let lines = parser.parse("    stp x29, x30, [sp, #-16]!\n").unwrap();
+        let instr = lines[0].instruction.as_ref().unwrap();
+        assert_eq!(instr.mnemonic, "stp");
+        assert_eq!(instr.operands, vec!["x29", "x30", "[sp, #-16]!"]);
     }
 }
