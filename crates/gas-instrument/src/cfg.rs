@@ -37,6 +37,14 @@ pub struct BlockData {
     /// Target block of the back-edge, if this block ends with one.
     /// Use `Cfg::back_edge_target_label()` to get the label string for assembly emission.
     pub back_edge_target: Option<NodeIndex>,
+
+    /// Line index of the block's terminator: the branch (`b`, `b.cond`, `cbz`, etc.)
+    /// or return (`ret`) instruction that ends control flow in this block.
+    /// `None` if the block falls through without an explicit terminator.
+    pub terminator_line: Option<usize>,
+
+    /// Number of actual instructions in this block (excluding directives, labels, empty lines)
+    pub instruction_count: usize,
 }
 
 /// Control flow graph backed by petgraph
@@ -48,48 +56,6 @@ pub struct Cfg {
 }
 
 impl Cfg {
-    /// Iterate over all block indices
-    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.graph.node_indices()
-    }
-
-    /// Get the number of blocks
-    pub fn block_count(&self) -> usize {
-        self.graph.node_count()
-    }
-
-    /// Get block data by node index
-    pub fn block(&self, idx: NodeIndex) -> &BlockData {
-        &self.graph[idx]
-    }
-
-    /// Get successors of a block
-    pub fn successors(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.graph.neighbors(idx)
-    }
-
-    /// Get block by label
-    pub fn block_by_label(&self, label: &str) -> Option<NodeIndex> {
-        self.label_to_block.get(label).copied()
-    }
-
-    /// Check if a label exists in the CFG
-    pub fn has_label(&self, label: &str) -> bool {
-        self.label_to_block.contains_key(label)
-    }
-
-    /// Check if a block has a back-edge
-    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
-        self.graph[block].back_edge_target.is_some()
-    }
-
-    /// Get the label of the back-edge target (for assembly emission)
-    pub fn back_edge_target_label(&self, block: NodeIndex) -> Option<&str> {
-        self.graph[block]
-            .back_edge_target
-            .and_then(|target| self.graph[target].label.as_deref())
-    }
-
     /// Build a CFG from parsed assembly lines
     pub fn from_lines(lines: &[ParsedLine]) -> Self {
         // First pass: identify all labels and their positions
@@ -139,11 +105,19 @@ impl Cfg {
             // Find the label for this block (if any)
             let label = lines[start_idx].label.clone();
 
+            // Count actual instructions (not directives, labels, or empty lines)
+            let instruction_count = line_indices
+                .clone()
+                .filter(|&idx| lines[idx].instruction.is_some())
+                .count();
+
             // Create the node
             let node = graph.add_node(BlockData {
                 label,
                 line_indices: line_indices.clone(),
                 back_edge_target: None,
+                terminator_line: None,
+                instruction_count,
             });
             nodes.push(node);
 
@@ -155,18 +129,25 @@ impl Cfg {
             }
         }
 
-        // Fourth pass: add edges based on control flow
+        // Fourth pass: add edges based on control flow and record terminator lines
         for (block_idx, &node) in nodes.iter().enumerate() {
             let block = &graph[node];
 
-            // Find the terminating instruction
-            let terminating_instruction = block
+            // Find the terminating instruction and its line index
+            let terminator = block
                 .line_indices
                 .clone()
                 .rev()
-                .find_map(|idx| lines[idx].instruction.as_ref());
+                .find(|&idx| lines[idx].instruction.is_some());
 
-            if let Some(instruction) = terminating_instruction {
+            if let Some(terminator_line) = terminator {
+                let instruction = lines[terminator_line].instruction.as_ref().unwrap();
+
+                // Record the terminator line if it's a branch or return
+                if instruction.is_branch() || instruction.is_return() {
+                    graph[node].terminator_line = Some(terminator_line);
+                }
+
                 // Add edge to branch target (but not for calls - they return to next instruction)
                 if instruction.is_branch() && !instruction.is_call() {
                     if let Some(target) = instruction.get_branch_target() {
@@ -231,6 +212,58 @@ impl Cfg {
         }
     }
 
+    /// Iterate over all block indices
+    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.graph.node_indices()
+    }
+
+    /// Get the number of blocks
+    pub fn block_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
+    /// Get block data by node index
+    pub fn block(&self, idx: NodeIndex) -> &BlockData {
+        &self.graph[idx]
+    }
+
+    /// Get block by label
+    pub fn block_by_label(&self, label: &str) -> Option<NodeIndex> {
+        self.label_to_block.get(label).copied()
+    }
+
+    /// Get successors of a block
+    pub fn successors(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.graph.neighbors(idx)
+    }
+
+    /// Get the label of the back-edge target (for assembly emission)
+    pub fn back_edge_target_label(&self, block: NodeIndex) -> Option<&str> {
+        self.graph[block]
+            .back_edge_target
+            .and_then(|target| self.graph[target].label.as_deref())
+    }
+
+    /// Get the line index of the block's terminator (branch or return)
+    pub fn terminator_line(&self, block: NodeIndex) -> Option<usize> {
+        self.graph[block].terminator_line
+    }
+
+    /// Get the number of actual instructions in a block (excluding directives, labels, empty lines)
+    pub fn instruction_count(&self, block: NodeIndex) -> usize {
+        self.graph[block].instruction_count
+    }
+
+    /// Check if a label exists in the CFG
+    pub fn has_label(&self, label: &str) -> bool {
+        self.label_to_block.contains_key(label)
+    }
+
+    /// Check if a block has a back-edge
+    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
+        self.graph[block].back_edge_target.is_some()
+    }
+
     /// Check if there's any code at or after this position in the same logical block
     fn has_code(line: &ParsedLine, lines: &[ParsedLine], idx: usize) -> bool {
         // Check current line
@@ -250,15 +283,6 @@ impl Cfg {
 
         false
     }
-
-    /// Count the number of actual instructions in a block (excluding directives, labels, empty lines)
-    pub fn count_instructions(&self, block: NodeIndex, lines: &[ParsedLine]) -> usize {
-        self.block(block)
-            .line_indices
-            .clone()
-            .filter(|&idx| lines[idx].instruction.is_some())
-            .count()
-    }
 }
 
 #[cfg(test)]
@@ -276,6 +300,195 @@ mod tests {
         let lines = parser.parse(input).unwrap();
         let cfg = Cfg::from_lines(&lines);
         (cfg, lines)
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let (cfg, _) = build_cfg("");
+        assert_eq!(cfg.block_count(), 0);
+    }
+
+    #[test]
+    fn test_single_ret() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _minimal:
+                ret
+        "});
+
+        assert_eq!(cfg.block_count(), 1);
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(back_edge_count, 0);
+    }
+
+    #[test]
+    fn test_linear_code_no_loops() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _linear:
+                mov x0, #1
+                add x0, x0, #2
+                mul x0, x0, #3
+                ret
+        "});
+
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(back_edge_count, 0, "Linear code should have no back-edges");
+        assert_eq!(cfg.block_count(), 1, "Linear code should be one block");
+    }
+
+    #[test]
+    fn test_label_mapping() {
+        let (cfg, _) = build_cfg(indoc! {"
+            .Lstart:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                b .Lloop
+        "});
+
+        assert!(cfg.has_label(".Lstart"));
+        assert!(cfg.has_label(".Lloop"));
+    }
+
+    #[test]
+    fn test_block_by_label() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _start:
+                mov x0, #0
+            .Lmiddle:
+                add x0, x0, #1
+            .Lend:
+                ret
+        "});
+
+        assert!(cfg.block_by_label("_start").is_some());
+        assert!(cfg.block_by_label(".Lmiddle").is_some());
+        assert!(cfg.block_by_label(".Lend").is_some());
+        assert!(cfg.block_by_label(".Lnonexistent").is_none());
+
+        // Different labels should (generally) be different blocks
+        let start = cfg.block_by_label("_start").unwrap();
+        let middle = cfg.block_by_label(".Lmiddle").unwrap();
+        assert_ne!(start, middle);
+    }
+
+    #[test]
+    fn test_successors() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _test:
+                cmp x0, #0
+                b.eq .Lthen
+                mov x1, #1
+                b .Lend
+            .Lthen:
+                mov x1, #2
+            .Lend:
+                ret
+        "});
+
+        let entry = cfg.blocks().next().unwrap();
+        let successor_count = cfg.successors(entry).count();
+        assert_eq!(successor_count, 2, "Entry block should have 2 successors");
+    }
+
+    #[test]
+    fn test_instruction_count() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                mov x0, #0
+                mov x1, #1
+                add x0, x0, x1
+            .Lloop:
+                sub x0, x0, #1
+                cbnz x0, .Lloop
+                ret
+        "});
+
+        let entry = cfg.block_by_label("_func").unwrap();
+        let loop_block = cfg.block_by_label(".Lloop").unwrap();
+
+        assert_eq!(
+            cfg.instruction_count(entry),
+            3,
+            "Entry block should have 3 instructions"
+        );
+        // cbnz is a conditional branch, so it ends the block.
+        // ret is in a separate fall-through block.
+        assert_eq!(
+            cfg.instruction_count(loop_block),
+            2,
+            "Loop block should have 2 instructions (sub, cbnz)"
+        );
+    }
+
+    #[test]
+    fn test_instruction_count_with_directives() {
+        let (cfg, _) = build_cfg(indoc! {"
+            .global _func
+            .align 4
+            _func:
+                mov x0, #0
+                .cfi_startproc
+                add x0, x0, #1
+                ret
+        "});
+
+        let func = cfg.block_by_label("_func").unwrap();
+        // Should only count actual instructions, not directives
+        assert_eq!(
+            cfg.instruction_count(func),
+            3,
+            "Should count only instructions, not directives"
+        );
+    }
+
+    #[test]
+    fn test_terminator_line() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            _func:
+                mov x0, #0
+                mov x1, #1
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, x1
+                b.lt .Lloop
+                ret
+        "});
+
+        let entry = cfg.block_by_label("_func").unwrap();
+        let loop_block = cfg.block_by_label(".Lloop").unwrap();
+
+        // Entry block falls through to .Lloop - no explicit terminator
+        assert_eq!(
+            cfg.terminator_line(entry),
+            None,
+            "Fall-through block should have no terminator"
+        );
+
+        // Loop block ends with b.lt (a branch)
+        let loop_term = cfg.terminator_line(loop_block);
+        assert!(loop_term.is_some(), "Loop block should have terminator");
+        assert!(
+            lines[loop_term.unwrap()]
+                .instruction
+                .as_ref()
+                .unwrap()
+                .is_branch(),
+            "Loop terminator should be a branch"
+        );
+
+        // Find the block with ret and verify its terminator
+        let ret_block = cfg.blocks().find(|&b| {
+            cfg.terminator_line(b)
+                .map(|idx| {
+                    lines[idx]
+                        .instruction
+                        .as_ref()
+                        .map(|i| i.is_return())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        });
+        assert!(ret_block.is_some(), "Should find block with ret terminator");
     }
 
     #[test]
@@ -299,71 +512,6 @@ mod tests {
         assert_eq!(
             cfg.back_edge_target_label(back_edge_block.unwrap()),
             Some(".Lloop")
-        );
-    }
-
-    #[test]
-    fn test_label_mapping() {
-        let (cfg, _) = build_cfg(indoc! {"
-            .Lstart:
-                mov x0, #0
-            .Lloop:
-                add x0, x0, #1
-                b .Lloop
-        "});
-
-        assert!(cfg.has_label(".Lstart"));
-        assert!(cfg.has_label(".Lloop"));
-    }
-
-    #[test]
-    fn test_nested_loops() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _nested:
-                mov x0, #0
-            .Louter:
-                mov x1, #0
-            .Linner:
-                add x1, x1, #1
-                cmp x1, #10
-                b.lt .Linner
-                add x0, x0, #1
-                cmp x0, #10
-                b.lt .Louter
-                ret
-        "});
-
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(back_edge_count, 2, "Expected 2 back-edges for nested loops");
-
-        let inner_be = cfg
-            .blocks()
-            .find(|&b| cfg.back_edge_target_label(b) == Some(".Linner"));
-        let outer_be = cfg
-            .blocks()
-            .find(|&b| cfg.back_edge_target_label(b) == Some(".Louter"));
-        assert!(inner_be.is_some(), "Should have back-edge to .Linner");
-        assert!(outer_be.is_some(), "Should have back-edge to .Louter");
-    }
-
-    #[test]
-    fn test_diamond_no_back_edge() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _diamond:
-                cmp x0, #0
-                b.eq .Lthen
-                mov x1, #1
-                b .Lend
-            .Lthen:
-                mov x1, #2
-            .Lend:
-                ret
-        "});
-
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(
-            back_edge_count, 0,
-            "Diamond pattern should have no back-edges"
         );
     }
 
@@ -409,6 +557,36 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_loops() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _nested:
+                mov x0, #0
+            .Louter:
+                mov x1, #0
+            .Linner:
+                add x1, x1, #1
+                cmp x1, #10
+                b.lt .Linner
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Louter
+                ret
+        "});
+
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(back_edge_count, 2, "Expected 2 back-edges for nested loops");
+
+        let inner_be = cfg
+            .blocks()
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Linner"));
+        let outer_be = cfg
+            .blocks()
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Louter"));
+        assert!(inner_be.is_some(), "Should have back-edge to .Linner");
+        assert!(outer_be.is_some(), "Should have back-edge to .Louter");
+    }
+
+    #[test]
     fn test_multiple_independent_loops() {
         let (cfg, _) = build_cfg(indoc! {"
             _two_loops:
@@ -439,234 +617,6 @@ mod tests {
             .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop2"));
         assert!(loop1_be.is_some(), "Should have back-edge to .Lloop1");
         assert!(loop2_be.is_some(), "Should have back-edge to .Lloop2");
-    }
-
-    #[test]
-    fn test_back_edge_target_label() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _test:
-                mov x0, #0
-            .Lloop:
-                add x0, x0, #1
-                b.lt .Lloop
-                ret
-        "});
-
-        let back_edge_node = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
-
-        // Verify the back-edge target label
-        assert_eq!(cfg.back_edge_target_label(back_edge_node), Some(".Lloop"));
-
-        // Verify we can get the target NodeIndex directly
-        let target_idx = cfg.block(back_edge_node).back_edge_target.unwrap();
-        assert_eq!(cfg.block(target_idx).label.as_deref(), Some(".Lloop"));
-    }
-
-    #[test]
-    fn test_successors() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _test:
-                cmp x0, #0
-                b.eq .Lthen
-                mov x1, #1
-                b .Lend
-            .Lthen:
-                mov x1, #2
-            .Lend:
-                ret
-        "});
-
-        let entry = cfg.blocks().next().unwrap();
-        let successor_count = cfg.successors(entry).count();
-        assert_eq!(successor_count, 2, "Entry block should have 2 successors");
-    }
-
-    #[test]
-    fn test_call_falls_through() {
-        let (cfg, lines) = build_cfg(indoc! {"
-            _caller:
-                mov x0, #1
-                bl _callee
-                add x0, x0, #1
-                ret
-            _callee:
-                ret
-        "});
-
-        let caller_block = cfg.blocks().find(|&b| {
-            let block = cfg.block(b);
-            block.line_indices.clone().any(|idx| {
-                lines[idx]
-                    .instruction
-                    .as_ref()
-                    .map(|i| i.mnemonic == "bl")
-                    .unwrap_or(false)
-            })
-        });
-        assert!(caller_block.is_some(), "Should find block with bl");
-
-        let successor_count = cfg.successors(caller_block.unwrap()).count();
-        assert_eq!(
-            successor_count, 1,
-            "bl should only fall through, not branch to callee"
-        );
-
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(back_edge_count, 0, "Calls should not create back-edges");
-    }
-
-    #[test]
-    fn test_recursive_call_no_back_edge() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _factorial:
-                cmp x0, #1
-                b.le .Lbase
-                sub x0, x0, #1
-                bl _factorial
-                mul x0, x0, x1
-                ret
-            .Lbase:
-                mov x0, #1
-                ret
-        "});
-
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(
-            back_edge_count, 0,
-            "Recursive call should not create a back-edge"
-        );
-    }
-
-    #[test]
-    fn test_empty_input() {
-        let (cfg, _) = build_cfg("");
-        assert_eq!(cfg.block_count(), 0);
-    }
-
-    #[test]
-    fn test_linear_code_no_loops() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _linear:
-                mov x0, #1
-                add x0, x0, #2
-                mul x0, x0, #3
-                ret
-        "});
-
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(back_edge_count, 0, "Linear code should have no back-edges");
-        assert_eq!(cfg.block_count(), 1, "Linear code should be one block");
-    }
-
-    #[test]
-    fn test_single_ret() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _minimal:
-                ret
-        "});
-
-        assert_eq!(cfg.block_count(), 1);
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(back_edge_count, 0);
-    }
-
-    #[test]
-    fn test_unreachable_loop_not_detected() {
-        // Loop after unconditional ret is unreachable.
-        // Dominator analysis won't find it as a back-edge (by design).
-        let (cfg, _) = build_cfg(indoc! {"
-            _func:
-                mov x0, #1
-                ret
-            .Lunreachable:
-                add x0, x0, #1
-                b .Lunreachable
-        "});
-
-        // The unreachable loop should NOT be detected as a back-edge
-        // because dominator analysis only works on reachable code
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(
-            back_edge_count, 0,
-            "Unreachable loop should not be detected as back-edge"
-        );
-    }
-
-    #[test]
-    fn test_unreachable_after_unconditional_branch() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _func:
-                b .Lend
-            .Lunreachable:
-                add x0, x0, #1
-                b .Lunreachable
-            .Lend:
-                ret
-        "});
-
-        // The unreachable loop should NOT be detected
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-        assert_eq!(
-            back_edge_count, 0,
-            "Unreachable loop after unconditional branch should not be detected"
-        );
-    }
-
-    #[test]
-    fn test_cbz_loop() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _cbz_loop:
-                mov x0, #10
-            .Lloop:
-                sub x0, x0, #1
-                cbnz x0, .Lloop
-                ret
-        "});
-
-        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
-        assert!(back_edge_block.is_some(), "Should detect cbnz back-edge");
-        assert_eq!(
-            cfg.back_edge_target_label(back_edge_block.unwrap()),
-            Some(".Lloop")
-        );
-    }
-
-    #[test]
-    fn test_cbz_exit_loop() {
-        // cbz used to exit loop (branch forward when zero)
-        let (cfg, _) = build_cfg(indoc! {"
-            _cbz_exit:
-                mov x0, #10
-            .Lloop:
-                sub x0, x0, #1
-                cbz x0, .Ldone
-                b .Lloop
-            .Ldone:
-                ret
-        "});
-
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop"));
-        assert!(
-            back_edge_block.is_some(),
-            "Should detect back-edge from unconditional b"
-        );
-    }
-
-    #[test]
-    fn test_tbz_loop() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _tbz_loop:
-                mov x0, #0x80
-            .Lloop:
-                lsr x0, x0, #1
-                tbnz x0, #0, .Lloop
-                ret
-        "});
-
-        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
-        assert!(back_edge_block.is_some(), "Should detect tbnz back-edge");
     }
 
     #[test]
@@ -737,6 +687,84 @@ mod tests {
         assert!(
             back_edge_block.is_some(),
             "Should detect back-edge in infinite loop"
+        );
+    }
+
+    #[test]
+    fn test_cbz_loop() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _cbz_loop:
+                mov x0, #10
+            .Lloop:
+                sub x0, x0, #1
+                cbnz x0, .Lloop
+                ret
+        "});
+
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
+        assert!(back_edge_block.is_some(), "Should detect cbnz back-edge");
+        assert_eq!(
+            cfg.back_edge_target_label(back_edge_block.unwrap()),
+            Some(".Lloop")
+        );
+    }
+
+    #[test]
+    fn test_cbz_exit_loop() {
+        // cbz used to exit loop (branch forward when zero)
+        let (cfg, _) = build_cfg(indoc! {"
+            _cbz_exit:
+                mov x0, #10
+            .Lloop:
+                sub x0, x0, #1
+                cbz x0, .Ldone
+                b .Lloop
+            .Ldone:
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop"));
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect back-edge from unconditional b"
+        );
+    }
+
+    #[test]
+    fn test_tbz_loop() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _tbz_loop:
+                mov x0, #0x80
+            .Lloop:
+                lsr x0, x0, #1
+                tbnz x0, #0, .Lloop
+                ret
+        "});
+
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
+        assert!(back_edge_block.is_some(), "Should detect tbnz back-edge");
+    }
+
+    #[test]
+    fn test_diamond_no_back_edge() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _diamond:
+                cmp x0, #0
+                b.eq .Lthen
+                mov x1, #1
+                b .Lend
+            .Lthen:
+                mov x1, #2
+            .Lend:
+                ret
+        "});
+
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Diamond pattern should have no back-edges"
         );
     }
 
@@ -812,75 +840,121 @@ mod tests {
     }
 
     #[test]
-    fn test_block_by_label() {
-        let (cfg, _) = build_cfg(indoc! {"
-            _start:
-                mov x0, #0
-            .Lmiddle:
+    fn test_call_falls_through() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            _caller:
+                mov x0, #1
+                bl _callee
                 add x0, x0, #1
+                ret
+            _callee:
+                ret
+        "});
+
+        let caller_block = cfg.blocks().find(|&b| {
+            let block = cfg.block(b);
+            block.line_indices.clone().any(|idx| {
+                lines[idx]
+                    .instruction
+                    .as_ref()
+                    .map(|i| i.mnemonic == "bl")
+                    .unwrap_or(false)
+            })
+        });
+        assert!(caller_block.is_some(), "Should find block with bl");
+
+        let successor_count = cfg.successors(caller_block.unwrap()).count();
+        assert_eq!(
+            successor_count, 1,
+            "bl should only fall through, not branch to callee"
+        );
+
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(back_edge_count, 0, "Calls should not create back-edges");
+    }
+
+    #[test]
+    fn test_recursive_call_no_back_edge() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _factorial:
+                cmp x0, #1
+                b.le .Lbase
+                sub x0, x0, #1
+                bl _factorial
+                mul x0, x0, x1
+                ret
+            .Lbase:
+                mov x0, #1
+                ret
+        "});
+
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Recursive call should not create a back-edge"
+        );
+    }
+
+    #[test]
+    fn test_unreachable_loop_not_detected() {
+        // Loop after unconditional ret is unreachable.
+        // Dominator analysis won't find it as a back-edge (by design).
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                mov x0, #1
+                ret
+            .Lunreachable:
+                add x0, x0, #1
+                b .Lunreachable
+        "});
+
+        // The unreachable loop should NOT be detected as a back-edge
+        // because dominator analysis only works on reachable code
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Unreachable loop should not be detected as back-edge"
+        );
+    }
+
+    #[test]
+    fn test_unreachable_after_unconditional_branch() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                b .Lend
+            .Lunreachable:
+                add x0, x0, #1
+                b .Lunreachable
             .Lend:
                 ret
         "});
 
-        assert!(cfg.block_by_label("_start").is_some());
-        assert!(cfg.block_by_label(".Lmiddle").is_some());
-        assert!(cfg.block_by_label(".Lend").is_some());
-        assert!(cfg.block_by_label(".Lnonexistent").is_none());
-
-        // Different labels should (generally) be different blocks
-        let start = cfg.block_by_label("_start").unwrap();
-        let middle = cfg.block_by_label(".Lmiddle").unwrap();
-        assert_ne!(start, middle);
+        // The unreachable loop should NOT be detected
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Unreachable loop after unconditional branch should not be detected"
+        );
     }
 
     #[test]
-    fn test_count_instructions() {
-        let (cfg, lines) = build_cfg(indoc! {"
-            _func:
+    fn test_back_edge_target_label() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _test:
                 mov x0, #0
-                mov x1, #1
-                add x0, x0, x1
             .Lloop:
-                sub x0, x0, #1
-                cbnz x0, .Lloop
-                ret
-        "});
-
-        let entry = cfg.block_by_label("_func").unwrap();
-        let loop_block = cfg.block_by_label(".Lloop").unwrap();
-
-        assert_eq!(
-            cfg.count_instructions(entry, &lines),
-            3,
-            "Entry block should have 3 instructions"
-        );
-        // cbnz is a conditional branch, so it ends the block.
-        // ret is in a separate fall-through block.
-        assert_eq!(
-            cfg.count_instructions(loop_block, &lines),
-            2,
-            "Loop block should have 2 instructions (sub, cbnz)"
-        );
-    }
-
-    #[test]
-    fn test_count_instructions_with_directives() {
-        let (cfg, lines) = build_cfg(indoc! {"
-            .global _func
-            .align 4
-            _func:
-                mov x0, #0
-                .cfi_startproc
                 add x0, x0, #1
+                b.lt .Lloop
                 ret
         "});
 
-        let func = cfg.block_by_label("_func").unwrap();
-        // Should only count actual instructions, not directives
-        assert_eq!(
-            cfg.count_instructions(func, &lines),
-            3,
-            "Should count only instructions, not directives"
-        );
+        let back_edge_node = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
+
+        // Verify the back-edge target label
+        assert_eq!(cfg.back_edge_target_label(back_edge_node), Some(".Lloop"));
+
+        // Verify we can get the target NodeIndex directly
+        let target_idx = cfg.block(back_edge_node).back_edge_target.unwrap();
+        assert_eq!(cfg.block(target_idx).label.as_deref(), Some(".Lloop"));
     }
 }

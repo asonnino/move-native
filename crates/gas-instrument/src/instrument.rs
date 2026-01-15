@@ -97,15 +97,8 @@ impl<'a> Instrumenter<'a> {
 
         for block_idx in self.cfg.blocks() {
             if self.cfg.has_back_edge(block_idx) {
-                let block = self.cfg.block(block_idx);
-                if let Some(branch_line_idx) = block.line_indices.clone().rev().find(|&idx| {
-                    self.lines[idx]
-                        .instruction
-                        .as_ref()
-                        .map(|i| i.is_branch())
-                        .unwrap_or(false)
-                }) {
-                    back_edge_lines.insert(branch_line_idx, block_idx);
+                if let Some(terminator_line) = self.cfg.terminator_line(block_idx) {
+                    back_edge_lines.insert(terminator_line, block_idx);
                 }
             }
         }
@@ -115,26 +108,35 @@ impl<'a> Instrumenter<'a> {
 
     /// Emits gas check sequence followed by the original branch instruction.
     fn emit_instrumented_line(&mut self, line: &ParsedLine, block_idx: NodeIndex) {
-        let instruction_count = self.cfg.count_instructions(block_idx, self.lines);
+        let instruction_count = self.cfg.instruction_count(block_idx);
         let label = self.generate_unique_label();
 
+        // Preserve any label on the original line
         if let Some(ref lbl) = line.label {
             self.output.push_str(&format!("{}:\n", lbl));
         }
 
+        // Gas check sequence:
+        // 1. Decrement gas counter by number of instructions in this block
         self.emit_gas_decrement(instruction_count);
+        // 2. Test bit 63 (sign bit): if 0 (positive), branch over trap
         self.output
             .push_str(&format!("    tbz {}, #63, {}\n", GAS_REGISTER, label));
+        // 3. Trap if gas went negative (bit 63 = 1)
         self.output.push_str("    brk #0\n");
+        // 4. Continue label
         self.output.push_str(&format!("{}:\n", label));
 
-        if let Some(ref instr) = line.instruction {
-            self.output.push_str(&format!(
-                "    {} {}\n",
-                instr.mnemonic,
-                instr.operands.join(", ")
-            ));
-        }
+        // Emit the original back-edge branch instruction
+        let instruction = line
+            .instruction
+            .as_ref()
+            .expect("back-edge terminator must have instruction");
+        self.output.push_str(&format!(
+            "    {} {}\n",
+            instruction.mnemonic,
+            instruction.operands.join(", ")
+        ));
     }
 
     /// Emits a line unchanged (no gas check needed).
@@ -156,50 +158,32 @@ impl<'a> Instrumenter<'a> {
     }
 
     /// Emits sub instruction(s) to decrement gas counter (splits if count > 4095).
-    fn emit_gas_decrement(&mut self, mut count: usize) {
+    fn emit_gas_decrement(&mut self, count: usize) {
+        for instruction in Self::gas_decrement_instructions(count) {
+            self.output.push_str(&instruction);
+            self.output.push('\n');
+        }
+    }
+
+    /// Generate gas decrement instructions as a vector of strings.
+    /// Handles large instruction counts by emitting multiple sub instructions.
+    fn gas_decrement_instructions(mut count: usize) -> Vec<String> {
+        let mut instructions = Vec::new();
         while count > MAX_SUB_IMMEDIATE {
-            self.output.push_str(&format!(
-                "    sub {}, {}, #{}\n",
+            instructions.push(format!(
+                "    sub {}, {}, #{}",
                 GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
             ));
             count -= MAX_SUB_IMMEDIATE;
         }
         if count > 0 {
-            self.output.push_str(&format!(
-                "    sub {}, {}, #{}\n",
+            instructions.push(format!(
+                "    sub {}, {}, #{}",
                 GAS_REGISTER, GAS_REGISTER, count
             ));
         }
+        instructions
     }
-}
-
-/// Generate gas decrement instructions as a vector of strings
-/// Handles large instruction counts by emitting multiple sub instructions
-fn gas_decrement_instructions(mut count: usize) -> Vec<String> {
-    let mut instructions = Vec::new();
-    while count > MAX_SUB_IMMEDIATE {
-        instructions.push(format!(
-            "    sub {}, {}, #{}",
-            GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
-        ));
-        count -= MAX_SUB_IMMEDIATE;
-    }
-    if count > 0 {
-        instructions.push(format!(
-            "    sub {}, {}, #{}",
-            GAS_REGISTER, GAS_REGISTER, count
-        ));
-    }
-    instructions
-}
-
-/// Generate gas check instruction sequence as separate lines
-pub fn gas_check_sequence(instr_count: usize, label: &str) -> Vec<String> {
-    let mut result = gas_decrement_instructions(instr_count);
-    result.push(format!("    tbz {}, #63, {}", GAS_REGISTER, label));
-    result.push("    brk #0".to_string());
-    result.push(format!("{}:", label));
-    result
 }
 
 #[cfg(test)]
@@ -257,50 +241,39 @@ _simple:
 
     #[test]
     fn test_gas_decrement_small_count() {
-        let instrs = gas_decrement_instructions(100);
-        assert_eq!(instrs.len(), 1);
-        assert_eq!(instrs[0], "    sub x23, x23, #100");
+        let instrumenter = Instrumenter::gas_decrement_instructions(100);
+        assert_eq!(instrumenter.len(), 1);
+        assert_eq!(instrumenter[0], "    sub x23, x23, #100");
     }
 
     #[test]
     fn test_gas_decrement_max_immediate() {
-        let instrs = gas_decrement_instructions(4095);
-        assert_eq!(instrs.len(), 1);
-        assert_eq!(instrs[0], "    sub x23, x23, #4095");
+        let instrumenter = Instrumenter::gas_decrement_instructions(4095);
+        assert_eq!(instrumenter.len(), 1);
+        assert_eq!(instrumenter[0], "    sub x23, x23, #4095");
     }
 
     #[test]
     fn test_gas_decrement_large_count() {
         // Test count > 4095 requires multiple sub instructions
-        let instrs = gas_decrement_instructions(5000);
+        let instrumenter = Instrumenter::gas_decrement_instructions(5000);
 
         // Should emit: sub x23, x23, #4095 followed by sub x23, x23, #905
-        assert_eq!(instrs.len(), 2);
-        assert!(instrs[0].contains("sub x23, x23, #4095"));
-        assert!(instrs[1].contains("sub x23, x23, #905"));
+        assert_eq!(instrumenter.len(), 2);
+        assert!(instrumenter[0].contains("sub x23, x23, #4095"));
+        assert!(instrumenter[1].contains("sub x23, x23, #905"));
     }
 
     #[test]
     fn test_gas_decrement_very_large_count() {
         // Test count requiring 3+ sub instructions
-        let instrs = gas_decrement_instructions(10000);
+        let instrumenter = Instrumenter::gas_decrement_instructions(10000);
 
         // 10000 = 4095 + 4095 + 1810
-        assert_eq!(instrs.len(), 3);
-        assert!(instrs[0].contains("sub x23, x23, #4095"));
-        assert!(instrs[1].contains("sub x23, x23, #4095"));
-        assert!(instrs[2].contains("sub x23, x23, #1810"));
-    }
-
-    #[test]
-    fn test_gas_check_sequence_large_count() {
-        let seq = super::gas_check_sequence(5000, ".Lok");
-
-        // Should have multiple subs, tbz, brk, label
-        assert!(seq.iter().any(|s| s.contains("sub x23, x23, #4095")));
-        assert!(seq.iter().any(|s| s.contains("sub x23, x23, #905")));
-        assert!(seq.iter().any(|s| s.contains("tbz x23, #63")));
-        assert!(seq.iter().any(|s| s.contains("brk #0")));
+        assert_eq!(instrumenter.len(), 3);
+        assert!(instrumenter[0].contains("sub x23, x23, #4095"));
+        assert!(instrumenter[1].contains("sub x23, x23, #4095"));
+        assert!(instrumenter[2].contains("sub x23, x23, #1810"));
     }
 
     #[test]
@@ -381,7 +354,7 @@ _nested:
 
         for block_idx in cfg.blocks() {
             if cfg.has_back_edge(block_idx) {
-                let count = cfg.count_instructions(block_idx, &lines);
+                let count = cfg.instruction_count(block_idx);
                 if cfg.back_edge_target_label(block_idx) == Some(".Linner") {
                     inner_count = Some(count);
                 } else if cfg.back_edge_target_label(block_idx) == Some(".Louter") {
