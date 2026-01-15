@@ -12,16 +12,15 @@
 //!
 //! Dominator analysis only works for code reachable from the entry point. Loops in
 //! unreachable code will NOT be detected as back-edges and will NOT receive gas checks.
-//!
-//! **This is by design.** The `native-verifier` crate is responsible for rejecting
-//! modules that contain unreachable code. This separation of concerns keeps
-//! `gas-instrument` simple and focused on transformation, while `native-verifier`
-//! handles validation.
+//! This is by design: the `native-verifier` crate is responsible for rejecting modules
+//! that contain unreachable code.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
-use petgraph::algo::dominators::simple_fast;
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::{
+    algo::dominators::{self},
+    graph::{DiGraph, NodeIndex},
+};
 
 use crate::parser::ParsedLine;
 
@@ -30,11 +29,13 @@ use crate::parser::ParsedLine;
 pub struct BlockData {
     /// Label at the start of this block (if any)
     pub label: Option<String>,
-    /// Indices into the original parsed lines
-    pub line_indices: Vec<usize>,
-    /// Whether the terminating branch is a back-edge
-    pub has_back_edge: bool,
-    /// Target label of the back-edge (if has_back_edge is true)
+
+    /// Range of indices into the original parsed lines.
+    /// E.g., for a block containing lines 3, 4, 5 this would be `3..6`
+    pub line_indices: Range<usize>,
+
+    /// Target label of the back-edge, if this block ends with one.
+    /// E.g., `Some(".Lloop")` for a block ending with `b.lt .Lloop` that loops back
     pub back_edge_target: Option<String>,
 }
 
@@ -81,145 +82,138 @@ impl Cfg {
     /// Check if a branch from `from_block` to `target_label` is a back-edge
     /// Uses cached back-edge information computed via dominator analysis
     pub fn is_back_edge(&self, from_block: NodeIndex, target_label: &str) -> bool {
-        let block = &self.graph[from_block];
-        block.has_back_edge && block.back_edge_target.as_deref() == Some(target_label)
+        self.graph[from_block].back_edge_target.as_deref() == Some(target_label)
     }
-}
 
-/// Build a CFG from parsed assembly lines
-pub fn build(lines: &[ParsedLine]) -> Cfg {
-    // First pass: identify all labels and their positions
-    let mut label_positions: HashMap<String, usize> = HashMap::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if let Some(ref label) = line.label {
-            label_positions.insert(label.clone(), idx);
+    /// Build a CFG from parsed assembly lines
+    pub fn from_lines(lines: &[ParsedLine]) -> Self {
+        // First pass: identify all labels and their positions
+        let mut label_positions: HashMap<String, usize> = HashMap::new();
+        for (idx, line) in lines.iter().enumerate() {
+            if let Some(ref label) = line.label {
+                label_positions.insert(label.clone(), idx);
+            }
         }
-    }
 
-    // Second pass: identify basic block boundaries
-    // A new block starts at:
-    // - The beginning of the file
-    // - Any label
-    // - The instruction after a branch
-    let mut block_starts: Vec<usize> = Vec::new();
-    let mut prev_was_branch = false;
+        // Second pass: identify basic block boundaries
+        // A new block starts at:
+        // - The beginning of the file
+        // - Any label
+        // - The instruction after a branch
+        let mut block_starts: Vec<usize> = Vec::new();
+        let mut previous_was_branch = false;
 
-    for (idx, line) in lines.iter().enumerate() {
-        let is_start = idx == 0 || line.label.is_some() || prev_was_branch;
+        for (idx, line) in lines.iter().enumerate() {
+            let is_start = idx == 0 || line.label.is_some() || previous_was_branch;
 
-        if is_start && has_code(line, lines, idx) {
-            if block_starts.last() != Some(&idx) {
+            if is_start && Self::has_code(line, lines, idx) {
                 block_starts.push(idx);
             }
+
+            previous_was_branch = line
+                .instruction
+                .as_ref()
+                .map(|i| i.is_branch() || i.is_return())
+                .unwrap_or(false);
         }
 
-        prev_was_branch = line
-            .instruction
-            .as_ref()
-            .map(|i| i.is_branch() || i.is_return())
-            .unwrap_or(false);
-    }
+        // Third pass: create graph nodes for basic blocks
+        let mut graph: DiGraph<BlockData, ()> = DiGraph::new();
+        let mut label_to_block: HashMap<String, NodeIndex> = HashMap::new();
+        let mut nodes: Vec<NodeIndex> = Vec::new();
 
-    // Third pass: create graph nodes for basic blocks
-    let mut graph: DiGraph<BlockData, ()> = DiGraph::new();
-    let mut label_to_block: HashMap<String, NodeIndex> = HashMap::new();
-    let mut nodes: Vec<NodeIndex> = Vec::new();
+        for (block_idx, &start_idx) in block_starts.iter().enumerate() {
+            let end_idx = block_starts
+                .get(block_idx + 1)
+                .copied()
+                .unwrap_or(lines.len());
 
-    for (block_idx, &start_idx) in block_starts.iter().enumerate() {
-        let end_idx = block_starts
-            .get(block_idx + 1)
-            .copied()
-            .unwrap_or(lines.len());
+            // Line indices for this block
+            let line_indices = start_idx..end_idx;
 
-        // Collect line indices for this block
-        let line_indices: Vec<usize> = (start_idx..end_idx).collect();
+            // Find the label for this block (if any)
+            let label = lines[start_idx].label.clone();
 
-        // Find the label for this block (if any)
-        let label = lines[start_idx].label.clone();
+            // Create the node
+            let node = graph.add_node(BlockData {
+                label,
+                line_indices: line_indices.clone(),
+                back_edge_target: None,
+            });
+            nodes.push(node);
 
-        // Create the node
-        let node = graph.add_node(BlockData {
-            label,
-            line_indices: line_indices.clone(),
-            has_back_edge: false,
-            back_edge_target: None,
-        });
-        nodes.push(node);
-
-        // Register this block for any labels it contains
-        for &idx in &line_indices {
-            if let Some(ref lbl) = lines[idx].label {
-                label_to_block.insert(lbl.clone(), node);
+            // Register this block for any labels it contains
+            for idx in line_indices {
+                if let Some(ref lbl) = lines[idx].label {
+                    label_to_block.insert(lbl.clone(), node);
+                }
             }
         }
-    }
 
-    // Fourth pass: add edges based on control flow
-    for (block_idx, &node) in nodes.iter().enumerate() {
-        let block = &graph[node];
+        // Fourth pass: add edges based on control flow
+        for (block_idx, &node) in nodes.iter().enumerate() {
+            let block = &graph[node];
 
-        // Find the terminating instruction
-        let term_instr = block
-            .line_indices
-            .iter()
-            .rev()
-            .find_map(|&idx| lines[idx].instruction.as_ref());
+            // Find the terminating instruction
+            let terminating_instruction = block
+                .line_indices
+                .clone()
+                .rev()
+                .find_map(|idx| lines[idx].instruction.as_ref());
 
-        if let Some(instr) = term_instr {
-            if instr.is_branch() {
-                if let Some(target) = instr.get_branch_target() {
-                    if let Some(&target_node) = label_to_block.get(target) {
-                        graph.add_edge(node, target_node, ());
+            if let Some(instruction) = terminating_instruction {
+                // Add edge to branch target (but not for calls - they return to next instruction)
+                if instruction.is_branch() && !instruction.is_call() {
+                    if let Some(target) = instruction.get_branch_target() {
+                        if let Some(&target_node) = label_to_block.get(target) {
+                            graph.add_edge(node, target_node, ());
+                        }
                     }
+                }
 
-                    // Conditional branches also fall through
-                    if instr.is_conditional_branch() && block_idx + 1 < nodes.len() {
+                // Fall through unless it's a return or unconditional jump
+                if !instruction.is_return() && !instruction.is_unconditional_jump() {
+                    if block_idx + 1 < nodes.len() {
                         graph.add_edge(node, nodes[block_idx + 1], ());
                     }
                 }
-            } else if !instr.is_return() {
-                // Non-branch, non-return falls through
+            } else {
+                // No terminating instruction, fall through
                 if block_idx + 1 < nodes.len() {
                     graph.add_edge(node, nodes[block_idx + 1], ());
                 }
             }
-        } else {
-            // No terminating instruction, fall through
-            if block_idx + 1 < nodes.len() {
-                graph.add_edge(node, nodes[block_idx + 1], ());
-            }
         }
-    }
 
-    // Fifth pass: compute dominators and identify back-edges
-    // A back-edge is an edge A → B where B dominates A
-    if !nodes.is_empty() {
+        // Fifth pass: compute dominators and identify back-edges
+        // A back-edge is an edge A → B where B dominates A
+        if nodes.is_empty() {
+            return Self {
+                graph,
+                label_to_block,
+            };
+        }
+
+        // Compute dominator tree: B dominates A if every path from entry to A goes through B
         let entry = nodes[0];
-        let dominators = simple_fast(&graph, entry);
+        let dominators = dominators::simple_fast(&graph, entry);
 
         // Collect back-edge information
         let mut back_edge_info: Vec<(NodeIndex, Option<String>)> = Vec::new();
-
         for &node in &nodes {
-            for succ in graph.neighbors(node) {
+            for successor in graph.neighbors(node) {
                 // Check if successor dominates this block
-                let succ_dominates_block = dominators
+                let successor_dominates_block = dominators
                     .dominators(node)
-                    .map(|mut iter| iter.any(|dom| dom == succ))
+                    .map(|mut iter| iter.any(|d| d == successor))
                     .unwrap_or(false);
 
-                if succ_dominates_block {
-                    // Find the target label from the successor block
-                    let succ_block = &graph[succ];
-                    let target_label = if let Some(ref label) = succ_block.label {
-                        Some(label.clone())
-                    } else {
-                        // Look for any label in the target block's line indices
-                        succ_block
-                            .line_indices
-                            .iter()
-                            .find_map(|&line_idx| lines[line_idx].label.clone())
-                    };
+                if successor_dominates_block {
+                    // Find the target label from the successor block.
+                    // Note: target_label may be None for malformed input. We don't panic
+                    // here because this processes untrusted input. The verifier will
+                    // reject any uninstrumented back-edges later.
+                    let target_label = graph[successor].label.clone();
                     back_edge_info.push((node, target_label));
                     break; // Only need to mark one back-edge per block
                 }
@@ -228,45 +222,43 @@ pub fn build(lines: &[ParsedLine]) -> Cfg {
 
         // Apply back-edge information
         for (node, target_label) in back_edge_info {
-            let block = &mut graph[node];
-            block.has_back_edge = true;
-            block.back_edge_target = target_label;
+            graph[node].back_edge_target = target_label;
+        }
+
+        Self {
+            graph,
+            label_to_block,
         }
     }
 
-    Cfg {
-        graph,
-        label_to_block,
-    }
-}
-
-/// Check if there's any code at or after this position in the same logical block
-fn has_code(line: &ParsedLine, lines: &[ParsedLine], idx: usize) -> bool {
-    // Check current line
-    if line.instruction.is_some() {
-        return true;
-    }
-
-    // Look ahead for code before the next label
-    for future_line in lines.iter().skip(idx + 1) {
-        if future_line.label.is_some() {
-            break;
-        }
-        if future_line.instruction.is_some() {
+    /// Check if there's any code at or after this position in the same logical block
+    fn has_code(line: &ParsedLine, lines: &[ParsedLine], idx: usize) -> bool {
+        // Check current line
+        if line.instruction.is_some() {
             return true;
         }
+
+        // Look ahead for code before the next label
+        for future_line in lines.iter().skip(idx + 1) {
+            if future_line.label.is_some() {
+                break;
+            }
+            if future_line.instruction.is_some() {
+                return true;
+            }
+        }
+
+        false
     }
 
-    false
-}
-
-/// Count the number of actual instructions in a block (excluding directives, labels, empty lines)
-pub fn count_instructions(cfg: &Cfg, block: NodeIndex, lines: &[ParsedLine]) -> usize {
-    cfg.block(block)
-        .line_indices
-        .iter()
-        .filter(|&&idx| lines[idx].instruction.is_some())
-        .count()
+    /// Count the number of actual instructions in a block (excluding directives, labels, empty lines)
+    pub fn count_instructions(&self, block: NodeIndex, lines: &[ParsedLine]) -> usize {
+        self.block(block)
+            .line_indices
+            .clone()
+            .filter(|&idx| lines[idx].instruction.is_some())
+            .count()
+    }
 }
 
 #[cfg(test)]
@@ -290,13 +282,15 @@ _test_loop:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Should have multiple blocks
         assert!(cfg.block_count() >= 2);
 
         // Find the block with the back-edge
-        let back_edge_block = cfg.blocks().find(|&b| cfg.block(b).has_back_edge);
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some());
         assert!(back_edge_block.is_some());
 
         let block = cfg.block(back_edge_block.unwrap());
@@ -314,7 +308,7 @@ _test_loop:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         assert!(cfg.has_label(".Lstart"));
         assert!(cfg.has_label(".Lloop"));
@@ -339,10 +333,13 @@ _nested:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Should have exactly 2 back-edges
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.block(b).has_back_edge).count();
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
         assert_eq!(back_edge_count, 2, "Expected 2 back-edges for nested loops");
 
         // Verify targets
@@ -373,11 +370,17 @@ _diamond:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // No back-edges in a diamond pattern
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.block(b).has_back_edge).count();
-        assert_eq!(back_edge_count, 0, "Diamond pattern should have no back-edges");
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Diamond pattern should have no back-edges"
+        );
     }
 
     #[test]
@@ -390,10 +393,15 @@ _spin:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
-        let back_edge_block = cfg.blocks().find(|&b| cfg.block(b).has_back_edge);
-        assert!(back_edge_block.is_some(), "Should detect self-loop back-edge");
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some());
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect self-loop back-edge"
+        );
         assert_eq!(
             cfg.block(back_edge_block.unwrap()).back_edge_target,
             Some(".Lspin".to_string())
@@ -413,10 +421,15 @@ _do_while:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
-        let back_edge_block = cfg.blocks().find(|&b| cfg.block(b).has_back_edge);
-        assert!(back_edge_block.is_some(), "Should detect do-while back-edge");
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some());
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect do-while back-edge"
+        );
         assert_eq!(
             cfg.block(back_edge_block.unwrap()).back_edge_target,
             Some(".Lbody".to_string())
@@ -443,10 +456,13 @@ _two_loops:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Should have exactly 2 back-edges
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.block(b).has_back_edge).count();
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
         assert_eq!(
             back_edge_count, 2,
             "Expected 2 back-edges for two independent loops"
@@ -474,10 +490,13 @@ _test:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Find the block that has the back-edge
-        let back_edge_node = cfg.blocks().find(|&b| cfg.block(b).has_back_edge).unwrap();
+        let back_edge_node = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some())
+            .unwrap();
 
         // is_back_edge should return true for the correct block/target
         assert!(cfg.is_back_edge(back_edge_node, ".Lloop"));
@@ -501,11 +520,86 @@ _test:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Entry block should have 2 successors (conditional branch + fall-through)
         let entry = cfg.blocks().next().unwrap();
         let succ_count = cfg.successors(entry).count();
         assert_eq!(succ_count, 2, "Entry block should have 2 successors");
+    }
+
+    #[test]
+    fn test_call_falls_through() {
+        // bl (call) should fall through to next instruction, not branch to target
+        let input = r#"
+_caller:
+    mov x0, #1
+    bl _callee
+    add x0, x0, #1
+    ret
+_callee:
+    ret
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = Cfg::from_lines(&lines);
+
+        // Find the block containing "bl _callee"
+        let caller_block = cfg.blocks().find(|&b| {
+            let block = cfg.block(b);
+            block.line_indices.clone().any(|idx| {
+                lines[idx]
+                    .instruction
+                    .as_ref()
+                    .map(|i| i.mnemonic == "bl")
+                    .unwrap_or(false)
+            })
+        });
+        assert!(caller_block.is_some(), "Should find block with bl");
+
+        // The bl block should have exactly 1 successor (fall-through to add)
+        // NOT 2 (which would include edge to _callee)
+        let succ_count = cfg.successors(caller_block.unwrap()).count();
+        assert_eq!(
+            succ_count, 1,
+            "bl should only fall through, not branch to callee"
+        );
+
+        // No back-edges (recursive call should not create one)
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(back_edge_count, 0, "Calls should not create back-edges");
+    }
+
+    #[test]
+    fn test_recursive_call_no_back_edge() {
+        // Recursive bl should NOT be detected as a back-edge
+        let input = r#"
+_factorial:
+    cmp x0, #1
+    b.le .Lbase
+    sub x0, x0, #1
+    bl _factorial
+    mul x0, x0, x1
+    ret
+.Lbase:
+    mov x0, #1
+    ret
+"#;
+        let parser = Parser {};
+        let lines = parser.parse(input).unwrap();
+        let cfg = Cfg::from_lines(&lines);
+
+        // No back-edges - the recursive call is not a loop
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Recursive call should not create a back-edge"
+        );
     }
 }

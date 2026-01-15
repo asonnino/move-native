@@ -48,7 +48,7 @@ fn main() {
     };
 
     // Build CFG
-    let cfg = cfg::build(&lines);
+    let cfg = cfg::Cfg::from_lines(&lines);
 
     // Configure instrumentation
     let config = InstrumentConfig {

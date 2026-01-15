@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use petgraph::graph::NodeIndex;
 
 use crate::{
-    cfg::{count_instructions, Cfg},
+    cfg::Cfg,
     parser::ParsedLine,
 };
 
@@ -79,19 +79,17 @@ pub fn instrument_with_config(
     let mut gas_check_counter = 0;
 
     // Collect all existing labels to avoid collisions
-    let existing_labels: HashSet<String> = lines
-        .iter()
-        .filter_map(|line| line.label.clone())
-        .collect();
+    let existing_labels: HashSet<String> =
+        lines.iter().filter_map(|line| line.label.clone()).collect();
 
     // Track which line indices have back-edge branches
     let mut back_edge_lines: HashMap<usize, NodeIndex> = HashMap::new();
 
     for block_idx in cfg.blocks() {
         let block = cfg.block(block_idx);
-        if block.has_back_edge {
+        if block.back_edge_target.is_some() {
             // Find the line with the terminating branch
-            if let Some(&branch_line_idx) = block.line_indices.iter().rev().find(|&&idx| {
+            if let Some(branch_line_idx) = block.line_indices.clone().rev().find(|&idx| {
                 lines[idx]
                     .instruction
                     .as_ref()
@@ -107,7 +105,7 @@ pub fn instrument_with_config(
     for (idx, line) in lines.iter().enumerate() {
         if let Some(&block_idx) = back_edge_lines.get(&idx) {
             // This line has a back-edge branch - insert gas check before it
-            let instruction_count = count_instructions(cfg, block_idx, lines);
+            let instruction_count = cfg.count_instructions(block_idx, lines);
 
             // Generate unique label, avoiding collisions with existing labels
             let label = generate_unique_label(&existing_labels, &mut gas_check_counter);
@@ -220,7 +218,7 @@ pub fn gas_check_sequence(instr_count: usize, label: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cfg::build, parser::Parser};
+    use crate::{cfg::Cfg, parser::Parser};
 
     #[test]
     fn test_instrument_simple_loop() {
@@ -240,7 +238,7 @@ _test_loop:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
         // Check that gas check was inserted (without bundle directives by default)
@@ -262,7 +260,7 @@ _test_loop:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let config = InstrumentConfig {
             emit_bundle_directives: true,
         };
@@ -282,7 +280,7 @@ _simple:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
         // Should not have gas checks
@@ -365,12 +363,15 @@ _nested:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
         // Should have exactly 2 gas checks (one per back-edge)
         let gas_check_count = output.matches("tbz x23, #63").count();
-        assert_eq!(gas_check_count, 2, "Should have exactly 2 gas checks for nested loops");
+        assert_eq!(
+            gas_check_count, 2,
+            "Should have exactly 2 gas checks for nested loops"
+        );
 
         // Both should charge for 3 instructions (their own block only)
         // Count occurrences of "sub x23, x23, #3"
@@ -381,14 +382,19 @@ _nested:
         );
 
         // Verify both back-edges are instrumented
-        assert!(output.contains("b.lt .Linner"), "Inner branch should be present");
-        assert!(output.contains("b.lt .Louter"), "Outer branch should be present");
+        assert!(
+            output.contains("b.lt .Linner"),
+            "Inner branch should be present"
+        );
+        assert!(
+            output.contains("b.lt .Louter"),
+            "Outer branch should be present"
+        );
     }
 
     #[test]
     fn test_nested_loop_instruction_counts() {
         // More detailed test of instruction counting for nested loops
-        use crate::cfg::count_instructions;
 
         let input = r#"
 .Louter:
@@ -406,7 +412,7 @@ _nested:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
 
         // Find the blocks with back-edges and verify their instruction counts
         let mut inner_count = None;
@@ -414,8 +420,8 @@ _nested:
 
         for block_idx in cfg.blocks() {
             let block = cfg.block(block_idx);
-            if block.has_back_edge {
-                let count = count_instructions(&cfg, block_idx, &lines);
+            if block.back_edge_target.is_some() {
+                let count = cfg.count_instructions(block_idx, &lines);
                 if block.back_edge_target == Some(".Linner".to_string()) {
                     inner_count = Some(count);
                 } else if block.back_edge_target == Some(".Louter".to_string()) {
@@ -425,10 +431,18 @@ _nested:
         }
 
         // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
-        assert_eq!(inner_count, Some(5), "Inner loop block should have 5 instructions");
+        assert_eq!(
+            inner_count,
+            Some(5),
+            "Inner loop block should have 5 instructions"
+        );
 
         // Outer block (after inner): add, cmp, b.lt = 3 instructions
-        assert_eq!(outer_count, Some(3), "Outer loop block should have 3 instructions");
+        assert_eq!(
+            outer_count,
+            Some(3),
+            "Outer loop block should have 3 instructions"
+        );
 
         // Total instructions charged per full iteration: 5 (inner) + 3 (outer) = 8
         // NOT 5 + 5 + 3 = 13 (which would be double-charging)
@@ -444,7 +458,7 @@ _nested:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
         // Should use the unique prefix, not the old .Lok_ prefix
@@ -452,10 +466,7 @@ _nested:
             output.contains(".L__gas_ok_"),
             "Should use unique .L__gas_ok_ prefix"
         );
-        assert!(
-            !output.contains(".Lok_"),
-            "Should not use old .Lok_ prefix"
-        );
+        assert!(!output.contains(".Lok_"), "Should not use old .Lok_ prefix");
     }
 
     #[test]
@@ -473,7 +484,7 @@ _nested:
 "#;
         let parser = Parser {};
         let lines = parser.parse(input).unwrap();
-        let cfg = build(&lines);
+        let cfg = Cfg::from_lines(&lines);
         let output = instrument(&lines, &cfg);
 
         // The generated label should skip 0 and 1 (which exist) and use 2

@@ -83,6 +83,20 @@ impl Instruction {
             || mnemonic.starts_with("blra")
     }
 
+    /// Check if this is a call instruction (branch with link).
+    /// Calls save a return address and expect the callee to return.
+    pub fn is_call(&self) -> bool {
+        let mnemonic = self.mnemonic.to_lowercase();
+        mnemonic == "bl" || mnemonic == "blr" || mnemonic.starts_with("blra")
+    }
+
+    /// Check if this is an unconditional jump (no fall-through, no return).
+    /// These transfer control permanently without saving a return address.
+    pub fn is_unconditional_jump(&self) -> bool {
+        let mnemonic = self.mnemonic.to_lowercase();
+        mnemonic == "b" || mnemonic == "br" || mnemonic.starts_with("bra")
+    }
+
     /// Check if a branch is conditional (can fall through)
     pub fn is_conditional_branch(&self) -> bool {
         let mnemonic = self.mnemonic.to_lowercase();
