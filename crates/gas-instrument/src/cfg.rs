@@ -265,7 +265,10 @@ impl Cfg {
 mod tests {
     use indoc::indoc;
 
-    use crate::{parser::ParsedLine, parser::Parser, Cfg};
+    use crate::{
+        parser::{ParsedLine, Parser},
+        Cfg,
+    };
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
@@ -549,6 +552,378 @@ mod tests {
         assert_eq!(
             back_edge_count, 0,
             "Recursive call should not create a back-edge"
+        );
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let (cfg, _) = build_cfg("");
+        assert_eq!(cfg.block_count(), 0);
+    }
+
+    #[test]
+    fn test_linear_code_no_loops() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _linear:
+                mov x0, #1
+                add x0, x0, #2
+                mul x0, x0, #3
+                ret
+        "});
+
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(back_edge_count, 0, "Linear code should have no back-edges");
+        assert_eq!(cfg.block_count(), 1, "Linear code should be one block");
+    }
+
+    #[test]
+    fn test_single_ret() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _minimal:
+                ret
+        "});
+
+        assert_eq!(cfg.block_count(), 1);
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(back_edge_count, 0);
+    }
+
+    #[test]
+    fn test_unreachable_loop_not_detected() {
+        // Loop after unconditional ret is unreachable.
+        // Dominator analysis won't find it as a back-edge (by design).
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                mov x0, #1
+                ret
+            .Lunreachable:
+                add x0, x0, #1
+                b .Lunreachable
+        "});
+
+        // The unreachable loop should NOT be detected as a back-edge
+        // because dominator analysis only works on reachable code
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Unreachable loop should not be detected as back-edge"
+        );
+    }
+
+    #[test]
+    fn test_unreachable_after_unconditional_branch() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                b .Lend
+            .Lunreachable:
+                add x0, x0, #1
+                b .Lunreachable
+            .Lend:
+                ret
+        "});
+
+        // The unreachable loop should NOT be detected
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Unreachable loop after unconditional branch should not be detected"
+        );
+    }
+
+    #[test]
+    fn test_cbz_loop() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _cbz_loop:
+                mov x0, #10
+            .Lloop:
+                sub x0, x0, #1
+                cbnz x0, .Lloop
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some());
+        assert!(back_edge_block.is_some(), "Should detect cbnz back-edge");
+        assert_eq!(
+            cfg.block(back_edge_block.unwrap()).back_edge_target,
+            Some(".Lloop".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cbz_exit_loop() {
+        // cbz used to exit loop (branch forward when zero)
+        let (cfg, _) = build_cfg(indoc! {"
+            _cbz_exit:
+                mov x0, #10
+            .Lloop:
+                sub x0, x0, #1
+                cbz x0, .Ldone
+                b .Lloop
+            .Ldone:
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect back-edge from unconditional b"
+        );
+    }
+
+    #[test]
+    fn test_tbz_loop() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _tbz_loop:
+                mov x0, #0x80
+            .Lloop:
+                lsr x0, x0, #1
+                tbnz x0, #0, .Lloop
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target.is_some());
+        assert!(back_edge_block.is_some(), "Should detect tbnz back-edge");
+    }
+
+    #[test]
+    fn test_loop_with_break() {
+        // Loop with early exit (break pattern)
+        let (cfg, _) = build_cfg(indoc! {"
+            _with_break:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, #5
+                b.eq .Lbreak
+                cmp x0, #10
+                b.lt .Lloop
+            .Lbreak:
+                ret
+        "});
+
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(back_edge_count, 1, "Should have exactly one back-edge");
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+        assert!(back_edge_block.is_some());
+    }
+
+    #[test]
+    fn test_loop_with_continue() {
+        // Continue pattern: branch back to loop header from middle
+        let (cfg, _) = build_cfg(indoc! {"
+            _with_continue:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                tst x0, #1
+                b.ne .Lloop
+                add x1, x1, x0
+                cmp x0, #10
+                b.lt .Lloop
+                ret
+        "});
+
+        // Should have 2 back-edges: one from b.ne and one from b.lt
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 2,
+            "Should have two back-edges (continue and normal)"
+        );
+    }
+
+    #[test]
+    fn test_infinite_loop_with_conditional_break() {
+        // while(true) { if (cond) break; }
+        let (cfg, _) = build_cfg(indoc! {"
+            _infinite:
+            .Lloop:
+                bl _do_work
+                cbnz x0, .Ldone
+                b .Lloop
+            .Ldone:
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect back-edge in infinite loop"
+        );
+    }
+
+    #[test]
+    fn test_multiple_exit_points() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _multi_exit:
+                cmp x0, #0
+                b.lt .Lerror
+                cmp x0, #100
+                b.gt .Lerror
+                mov x0, #1
+                ret
+            .Lerror:
+                mov x0, #0
+                ret
+        "});
+
+        // No loops, just multiple exits
+        let back_edge_count = cfg
+            .blocks()
+            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .count();
+        assert_eq!(
+            back_edge_count, 0,
+            "Multiple exits should not create back-edges"
+        );
+    }
+
+    #[test]
+    fn test_consecutive_labels() {
+        // Each label creates a block entry point, even if consecutive.
+        // The CFG builder creates separate blocks for each label.
+        let (cfg, _) = build_cfg(indoc! {"
+            _func:
+                cmp x0, #0
+                b.eq .Lfirst
+                mov x0, #1
+                ret
+            .Lfirst:
+            .Lsecond:
+            .Lthird:
+                mov x0, #2
+                ret
+        "});
+
+        // All three labels should exist and be findable
+        assert!(cfg.has_label(".Lfirst"));
+        assert!(cfg.has_label(".Lsecond"));
+        assert!(cfg.has_label(".Lthird"));
+
+        // Each label is registered - branch target resolution works
+        assert!(cfg.block_by_label(".Lfirst").is_some());
+        assert!(cfg.block_by_label(".Lsecond").is_some());
+        assert!(cfg.block_by_label(".Lthird").is_some());
+    }
+
+    #[test]
+    fn test_branch_to_function_start() {
+        // Loop that branches back to the entry point
+        let (cfg, _) = build_cfg(indoc! {"
+            _entry:
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt _entry
+                ret
+        "});
+
+        let back_edge_block = cfg
+            .blocks()
+            .find(|&b| cfg.block(b).back_edge_target == Some("_entry".to_string()));
+        assert!(
+            back_edge_block.is_some(),
+            "Should detect back-edge to function entry"
+        );
+    }
+
+    #[test]
+    fn test_block_by_label() {
+        let (cfg, _) = build_cfg(indoc! {"
+            _start:
+                mov x0, #0
+            .Lmiddle:
+                add x0, x0, #1
+            .Lend:
+                ret
+        "});
+
+        assert!(cfg.block_by_label("_start").is_some());
+        assert!(cfg.block_by_label(".Lmiddle").is_some());
+        assert!(cfg.block_by_label(".Lend").is_some());
+        assert!(cfg.block_by_label(".Lnonexistent").is_none());
+
+        // Different labels should (generally) be different blocks
+        let start = cfg.block_by_label("_start").unwrap();
+        let middle = cfg.block_by_label(".Lmiddle").unwrap();
+        assert_ne!(start, middle);
+    }
+
+    #[test]
+    fn test_count_instructions() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            _func:
+                mov x0, #0
+                mov x1, #1
+                add x0, x0, x1
+            .Lloop:
+                sub x0, x0, #1
+                cbnz x0, .Lloop
+                ret
+        "});
+
+        let entry = cfg.block_by_label("_func").unwrap();
+        let loop_block = cfg.block_by_label(".Lloop").unwrap();
+
+        assert_eq!(
+            cfg.count_instructions(entry, &lines),
+            3,
+            "Entry block should have 3 instructions"
+        );
+        // cbnz is a conditional branch, so it ends the block.
+        // ret is in a separate fall-through block.
+        assert_eq!(
+            cfg.count_instructions(loop_block, &lines),
+            2,
+            "Loop block should have 2 instructions (sub, cbnz)"
+        );
+    }
+
+    #[test]
+    fn test_count_instructions_with_directives() {
+        let (cfg, lines) = build_cfg(indoc! {"
+            .global _func
+            .align 4
+            _func:
+                mov x0, #0
+                .cfi_startproc
+                add x0, x0, #1
+                ret
+        "});
+
+        let func = cfg.block_by_label("_func").unwrap();
+        // Should only count actual instructions, not directives
+        assert_eq!(
+            cfg.count_instructions(func, &lines),
+            3,
+            "Should count only instructions, not directives"
         );
     }
 }
