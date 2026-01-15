@@ -1,0 +1,51 @@
+//! Native verifier for Arm64 binaries
+//!
+//! Verifies that compiled code is safe for deterministic execution by checking
+//! a series of properties on the machine code. Based on the DeCl paper
+//! (OSDI 2025 - "Deterministic Client: Enforcing Determinism on Untrusted Machine Code").
+//!
+//! # Verification Checklist
+//!
+//! | Check | Description |
+//! |-------|-------------|
+//! | **Instruction whitelist** | ~180 base + SIMD instructions allowed; reject atomics, FP, syscalls, barriers |
+//! | **Malformed encodings** | Reject UNPREDICTABLE (bad SBZ/SBO fields) and unallocated encodings |
+//! | **UNPREDICTABLE patterns** | Reject patterns like `ldr x0, [x0], #16` (writeback to same register) |
+//! | **Gas check at back-edges** | Verify `sub x23` / `tbz x23, #63` / `brk #0` sequence before each back-edge |
+//! | **x23 protection** | Gas register only modified by gas decrement sequences |
+//! | **No indirect branches** | Reject `br`, `blr`, `bra*`, `blra*` (Move has no dynamic dispatch) |
+//! | **No unreachable code** | All basic blocks must be reachable from entry point |
+//! | **Branch targets valid** | All branch targets must be valid instruction boundaries |
+//!
+//! # Why Verify Machine Code?
+//!
+//! The verifier operates on the final binary (not assembly text) because:
+//!
+//! 1. **Trust boundary**: The CPU executes machine code, not assembly text
+//! 2. **Assembler independence**: Don't trust the assembler to produce correct output
+//! 3. **Production deployment**: Validators receive compiled binaries, not source
+//!
+//! The gas-instrument tool is "best effort" tooling; native-verifier provides
+//! the security guarantee.
+//!
+//! # Gas Check Sequence
+//!
+//! At every back-edge (loop), the verifier expects this exact sequence:
+//!
+//! ```asm
+//! sub x23, x23, #N      // decrement gas by N (instructions in block)
+//! tbz x23, #63, .Lok    // if bit 63 is 0 (positive), continue
+//! brk #0                // trap - out of gas
+//! .Lok:
+//! <back-edge branch>    // the original loop branch
+//! ```
+//!
+//! # Unreachable Code
+//!
+//! Dead code is rejected because an unrelated bug could allow jumping into
+//! uninstrumented dead code containing an infinite loop. All basic blocks
+//! must be reachable from the entry point.
+
+pub mod decode;
+
+pub use decode::{decode_instructions, DecodeError, DecodedInstruction};

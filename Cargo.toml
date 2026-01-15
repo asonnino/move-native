@@ -4,5 +4,8 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/alberto/move-native"
+
+[workspace.dependencies]
+thiserror = "2"

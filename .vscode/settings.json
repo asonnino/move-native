@@ -1,5 +1,6 @@
 {
   "cSpell.words": [
+    "armv",
     "asdfghjkl",
     "blra",
     "blraaz",
@@ -7,6 +8,9 @@
     "braaz",
     "brabz",
     "cbnz",
+    "CCMN",
+    "CCMP",
+    "ERET",
     "instrumenter",
     "Lback",
     "Lbase",
@@ -35,6 +39,7 @@
     "Lzero",
     "petgraph",
     "startproc",
-    "tbnz"
+    "tbnz",
+    "yaxpeax"
   ]
 }
