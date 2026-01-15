@@ -26,6 +26,59 @@ pub struct Instruction<'a> {
     pub operands: Vec<&'a str>,
 }
 
+impl<'a> Instruction<'a> {
+    /// Parse an instruction from a line of text
+    fn parse(line: &'a str) -> Self {
+        let line = line.trim();
+
+        // Find mnemonic (first word, possibly with condition like "b.lt")
+        let mut parts = line.splitn(2, |c: char| c.is_whitespace());
+
+        let mnemonic = parts.next().unwrap_or("");
+        let operands_str = parts.next().unwrap_or("");
+
+        // Parse operands (comma-separated, but handle brackets)
+        let operands = Self::parse_operands(operands_str);
+
+        Self { mnemonic, operands }
+    }
+
+    /// Parse comma-separated operands, handling brackets for addressing modes
+    fn parse_operands(s: &'a str) -> Vec<&'a str> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Vec::new();
+        }
+
+        let mut operands = Vec::new();
+        let mut start = 0;
+        let mut bracket_depth: i32 = 0;
+
+        for (i, c) in s.char_indices() {
+            match c {
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                ',' if bracket_depth == 0 => {
+                    let operand = s[start..i].trim();
+                    if !operand.is_empty() {
+                        operands.push(operand);
+                    }
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+
+        // Don't forget the last operand
+        let operand = s[start..].trim();
+        if !operand.is_empty() {
+            operands.push(operand);
+        }
+
+        operands
+    }
+}
+
 impl Instruction<'_> {
     /// Case-insensitive check if mnemonic equals the given string
     fn mnemonic_eq(&self, s: &str) -> bool {
@@ -118,6 +171,22 @@ pub struct Directive<'a> {
     pub args: Vec<&'a str>,
 }
 
+impl<'a> Directive<'a> {
+    /// Parse a directive from a line of text (must start with '.')
+    fn parse(line: &'a str) -> Self {
+        // Skip the leading dot
+        let line = &line[1..];
+
+        // Split on whitespace
+        let mut parts = line.split_whitespace();
+
+        let name = parts.next().unwrap_or("");
+        let args: Vec<&str> = parts.map(|s| s.trim_end_matches(',')).collect();
+
+        Self { name, args }
+    }
+}
+
 /// Parse error
 #[derive(Debug)]
 pub struct ParseError {
@@ -153,7 +222,7 @@ impl<'a> Parser<'a> {
 
         for (idx, line_text) in self.input.lines().enumerate() {
             let line_number = idx + 1;
-            let parsed = self.parse_line(line_text, line_number)?;
+            let parsed = Self::parse_line(line_text, line_number);
             lines.push(parsed);
         }
 
@@ -161,194 +230,127 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a single line of assembly
-    fn parse_line(&self, line: &'a str, line_number: usize) -> Result<ParsedLine<'a>, ParseError> {
+    fn parse_line(line: &'a str, line_number: usize) -> ParsedLine<'a> {
         let original = line;
 
         // Remove comments
-        let line = remove_comments(line);
+        let line = Self::remove_comments(line);
         // Trim whitespace
         let line = line.trim();
 
         // Empty line
         if line.is_empty() {
-            return Ok(ParsedLine {
+            return ParsedLine {
                 label: None,
                 instruction: None,
                 directive: None,
                 line_number,
                 original,
-            });
+            };
         }
 
         let mut label = None;
         let mut rest = line;
 
         // Check for label (ends with ':')
-        if let Some(colon_pos) = find_label_colon(line) {
+        if let Some(colon_pos) = Self::find_label_colon(line) {
             label = Some(line[..colon_pos].trim());
             rest = line[colon_pos + 1..].trim();
         }
 
         // Empty after label
         if rest.is_empty() {
-            return Ok(ParsedLine {
+            return ParsedLine {
                 label,
                 instruction: None,
                 directive: None,
                 line_number,
                 original,
-            });
+            };
         }
 
         // Check for directive (starts with '.')
         if rest.starts_with('.') {
-            let directive = parse_directive(rest)?;
-            return Ok(ParsedLine {
+            return ParsedLine {
                 label,
                 instruction: None,
-                directive: Some(directive),
+                directive: Some(Directive::parse(rest)),
                 line_number,
                 original,
-            });
+            };
         }
 
         // Otherwise it's an instruction
-        let instruction = parse_instruction(rest)?;
-        Ok(ParsedLine {
+        ParsedLine {
             label,
-            instruction: Some(instruction),
+            instruction: Some(Instruction::parse(rest)),
             directive: None,
             line_number,
             original,
-        })
-    }
-}
-
-/// Remove comments from a line
-/// Supports multiple comment styles:
-/// - // (C++ style)
-/// - /* */ (C style, single line only)
-/// - ; (traditional assembly style)
-/// - @ (GNU ARM assembler style)
-fn remove_comments(line: &str) -> &str {
-    // Find the earliest comment start position
-    let mut earliest_pos = line.len();
-
-    // C++ style comments
-    if let Some(pos) = line.find("//") {
-        earliest_pos = earliest_pos.min(pos);
+        }
     }
 
-    // C style comments (simplified - assumes single line)
-    if let Some(pos) = line.find("/*") {
-        earliest_pos = earliest_pos.min(pos);
+    /// Remove comments from a line
+    /// Supports multiple comment styles:
+    /// - // (C++ style)
+    /// - /* */ (C style, single line only)
+    /// - ; (traditional assembly style)
+    /// - @ (GNU ARM assembler style)
+    fn remove_comments(line: &str) -> &str {
+        // Find the earliest comment start position
+        let mut earliest_pos = line.len();
+
+        // C++ style comments
+        if let Some(pos) = line.find("//") {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        // C style comments (simplified - assumes single line)
+        if let Some(pos) = line.find("/*") {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        // Traditional assembly semicolon comments
+        if let Some(pos) = line.find(';') {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        // GNU ARM assembler @ comments
+        if let Some(pos) = line.find('@') {
+            earliest_pos = earliest_pos.min(pos);
+        }
+
+        &line[..earliest_pos]
     }
 
-    // Traditional assembly semicolon comments
-    if let Some(pos) = line.find(';') {
-        earliest_pos = earliest_pos.min(pos);
-    }
+    /// Find the position of a label-ending colon
+    /// Labels can contain alphanumeric chars, underscores, dots, and $
+    fn find_label_colon(line: &str) -> Option<usize> {
+        let mut chars = line.char_indices().peekable();
 
-    // GNU ARM assembler @ comments
-    if let Some(pos) = line.find('@') {
-        earliest_pos = earliest_pos.min(pos);
-    }
+        // Skip leading whitespace
+        while let Some(&(_, c)) = chars.peek() {
+            if !c.is_whitespace() {
+                break;
+            }
+            chars.next();
+        }
 
-    &line[..earliest_pos]
-}
-
-/// Find the position of a label-ending colon
-/// Labels can contain alphanumeric chars, underscores, dots, and $
-fn find_label_colon(line: &str) -> Option<usize> {
-    let mut chars = line.char_indices().peekable();
-
-    // Skip leading whitespace
-    while let Some(&(_, c)) = chars.peek() {
-        if !c.is_whitespace() {
+        // Collect label characters
+        while let Some((pos, c)) = chars.next() {
+            if c == ':' {
+                return Some(pos);
+            }
+            // Valid label characters
+            if c.is_alphanumeric() || c == '_' || c == '.' || c == '$' {
+                continue;
+            }
+            // Hit something else (like whitespace or instruction)
             break;
         }
-        chars.next();
+
+        None
     }
-
-    // Collect label characters
-    while let Some((pos, c)) = chars.next() {
-        if c == ':' {
-            return Some(pos);
-        }
-        // Valid label characters
-        if c.is_alphanumeric() || c == '_' || c == '.' || c == '$' {
-            continue;
-        }
-        // Hit something else (like whitespace or instruction)
-        break;
-    }
-
-    None
-}
-
-/// Parse a directive line
-fn parse_directive(line: &str) -> Result<Directive, ParseError> {
-    // Skip the leading dot
-    let line = &line[1..];
-
-    // Split on whitespace
-    let mut parts = line.split_whitespace();
-
-    let name = parts.next().unwrap_or("");
-    let args: Vec<&str> = parts.map(|s| s.trim_end_matches(',')).collect();
-
-    Ok(Directive { name, args })
-}
-
-/// Parse an instruction line
-fn parse_instruction(line: &str) -> Result<Instruction, ParseError> {
-    let line = line.trim();
-
-    // Find mnemonic (first word, possibly with condition like "b.lt")
-    let mut parts = line.splitn(2, |c: char| c.is_whitespace());
-
-    let mnemonic = parts.next().unwrap_or("");
-    let operands_str = parts.next().unwrap_or("");
-
-    // Parse operands (comma-separated, but handle brackets)
-    let operands = parse_operands(operands_str);
-
-    Ok(Instruction { mnemonic, operands })
-}
-
-/// Parse comma-separated operands, handling brackets for addressing modes
-fn parse_operands(s: &str) -> Vec<&str> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Vec::new();
-    }
-
-    let mut operands = Vec::new();
-    let mut start = 0;
-    let mut bracket_depth: i32 = 0;
-
-    for (i, c) in s.char_indices() {
-        match c {
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            ',' if bracket_depth == 0 => {
-                let operand = s[start..i].trim();
-                if !operand.is_empty() {
-                    operands.push(operand);
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-
-    // Don't forget the last operand
-    let operand = s[start..].trim();
-    if !operand.is_empty() {
-        operands.push(operand);
-    }
-
-    operands
 }
 
 #[cfg(test)]
