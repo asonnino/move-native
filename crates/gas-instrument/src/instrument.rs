@@ -25,16 +25,11 @@
 //! There is no double-charging because the inner loop instructions are in a separate
 //! basic block from the outer loop's back-edge block.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::NodeIndex;
 
-use crate::{
-    cfg::Cfg,
-    parser::ParsedLine,
-};
-
-use std::collections::HashSet;
+use crate::{cfg::Cfg, parser::ParsedLine};
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
@@ -46,7 +41,7 @@ const MAX_SUB_IMMEDIATE: usize = 4095;
 const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 
 /// Configuration for instrumentation
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct InstrumentConfig {
     /// Whether to emit .bundle_lock/.bundle_unlock directives
     /// These require LLVM's integrated assembler; Apple's as doesn't support them

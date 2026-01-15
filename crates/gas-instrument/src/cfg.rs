@@ -25,7 +25,7 @@ use petgraph::{
 use crate::parser::ParsedLine;
 
 /// Data stored in each basic block node
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BlockData {
     /// Label at the start of this block (if any)
     pub label: Option<String>,
@@ -40,7 +40,6 @@ pub struct BlockData {
 }
 
 /// Control flow graph backed by petgraph
-#[derive(Debug)]
 pub struct Cfg {
     /// The underlying directed graph
     graph: DiGraph<BlockData, ()>,
@@ -361,10 +360,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 0,
             "Diamond pattern should have no back-edges"
@@ -379,9 +375,7 @@ mod tests {
                 b .Lspin
         "});
 
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.has_back_edge(b));
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
         assert!(
             back_edge_block.is_some(),
             "Should detect self-loop back-edge"
@@ -403,9 +397,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.has_back_edge(b));
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
         assert!(
             back_edge_block.is_some(),
             "Should detect do-while back-edge"
@@ -433,10 +425,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 2,
             "Expected 2 back-edges for two independent loops"
@@ -463,10 +452,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_node = cfg
-            .blocks()
-            .find(|&b| cfg.has_back_edge(b))
-            .unwrap();
+        let back_edge_node = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
 
         // Verify the back-edge target label
         assert_eq!(cfg.back_edge_target_label(back_edge_node), Some(".Lloop"));
@@ -525,10 +511,7 @@ mod tests {
             "bl should only fall through, not branch to callee"
         );
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 0, "Calls should not create back-edges");
     }
 
@@ -547,10 +530,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 0,
             "Recursive call should not create a back-edge"
@@ -573,10 +553,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 0, "Linear code should have no back-edges");
         assert_eq!(cfg.block_count(), 1, "Linear code should be one block");
     }
@@ -589,10 +566,7 @@ mod tests {
         "});
 
         assert_eq!(cfg.block_count(), 1);
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 0);
     }
 
@@ -611,10 +585,7 @@ mod tests {
 
         // The unreachable loop should NOT be detected as a back-edge
         // because dominator analysis only works on reachable code
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 0,
             "Unreachable loop should not be detected as back-edge"
@@ -634,10 +605,7 @@ mod tests {
         "});
 
         // The unreachable loop should NOT be detected
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 0,
             "Unreachable loop after unconditional branch should not be detected"
@@ -655,9 +623,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.has_back_edge(b));
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
         assert!(back_edge_block.is_some(), "Should detect cbnz back-edge");
         assert_eq!(
             cfg.back_edge_target_label(back_edge_block.unwrap()),
@@ -699,9 +665,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.has_back_edge(b));
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
         assert!(back_edge_block.is_some(), "Should detect tbnz back-edge");
     }
 
@@ -721,10 +685,7 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 1, "Should have exactly one back-edge");
 
         let back_edge_block = cfg
@@ -750,10 +711,7 @@ mod tests {
         "});
 
         // Should have 2 back-edges: one from b.ne and one from b.lt
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 2,
             "Should have two back-edges (continue and normal)"
@@ -798,10 +756,7 @@ mod tests {
         "});
 
         // No loops, just multiple exits
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.has_back_edge(b))
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(
             back_edge_count, 0,
             "Multiple exits should not create back-edges"

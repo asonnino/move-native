@@ -5,7 +5,6 @@
 use std::fmt;
 
 /// A parsed line from an assembly file
-#[derive(Debug, Clone)]
 pub struct ParsedLine {
     /// Label defined on this line (e.g., ".Lloop" from ".Lloop:")
     pub label: Option<String>,
@@ -20,7 +19,6 @@ pub struct ParsedLine {
 }
 
 /// An assembly instruction
-#[derive(Debug, Clone)]
 pub struct Instruction {
     /// The mnemonic (e.g., "mov", "b.lt", "ret")
     pub mnemonic: String,
@@ -134,7 +132,6 @@ impl Instruction {
 }
 
 /// An assembly directive
-#[derive(Debug, Clone)]
 pub struct Directive {
     /// The directive name without the leading dot (e.g., "global", "align")
     pub name: String,
