@@ -34,9 +34,9 @@ pub struct BlockData {
     /// E.g., for a block containing lines 3, 4, 5 this would be `3..6`
     pub line_indices: Range<usize>,
 
-    /// Target label of the back-edge, if this block ends with one.
-    /// E.g., `Some(".Lloop")` for a block ending with `b.lt .Lloop` that loops back
-    pub back_edge_target: Option<String>,
+    /// Target block of the back-edge, if this block ends with one.
+    /// Use `Cfg::back_edge_target_label()` to get the label string for assembly emission.
+    pub back_edge_target: Option<NodeIndex>,
 }
 
 /// Control flow graph backed by petgraph
@@ -79,10 +79,16 @@ impl Cfg {
         self.label_to_block.contains_key(label)
     }
 
-    /// Check if a branch from `from_block` to `target_label` is a back-edge
-    /// Uses cached back-edge information computed via dominator analysis
-    pub fn is_back_edge(&self, from_block: NodeIndex, target_label: &str) -> bool {
-        self.graph[from_block].back_edge_target.as_deref() == Some(target_label)
+    /// Check if a block has a back-edge
+    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
+        self.graph[block].back_edge_target.is_some()
+    }
+
+    /// Get the label of the back-edge target (for assembly emission)
+    pub fn back_edge_target_label(&self, block: NodeIndex) -> Option<&str> {
+        self.graph[block]
+            .back_edge_target
+            .and_then(|target| self.graph[target].label.as_deref())
     }
 
     /// Build a CFG from parsed assembly lines
@@ -199,7 +205,7 @@ impl Cfg {
         let dominators = dominators::simple_fast(&graph, entry);
 
         // Collect back-edge information
-        let mut back_edge_info: Vec<(NodeIndex, Option<String>)> = Vec::new();
+        let mut back_edge_info: Vec<(NodeIndex, NodeIndex)> = Vec::new();
         for &node in &nodes {
             for successor in graph.neighbors(node) {
                 // Check if successor dominates this block
@@ -209,20 +215,15 @@ impl Cfg {
                     .unwrap_or(false);
 
                 if successor_dominates_block {
-                    // Find the target label from the successor block.
-                    // Note: target_label may be None for malformed input. We don't panic
-                    // here because this processes untrusted input. The verifier will
-                    // reject any uninstrumented back-edges later.
-                    let target_label = graph[successor].label.clone();
-                    back_edge_info.push((node, target_label));
+                    back_edge_info.push((node, successor));
                     break; // Only need to mark one back-edge per block
                 }
             }
         }
 
         // Apply back-edge information
-        for (node, target_label) in back_edge_info {
-            graph[node].back_edge_target = target_label;
+        for (node, target) in back_edge_info {
+            graph[node].back_edge_target = Some(target);
         }
 
         Self {
@@ -293,13 +294,13 @@ mod tests {
 
         assert!(cfg.block_count() >= 2);
 
-        let back_edge_block = cfg
-            .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some());
+        let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b));
         assert!(back_edge_block.is_some());
 
-        let block = cfg.block(back_edge_block.unwrap());
-        assert_eq!(block.back_edge_target, Some(".Lloop".to_string()));
+        assert_eq!(
+            cfg.back_edge_target_label(back_edge_block.unwrap()),
+            Some(".Lloop")
+        );
     }
 
     #[test]
@@ -333,18 +334,15 @@ mod tests {
                 ret
         "});
 
-        let back_edge_count = cfg
-            .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
-            .count();
+        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 2, "Expected 2 back-edges for nested loops");
 
         let inner_be = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Linner".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Linner"));
         let outer_be = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Louter".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Louter"));
         assert!(inner_be.is_some(), "Should have back-edge to .Linner");
         assert!(outer_be.is_some(), "Should have back-edge to .Louter");
     }
@@ -365,7 +363,7 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 0,
@@ -383,14 +381,14 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some());
+            .find(|&b| cfg.has_back_edge(b));
         assert!(
             back_edge_block.is_some(),
             "Should detect self-loop back-edge"
         );
         assert_eq!(
-            cfg.block(back_edge_block.unwrap()).back_edge_target,
-            Some(".Lspin".to_string())
+            cfg.back_edge_target_label(back_edge_block.unwrap()),
+            Some(".Lspin")
         );
     }
 
@@ -407,14 +405,14 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some());
+            .find(|&b| cfg.has_back_edge(b));
         assert!(
             back_edge_block.is_some(),
             "Should detect do-while back-edge"
         );
         assert_eq!(
-            cfg.block(back_edge_block.unwrap()).back_edge_target,
-            Some(".Lbody".to_string())
+            cfg.back_edge_target_label(back_edge_block.unwrap()),
+            Some(".Lbody")
         );
     }
 
@@ -437,7 +435,7 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 2,
@@ -446,16 +444,16 @@ mod tests {
 
         let loop1_be = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop1".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop1"));
         let loop2_be = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop2".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop2"));
         assert!(loop1_be.is_some(), "Should have back-edge to .Lloop1");
         assert!(loop2_be.is_some(), "Should have back-edge to .Lloop2");
     }
 
     #[test]
-    fn test_is_back_edge_method() {
+    fn test_back_edge_target_label() {
         let (cfg, _) = build_cfg(indoc! {"
             _test:
                 mov x0, #0
@@ -467,11 +465,15 @@ mod tests {
 
         let back_edge_node = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some())
+            .find(|&b| cfg.has_back_edge(b))
             .unwrap();
 
-        assert!(cfg.is_back_edge(back_edge_node, ".Lloop"));
-        assert!(!cfg.is_back_edge(back_edge_node, ".Lnonexistent"));
+        // Verify the back-edge target label
+        assert_eq!(cfg.back_edge_target_label(back_edge_node), Some(".Lloop"));
+
+        // Verify we can get the target NodeIndex directly
+        let target_idx = cfg.block(back_edge_node).back_edge_target.unwrap();
+        assert_eq!(cfg.block(target_idx).label.as_deref(), Some(".Lloop"));
     }
 
     #[test]
@@ -525,7 +527,7 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(back_edge_count, 0, "Calls should not create back-edges");
     }
@@ -547,7 +549,7 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 0,
@@ -573,7 +575,7 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(back_edge_count, 0, "Linear code should have no back-edges");
         assert_eq!(cfg.block_count(), 1, "Linear code should be one block");
@@ -589,7 +591,7 @@ mod tests {
         assert_eq!(cfg.block_count(), 1);
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(back_edge_count, 0);
     }
@@ -611,7 +613,7 @@ mod tests {
         // because dominator analysis only works on reachable code
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 0,
@@ -634,7 +636,7 @@ mod tests {
         // The unreachable loop should NOT be detected
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 0,
@@ -655,11 +657,11 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some());
+            .find(|&b| cfg.has_back_edge(b));
         assert!(back_edge_block.is_some(), "Should detect cbnz back-edge");
         assert_eq!(
-            cfg.block(back_edge_block.unwrap()).back_edge_target,
-            Some(".Lloop".to_string())
+            cfg.back_edge_target_label(back_edge_block.unwrap()),
+            Some(".Lloop")
         );
     }
 
@@ -679,7 +681,7 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop"));
         assert!(
             back_edge_block.is_some(),
             "Should detect back-edge from unconditional b"
@@ -699,7 +701,7 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target.is_some());
+            .find(|&b| cfg.has_back_edge(b));
         assert!(back_edge_block.is_some(), "Should detect tbnz back-edge");
     }
 
@@ -721,13 +723,13 @@ mod tests {
 
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(back_edge_count, 1, "Should have exactly one back-edge");
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop"));
         assert!(back_edge_block.is_some());
     }
 
@@ -750,7 +752,7 @@ mod tests {
         // Should have 2 back-edges: one from b.ne and one from b.lt
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 2,
@@ -773,7 +775,7 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some(".Lloop".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some(".Lloop"));
         assert!(
             back_edge_block.is_some(),
             "Should detect back-edge in infinite loop"
@@ -798,7 +800,7 @@ mod tests {
         // No loops, just multiple exits
         let back_edge_count = cfg
             .blocks()
-            .filter(|&b| cfg.block(b).back_edge_target.is_some())
+            .filter(|&b| cfg.has_back_edge(b))
             .count();
         assert_eq!(
             back_edge_count, 0,
@@ -847,7 +849,7 @@ mod tests {
 
         let back_edge_block = cfg
             .blocks()
-            .find(|&b| cfg.block(b).back_edge_target == Some("_entry".to_string()));
+            .find(|&b| cfg.back_edge_target_label(b) == Some("_entry"));
         assert!(
             back_edge_block.is_some(),
             "Should detect back-edge to function entry"

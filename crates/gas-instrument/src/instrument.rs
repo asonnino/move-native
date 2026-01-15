@@ -86,8 +86,8 @@ pub fn instrument_with_config(
     let mut back_edge_lines: HashMap<usize, NodeIndex> = HashMap::new();
 
     for block_idx in cfg.blocks() {
-        let block = cfg.block(block_idx);
-        if block.back_edge_target.is_some() {
+        if cfg.has_back_edge(block_idx) {
+            let block = cfg.block(block_idx);
             // Find the line with the terminating branch
             if let Some(branch_line_idx) = block.line_indices.clone().rev().find(|&idx| {
                 lines[idx]
@@ -419,12 +419,11 @@ _nested:
         let mut outer_count = None;
 
         for block_idx in cfg.blocks() {
-            let block = cfg.block(block_idx);
-            if block.back_edge_target.is_some() {
+            if cfg.has_back_edge(block_idx) {
                 let count = cfg.count_instructions(block_idx, &lines);
-                if block.back_edge_target == Some(".Linner".to_string()) {
+                if cfg.back_edge_target_label(block_idx) == Some(".Linner") {
                     inner_count = Some(count);
-                } else if block.back_edge_target == Some(".Louter".to_string()) {
+                } else if cfg.back_edge_target_label(block_idx) == Some(".Louter") {
                     outer_count = Some(count);
                 }
             }
