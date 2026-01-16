@@ -8,12 +8,13 @@
 //!
 //! | Check | Description |
 //! |-------|-------------|
-//! | **Instruction whitelist** | ~180 base + SIMD instructions allowed; reject atomics, FP, syscalls, barriers |
+//! | **Instruction whitelist** | Base + SIMD + crypto allowed; reject atomics, FP, syscalls, barriers, PAC, MTE |
 //! | **Malformed encodings** | Reject UNPREDICTABLE (bad SBZ/SBO fields) and unallocated encodings |
 //! | **UNPREDICTABLE patterns** | Reject patterns like `ldr x0, [x0], #16` (writeback to same register) |
 //! | **Gas check at back-edges** | Verify `sub x23` / `tbz x23, #63` / `brk #0` sequence before each back-edge |
-//! | **x23 protection** | Gas register only modified by gas decrement sequences |
-//! | **No indirect branches** | Reject `br`, `blr`, `bra*`, `blra*` (Move has no dynamic dispatch) |
+//! | **x23 protection** | Gas counter only modified by gas decrement sequences |
+//! | **x24 protection** | Bundle address register only modified by `bic x24, xN, #0xf` |
+//! | **No indirect branches** | Reject `br`, `blr`, `ret`, `bra*`, `blra*` (Move has no dynamic dispatch) |
 //! | **No unreachable code** | All basic blocks must be reachable from entry point |
 //! | **Branch targets valid** | All branch targets must be valid instruction boundaries |
 //!
@@ -47,5 +48,7 @@
 //! must be reachable from the entry point.
 
 pub mod decode;
+pub mod whitelist;
 
 pub use decode::{decode_instructions, DecodeError, DecodedInstruction};
+pub use whitelist::{check as check_instruction, CheckResult, RejectionReason};
