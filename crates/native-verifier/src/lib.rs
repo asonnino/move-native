@@ -48,7 +48,6 @@
 //! must be reachable from the entry point.
 
 mod decode;
-mod whitelist;
 
+pub use arm64_classify::{CheckResult, RejectionReason};
 pub use decode::{decode_instructions, DecodeError, DecodedInstruction};
-pub use whitelist::{check as check_instruction, CheckResult, RejectionReason};

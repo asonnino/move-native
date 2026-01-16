@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "arm64-classify"
+version = "0.1.0"
+dependencies = [
+ "lazy_static",
+ "yaxpeax-arm",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,6 +84,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 name = "gas-instrument"
 version = "0.1.0"
 dependencies = [
+ "arm64-classify",
  "indoc",
  "petgraph",
 ]
@@ -127,6 +136,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -148,6 +163,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 name = "native-verifier"
 version = "0.1.0"
 dependencies = [
+ "arm64-classify",
  "gas-instrument",
  "object",
  "tempfile",

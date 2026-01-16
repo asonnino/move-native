@@ -7,6 +7,9 @@ repository.workspace = true
 description = "Verifies Arm64 binaries for deterministic execution and gas instrumentation"
 
 [dependencies]
+# Arm64 opcode classification (shared with gas-instrument)
+arm64-classify = { path = "../arm64-classify" }
+
 # Arm64 disassembly - stable Rust, well-maintained
 yaxpeax-arm = "0.4"
 yaxpeax-arch = "0.3"

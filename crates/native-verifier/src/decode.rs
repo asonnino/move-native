@@ -2,6 +2,7 @@
 //!
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
 
+use arm64_classify::{CheckResult, ClassifiedOpcode};
 use thiserror::Error;
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
@@ -46,49 +47,28 @@ impl DecodedInstruction {
         &self.instruction.operands
     }
 
+    /// Check if this instruction is allowed in deterministic code
+    pub fn check(&self) -> CheckResult {
+        ClassifiedOpcode::from_opcode(self.opcode()).check_result
+    }
+
     /// Check if this instruction is a branch (conditional or unconditional)
+    ///
+    /// Uses arm64_classify for consistent classification across crates.
     pub fn is_branch(&self) -> bool {
-        matches!(
-            self.opcode(),
-            // Direct branches
-            Opcode::B
-                | Opcode::BL
-                | Opcode::Bcc(_)
-                // Compare and branch
-                | Opcode::CBZ
-                | Opcode::CBNZ
-                // Test and branch
-                | Opcode::TBZ
-                | Opcode::TBNZ
-                // Indirect branches (base)
-                | Opcode::BR
-                | Opcode::BLR
-                | Opcode::RET
-                | Opcode::ERET
-                // Indirect branches with PAC (Armv8.3-A)
-                | Opcode::BRAA
-                | Opcode::BRAAZ
-                | Opcode::BRAB
-                | Opcode::BRABZ
-                | Opcode::BLRAA
-                | Opcode::BLRAAZ
-                | Opcode::BLRAB
-                | Opcode::BLRABZ
-                | Opcode::RETAA
-                | Opcode::RETAB
-                | Opcode::ERETAA
-                | Opcode::ERETAB
-        )
+        ClassifiedOpcode::from_opcode(self.opcode()).is_branch
     }
 
     /// Check if this is an unconditional direct branch (B or BL)
     pub fn is_unconditional_branch(&self) -> bool {
-        matches!(self.opcode(), Opcode::B | Opcode::BL)
+        let c = ClassifiedOpcode::from_opcode(self.opcode());
+        c.is_branch && !c.is_conditional && !c.is_indirect
     }
 
     /// Check if this is a conditional branch
     pub fn is_conditional_branch(&self) -> bool {
-        self.is_branch() && !self.is_unconditional_branch() && !self.is_indirect_branch()
+        let c = ClassifiedOpcode::from_opcode(self.opcode());
+        c.is_branch && c.is_conditional
     }
 
     /// Check if this is an indirect branch (BR, BLR, RET, ERET and PAC variants)
@@ -96,27 +76,8 @@ impl DecodedInstruction {
     /// These are forbidden in Move-compiled code since Move has no dynamic dispatch.
     /// Indirect branches could jump to uninstrumented code.
     pub fn is_indirect_branch(&self) -> bool {
-        matches!(
-            self.opcode(),
-            // Base indirect branches
-            Opcode::BR
-                | Opcode::BLR
-                | Opcode::RET
-                | Opcode::ERET
-                // PAC variants (Armv8.3-A) - also indirect
-                | Opcode::BRAA
-                | Opcode::BRAAZ
-                | Opcode::BRAB
-                | Opcode::BRABZ
-                | Opcode::BLRAA
-                | Opcode::BLRAAZ
-                | Opcode::BLRAB
-                | Opcode::BLRABZ
-                | Opcode::RETAA
-                | Opcode::RETAB
-                | Opcode::ERETAA
-                | Opcode::ERETAB
-        )
+        let c = ClassifiedOpcode::from_opcode(self.opcode());
+        c.is_branch && c.is_indirect
     }
 
     /// Get the branch target offset (for direct branches), relative to this instruction
