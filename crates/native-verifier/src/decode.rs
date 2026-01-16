@@ -50,17 +50,34 @@ impl DecodedInstruction {
     pub fn is_branch(&self) -> bool {
         matches!(
             self.opcode(),
+            // Direct branches
             Opcode::B
                 | Opcode::BL
+                | Opcode::Bcc(_)
+                // Compare and branch
+                | Opcode::CBZ
+                | Opcode::CBNZ
+                // Test and branch
+                | Opcode::TBZ
+                | Opcode::TBNZ
+                // Indirect branches (base)
                 | Opcode::BR
                 | Opcode::BLR
                 | Opcode::RET
                 | Opcode::ERET
-                | Opcode::CBNZ
-                | Opcode::CBZ
-                | Opcode::TBNZ
-                | Opcode::TBZ
-                | Opcode::Bcc(_)
+                // Indirect branches with PAC (Armv8.3-A)
+                | Opcode::BRAA
+                | Opcode::BRAAZ
+                | Opcode::BRAB
+                | Opcode::BRABZ
+                | Opcode::BLRAA
+                | Opcode::BLRAAZ
+                | Opcode::BLRAB
+                | Opcode::BLRABZ
+                | Opcode::RETAA
+                | Opcode::RETAB
+                | Opcode::ERETAA
+                | Opcode::ERETAB
         )
     }
 
@@ -74,11 +91,31 @@ impl DecodedInstruction {
         self.is_branch() && !self.is_unconditional_branch() && !self.is_indirect_branch()
     }
 
-    /// Check if this is an indirect branch (BR, BLR, RET, ERET)
+    /// Check if this is an indirect branch (BR, BLR, RET, ERET and PAC variants)
+    ///
+    /// These are forbidden in Move-compiled code since Move has no dynamic dispatch.
+    /// Indirect branches could jump to uninstrumented code.
     pub fn is_indirect_branch(&self) -> bool {
         matches!(
             self.opcode(),
-            Opcode::BR | Opcode::BLR | Opcode::RET | Opcode::ERET
+            // Base indirect branches
+            Opcode::BR
+                | Opcode::BLR
+                | Opcode::RET
+                | Opcode::ERET
+                // PAC variants (Armv8.3-A) - also indirect
+                | Opcode::BRAA
+                | Opcode::BRAAZ
+                | Opcode::BRAB
+                | Opcode::BRABZ
+                | Opcode::BLRAA
+                | Opcode::BLRAAZ
+                | Opcode::BLRAB
+                | Opcode::BLRABZ
+                | Opcode::RETAA
+                | Opcode::RETAB
+                | Opcode::ERETAA
+                | Opcode::ERETAB
         )
     }
 
@@ -400,5 +437,31 @@ mod tests {
         assert_eq!(instructions.len(), 1);
         assert!(!instructions[0].is_gas_decrement());
         assert!(!instructions[0].writes_to_x23());
+    }
+
+    #[test]
+    fn test_detect_pac_indirect_branch_braaz() {
+        // braaz x0 -> 0xd61f081f (Armv8.3-A PAC branch)
+        // Malicious: PAC-authenticated indirect branch
+        let code = [0x1f, 0x08, 0x1f, 0xd6];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].opcode(), Opcode::BRAAZ);
+        assert!(instructions[0].is_indirect_branch());
+        assert!(instructions[0].is_branch());
+    }
+
+    #[test]
+    fn test_detect_pac_indirect_branch_retaa() {
+        // retaa -> 0xd65f0bff (Armv8.3-A PAC return)
+        // Malicious: PAC-authenticated return
+        let code = [0xff, 0x0b, 0x5f, 0xd6];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].opcode(), Opcode::RETAA);
+        assert!(instructions[0].is_indirect_branch());
+        assert!(instructions[0].is_branch());
     }
 }
