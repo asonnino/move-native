@@ -47,8 +47,8 @@
 //! uninstrumented dead code containing an infinite loop. All basic blocks
 //! must be reachable from the entry point.
 
-pub mod decode;
-pub mod whitelist;
+mod decode;
+mod whitelist;
 
 pub use decode::{decode_instructions, DecodeError, DecodedInstruction};
 pub use whitelist::{check as check_instruction, CheckResult, RejectionReason};
