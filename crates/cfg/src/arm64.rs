@@ -1121,6 +1121,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_mnemonics() {
         use std::collections::HashSet;
+
         use super::OPCODE_TABLE;
 
         let mut seen = HashSet::new();

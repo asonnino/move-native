@@ -18,7 +18,9 @@ pub enum VerificationError {
     #[error("invalid x23 modification at {offset:#x}: {mnemonic} (only gas decrements allowed)")]
     InvalidGasModification { offset: usize, mnemonic: String },
 
-    #[error("missing gas check before back-edge at {back_edge_offset:#x} (target: {target_offset:#x})")]
+    #[error(
+        "missing gas check before back-edge at {back_edge_offset:#x} (target: {target_offset:#x})"
+    )]
     MissingGasCheck {
         back_edge_offset: usize,
         target_offset: usize,

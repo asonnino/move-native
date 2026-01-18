@@ -1,8 +1,14 @@
 //! CFG data structures
 
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::{
+    graph::{DiGraph, NodeIndex},
+    visit::Bfs,
+};
 
 /// Data stored in each basic block node
 #[derive(Debug)]
@@ -46,7 +52,7 @@ impl Cfg {
     }
 
     /// Iterate over all block indices
-    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> + '_ {
+    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> {
         self.graph.node_indices()
     }
 
@@ -78,5 +84,38 @@ impl Cfg {
     /// Get the number of actual instructions in a block
     pub fn instruction_count(&self, block: NodeIndex) -> usize {
         self.graph[block].instruction_count
+    }
+
+    /// Get the instruction range for a block
+    pub fn instruction_range(&self, block: NodeIndex) -> &Range<usize> {
+        &self.graph[block].instruction_range
+    }
+
+    /// Get all blocks reachable from the entry point (first block)
+    pub fn reachable_blocks(&self) -> HashSet<NodeIndex> {
+        let mut reachable = HashSet::new();
+
+        if self.graph.node_count() == 0 {
+            return reachable;
+        }
+
+        // Entry point is the first block (node index 0)
+        let entry = NodeIndex::new(0);
+        let mut bfs = Bfs::new(&self.graph, entry);
+
+        while let Some(node) = bfs.next(&self.graph) {
+            reachable.insert(node);
+        }
+
+        reachable
+    }
+
+    /// Get all unreachable blocks (blocks not reachable from entry)
+    pub fn unreachable_blocks(&self) -> Vec<NodeIndex> {
+        let reachable = self.reachable_blocks();
+        self.graph
+            .node_indices()
+            .filter(|node| !reachable.contains(node))
+            .collect()
     }
 }

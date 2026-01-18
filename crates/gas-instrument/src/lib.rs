@@ -14,7 +14,11 @@ pub mod parser;
 pub use cfg::NodeIndex;
 pub use instrument::{instrument, InstrumentError};
 pub use parser::{
-    ParsedAssembly, ParsedLine, ResolveError, ResolvedInstruction, Statement,
+    ParsedAssembly,
+    ParsedLine,
+    ResolveError,
+    ResolvedInstruction,
+    Statement,
     UnresolvedInstruction,
 };
 

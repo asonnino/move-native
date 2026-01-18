@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use cfg::{BasicInstruction, CfgInstruction, CheckResult};
+use cfg::{build_cfg, BasicInstruction, CfgInstruction, CheckResult};
 
 use crate::{
     error::{VerificationError, VerificationResult},
@@ -42,10 +42,16 @@ impl<'a> Verifier<'a> {
             self.check_instruction(&mut result, index, instruction);
         }
 
-        // TODO: Implement reachability check
-        // This requires building a CFG and verifying all basic blocks are reachable
-        // from the entry point. The `cfg` crate has CFG building logic that could
-        // be adapted for binary (offset-based) instructions.
+        // Check for unreachable code
+        let cfg = build_cfg(self.instructions);
+        for block in cfg.unreachable_blocks() {
+            let range = cfg.instruction_range(block);
+            for index in range.clone() {
+                result.extend([VerificationError::UnreachableCode {
+                    offset: self.instructions[index].offset,
+                }]);
+            }
+        }
 
         result
     }
@@ -278,5 +284,44 @@ mod tests {
             .errors()
             .iter()
             .any(|e| matches!(e, VerificationError::MissingGasCheck { .. })));
+    }
+
+    #[test]
+    fn test_detect_unreachable_code() {
+        // b #8; nop; nop (second nop is unreachable)
+        let code = [
+            0x02, 0x00, 0x00, 0x14, // b #8 (skip to third instruction)
+            0x1f, 0x20, 0x03, 0xd5, // nop (unreachable)
+            0x1f, 0x20, 0x03, 0xd5, // nop (reachable via jump)
+        ];
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(!result.is_ok());
+        let unreachable_errors: Vec<_> = result
+            .errors()
+            .iter()
+            .filter(|e| matches!(e, VerificationError::UnreachableCode { .. }))
+            .collect();
+        assert!(!unreachable_errors.is_empty(), "should detect unreachable code");
+        // The unreachable instruction is at offset 4
+        assert!(result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::UnreachableCode { offset: 4 })));
+    }
+
+    #[test]
+    fn test_all_code_reachable_no_error() {
+        // Simple sequential code: all reachable
+        let code = [
+            0x1f, 0x20, 0x03, 0xd5, // nop
+            0x1f, 0x20, 0x03, 0xd5, // nop
+        ];
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(!result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::UnreachableCode { .. })));
     }
 }

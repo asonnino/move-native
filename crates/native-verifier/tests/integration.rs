@@ -51,9 +51,7 @@ fn instrument_and_assemble(source: &str) -> Vec<u8> {
     assemble(&instrumented)
 }
 
-// =============================================================================
 // Raw code verification (should FAIL - missing gas checks)
-// =============================================================================
 
 #[test]
 fn test_raw_test_loop_fails_verification() {
@@ -102,9 +100,7 @@ fn test_raw_nested_loops_fails_verification() {
     );
 }
 
-// =============================================================================
 // Instrumented code verification (should PASS - but fails on ret for now)
-// =============================================================================
 
 #[test]
 fn test_instrumented_test_loop_gas_checks_present() {
@@ -145,9 +141,7 @@ fn test_instrumented_nested_loops_gas_checks_present() {
     );
 }
 
-// =============================================================================
 // Decoding tests
-// =============================================================================
 
 #[test]
 fn test_decode_raw_test_loop() {
@@ -173,10 +167,7 @@ fn test_decode_instrumented_nested_loops() {
     let instructions = decode_instructions(&code).expect("decode failed");
 
     // Should have 2 gas check sequences (one per back-edge)
-    let gas_decrements = instructions
-        .iter()
-        .filter(|i| i.is_gas_decrement())
-        .count();
+    let gas_decrements = instructions.iter().filter(|i| i.is_gas_decrement()).count();
 
     assert_eq!(gas_decrements, 2, "expected two gas decrements");
 }
