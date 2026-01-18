@@ -12,7 +12,7 @@
 
 use std::process::Command;
 
-use cfg::CfgInstruction;
+use cfg::{BasicInstruction, CfgInstruction};
 use gas_instrument::{instrument, parser};
 use native_verifier::decode_instructions;
 use object::{Object, ObjectSection};

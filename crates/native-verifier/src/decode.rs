@@ -54,48 +54,6 @@ impl DecodedInstruction {
         ClassifiedOpcode::from_opcode(self.opcode()).check_result
     }
 
-    /// Check if this instruction is a branch (conditional or unconditional)
-    ///
-    /// Uses cfg for consistent classification across crates.
-    pub fn is_branch(&self) -> bool {
-        ClassifiedOpcode::from_opcode(self.opcode()).is_branch
-    }
-
-    /// Check if this is an unconditional direct branch (B or BL)
-    pub fn is_unconditional_branch(&self) -> bool {
-        let c = ClassifiedOpcode::from_opcode(self.opcode());
-        c.is_branch && !c.is_conditional && !c.is_indirect
-    }
-
-    /// Check if this is a conditional branch
-    pub fn is_conditional_branch(&self) -> bool {
-        let c = ClassifiedOpcode::from_opcode(self.opcode());
-        c.is_branch && c.is_conditional
-    }
-
-    /// Check if this is an indirect branch (BR, BLR, RET, ERET and PAC variants)
-    ///
-    /// These are forbidden in Move-compiled code since Move has no dynamic dispatch.
-    /// Indirect branches could jump to uninstrumented code.
-    pub fn is_indirect_branch(&self) -> bool {
-        let c = ClassifiedOpcode::from_opcode(self.opcode());
-        c.is_branch && c.is_indirect
-    }
-
-    /// Get the branch target offset (for direct branches), relative to this instruction
-    pub fn branch_target_offset(&self) -> Option<i64> {
-        if self.is_indirect_branch() {
-            return None;
-        }
-
-        for op in self.operands() {
-            if let Operand::PCOffset(offset) = op {
-                return Some(*offset);
-            }
-        }
-        None
-    }
-
     /// Check if this instruction writes to register x23 (gas register)
     pub fn writes_to_x23(&self) -> bool {
         // First operand is typically the destination for most instructions
@@ -168,15 +126,21 @@ impl BasicInstruction for DecodedInstruction {
 }
 
 /// Implementation of CfgInstruction for generic CFG building.
-///
-/// For binary instructions:
-/// - Target is byte offset (for both positions and branch targets)
 impl CfgInstruction for DecodedInstruction {
     fn branch_target(&self) -> Option<usize> {
-        self.branch_target_offset().and_then(|offset| {
-            let target = self.offset as i64 + offset;
-            usize::try_from(target).ok()
-        })
+        // Indirect branches (BR, BLR, RET, etc.) have register targets
+        if self.is_branch() && self.is_indirect() {
+            return None;
+        }
+
+        // Look for PC-relative offset in operands
+        for op in self.operands() {
+            if let Operand::PCOffset(offset) = op {
+                let target = self.offset as i64 + offset;
+                return usize::try_from(target).ok();
+            }
+        }
+        None
     }
 
     fn as_target(&self) -> usize {
@@ -223,7 +187,7 @@ pub fn decode_instructions(code: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
 
 #[cfg(test)]
 mod tests {
-    use cfg::CfgInstruction;
+    use cfg::{BasicInstruction, CfgInstruction};
     use yaxpeax_arm::armv8::a64::Opcode;
 
     use crate::DecodeError;
@@ -246,10 +210,11 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert!(instructions[0].is_branch());
-        assert!(instructions[0].is_unconditional_branch());
-        assert!(!instructions[0].is_indirect_branch());
-        assert_eq!(instructions[0].branch_target(), Some(16));
+        let instr = &instructions[0];
+        assert!(instr.is_branch());
+        assert!(!instr.is_conditional()); // unconditional
+        assert!(!instr.is_indirect()); // direct branch
+        assert_eq!(instr.branch_target(), Some(16));
     }
 
     #[test]
@@ -259,8 +224,9 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert!(instructions[0].is_branch());
-        assert!(instructions[0].is_conditional_branch());
+        let instr = &instructions[0];
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional());
     }
 
     #[test]
@@ -270,9 +236,10 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].opcode(), Opcode::RET);
-        assert!(instructions[0].is_branch());
-        assert!(instructions[0].is_indirect_branch());
+        let instr = &instructions[0];
+        assert_eq!(instr.opcode(), Opcode::RET);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect()); // RET is register-indirect
     }
 
     #[test]
@@ -365,9 +332,10 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].opcode(), Opcode::BR);
-        assert!(instructions[0].is_indirect_branch());
-        assert!(instructions[0].is_branch());
+        let instr = &instructions[0];
+        assert_eq!(instr.opcode(), Opcode::BR);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
     }
 
     #[test]
@@ -378,9 +346,10 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].opcode(), Opcode::BLR);
-        assert!(instructions[0].is_indirect_branch());
-        assert!(instructions[0].is_branch());
+        let instr = &instructions[0];
+        assert_eq!(instr.opcode(), Opcode::BLR);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
     }
 
     #[test]
@@ -391,9 +360,10 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert!(instructions[0].is_gas_check_branch());
-        assert!(instructions[0].is_branch());
-        assert!(!instructions[0].is_indirect_branch());
+        let instr = &instructions[0];
+        assert!(instr.is_gas_check_branch());
+        assert!(instr.is_branch());
+        assert!(!instr.is_indirect()); // TBZ is a direct branch
     }
 
     #[test]
@@ -429,9 +399,10 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].opcode(), Opcode::BRAAZ);
-        assert!(instructions[0].is_indirect_branch());
-        assert!(instructions[0].is_branch());
+        let instr = &instructions[0];
+        assert_eq!(instr.opcode(), Opcode::BRAAZ);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
     }
 
     #[test]
@@ -442,8 +413,9 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].opcode(), Opcode::RETAA);
-        assert!(instructions[0].is_indirect_branch());
-        assert!(instructions[0].is_branch());
+        let instr = &instructions[0];
+        assert_eq!(instr.opcode(), Opcode::RETAA);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
     }
 }
