@@ -2,7 +2,7 @@
 //!
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
 
-use cfg::{CheckResult, ClassifiedOpcode, InstructionInfo};
+use cfg::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
 use thiserror::Error;
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
@@ -168,15 +168,18 @@ impl DecodedInstruction {
     }
 }
 
-/// Implementation of InstructionInfo for generic CFG building.
-///
-/// For binary instructions:
-/// - Target is byte offset (for both positions and branch targets)
-impl InstructionInfo for DecodedInstruction {
+/// Implementation of BasicInstruction for mnemonic-based classification.
+impl BasicInstruction for DecodedInstruction {
     fn mnemonic(&self) -> &str {
         &self.mnemonic
     }
+}
 
+/// Implementation of CfgInstruction for generic CFG building.
+///
+/// For binary instructions:
+/// - Target is byte offset (for both positions and branch targets)
+impl CfgInstruction for DecodedInstruction {
     fn branch_target(&self) -> Option<usize> {
         self.branch_target_offset().map(|offset| {
             let target = self.offset as i64 + offset;

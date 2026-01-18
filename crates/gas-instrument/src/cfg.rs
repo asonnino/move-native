@@ -2,7 +2,7 @@
 //!
 //! Re-exports from the `cfg` crate with text-assembly-specific helpers.
 
-use crate::parser::{ParsedAssembly, ResolvedInstruction, ResolveError};
+use crate::parser::{ParsedAssembly, ResolveError, ResolvedInstruction};
 
 /// Result of building a CFG from parsed assembly
 pub struct CfgResult {
@@ -56,7 +56,11 @@ mod tests {
         let asm = ParsedAssembly::parse(input);
         let result = build(&asm).unwrap();
 
-        let back_edge_count = result.cfg.blocks().filter(|&b| result.cfg.has_back_edge(b)).count();
+        let back_edge_count = result
+            .cfg
+            .blocks()
+            .filter(|&b| result.cfg.has_back_edge(b))
+            .count();
         assert_eq!(back_edge_count, 1, "Should have exactly one back-edge");
     }
 
@@ -78,7 +82,11 @@ mod tests {
         let asm = ParsedAssembly::parse(input);
         let result = build(&asm).unwrap();
 
-        let back_edge_count = result.cfg.blocks().filter(|&b| result.cfg.has_back_edge(b)).count();
+        let back_edge_count = result
+            .cfg
+            .blocks()
+            .filter(|&b| result.cfg.has_back_edge(b))
+            .count();
         assert_eq!(back_edge_count, 2, "Should have two back-edges");
     }
 

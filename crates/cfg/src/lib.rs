@@ -7,16 +7,20 @@
 //!
 //! # Architecture
 //!
-//! The CFG builder is generic over instruction types via the [`InstructionInfo`] trait.
-//! Both text assembly (gas-instrument) and binary (native-verifier) implement this trait:
+//! The crate provides two levels of abstraction via traits:
 //!
-//! - Text assembly: `ResolvedInstruction` (instruction indices after label resolution)
-//! - Binary: `DecodedInstruction` (byte offsets)
+//! - [`BasicInstruction`]: Minimal interface for mnemonic-based classification.
+//!   Can be implemented by both resolved and unresolved instructions.
+//!
+//! - [`CfgInstruction`]: Full interface for CFG construction, extending
+//!   `BasicInstruction` with target information. Implemented by:
+//!   - Text assembly: `ResolvedInstruction` (instruction indices after label resolution)
+//!   - Binary: `DecodedInstruction` (byte offsets)
 //!
 //! # Modules
 //!
 //! - [`arm64`]: Opcode classification and whitelist checking
-//! - [`traits`]: `InstructionInfo` trait for CFG construction
+//! - [`traits`]: `BasicInstruction` and `CfgInstruction` traits
 //! - [`graph`]: CFG data structures (`Cfg`, `BlockData`)
 //! - [`builder`]: Generic CFG builder
 
@@ -25,11 +29,8 @@ pub mod builder;
 pub mod graph;
 pub mod traits;
 
-// Re-export commonly used types
 pub use arm64::{CheckResult, ClassifiedOpcode, RejectionReason, BY_MNEMONIC};
 pub use builder::build_cfg;
 pub use graph::{BlockData, Cfg};
-pub use traits::InstructionInfo;
-
-// Re-export petgraph's NodeIndex for convenience
 pub use petgraph::graph::NodeIndex;
+pub use traits::{BasicInstruction, CfgInstruction, InstructionInfo};

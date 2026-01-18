@@ -1,34 +1,34 @@
 //! Generic CFG builder
 //!
 //! Builds a control flow graph from a sequence of instructions implementing
-//! the [`InstructionInfo`] trait.
+//! the [`CfgInstruction`] trait.
 
 use std::collections::{HashMap, HashSet};
 
-use petgraph::{algo::dominators, graph::DiGraph};
+use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::{
     graph::{BlockData, Cfg},
-    InstructionInfo,
+    CfgInstruction,
 };
 
 /// Build a CFG from a sequence of instructions.
 ///
-/// The instructions must implement [`InstructionInfo`] to provide the
+/// The instructions must implement [`CfgInstruction`] to provide the
 /// control flow information needed for CFG construction.
-pub fn build_cfg<I: InstructionInfo>(instructions: &[I]) -> Cfg {
+pub fn build_cfg<I: CfgInstruction>(instructions: &[I]) -> Cfg {
     CfgBuilder::new(instructions).build()
 }
 
 /// Builder for constructing a CFG from instructions
-struct CfgBuilder<'a, I: InstructionInfo> {
+struct CfgBuilder<'a, I: CfgInstruction> {
     instructions: &'a [I],
     graph: DiGraph<BlockData, ()>,
-    target_to_block: HashMap<usize, petgraph::graph::NodeIndex>,
-    nodes: Vec<petgraph::graph::NodeIndex>,
+    target_to_block: HashMap<usize, NodeIndex>,
+    nodes: Vec<NodeIndex>,
 }
 
-impl<'a, I: InstructionInfo> CfgBuilder<'a, I> {
+impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
     fn new(instructions: &'a [I]) -> Self {
         Self {
             instructions,
@@ -52,7 +52,7 @@ impl<'a, I: InstructionInfo> CfgBuilder<'a, I> {
     /// A new block starts at:
     /// - The beginning of the code
     /// - Any branch target
-    /// - The instruction after a branch
+    /// - The instruction after a branch or return
     fn find_block_boundaries(&self) -> Vec<usize> {
         // Collect all branch targets first
         let branch_targets: HashSet<usize> = self
@@ -158,24 +158,21 @@ impl<'a, I: InstructionInfo> CfgBuilder<'a, I> {
         }
 
         let entry = self.nodes[0];
-        let dominators = dominators::simple_fast(&self.graph, entry);
+        let dominators = petgraph::algo::dominators::simple_fast(&self.graph, entry);
 
         let back_edges: Vec<_> = self
             .nodes
             .iter()
             .filter_map(|&node| {
-                self.graph
-                    .neighbors(node)
-                    .find(|&successor| {
-                        dominators
-                            .dominators(node)
-                            .is_some_and(|mut iter| iter.any(|d| d == successor))
-                    })
-                    .map(|target| (node, target))
+                self.graph.neighbors(node).find(|&successor| {
+                    dominators
+                        .dominators(node)
+                        .is_some_and(|mut iter| iter.any(|d| d == successor))
+                })
             })
             .collect();
 
-        for (node, _target_node) in back_edges {
+        for node in back_edges {
             debug_assert!(
                 self.graph[node].instruction_count > 0,
                 "back-edge should have instructions"

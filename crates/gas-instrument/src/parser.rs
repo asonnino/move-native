@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use cfg::InstructionInfo;
+use cfg::{BasicInstruction, CfgInstruction};
 
 /// Error during label resolution
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,11 +46,13 @@ pub struct ResolvedInstruction {
     pub line_number: usize,
 }
 
-impl InstructionInfo for ResolvedInstruction {
+impl BasicInstruction for ResolvedInstruction {
     fn mnemonic(&self) -> &str {
         &self.mnemonic
     }
+}
 
+impl CfgInstruction for ResolvedInstruction {
     fn branch_target(&self) -> Option<usize> {
         self.branch_target
     }
@@ -143,49 +145,17 @@ impl<'a> UnresolvedInstruction<'a> {
     }
 }
 
-impl UnresolvedInstruction<'_> {
-    fn mnemonic_eq(&self, s: &str) -> bool {
-        self.mnemonic.eq_ignore_ascii_case(s)
-    }
-
-    fn mnemonic_starts_with(&self, prefix: &str) -> bool {
-        // Use get() to avoid panicking on multi-byte UTF-8 boundaries
+impl BasicInstruction for UnresolvedInstruction<'_> {
+    fn mnemonic(&self) -> &str {
         self.mnemonic
-            .get(..prefix.len())
-            .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
     }
+}
 
-    fn is_branch(&self) -> bool {
-        // Unconditional direct branches
-        self.mnemonic_eq("b")
-            || self.mnemonic_eq("bl")
-            // Indirect branches (branch to register)
-            || self.mnemonic_eq("br")
-            || self.mnemonic_eq("blr")
-            // Pointer authentication branch variants (ARMv8.3+)
-            || self.mnemonic_starts_with("bra")
-            || self.mnemonic_starts_with("blra")
-            // Conditional branches (b.eq, b.ne, b.lt, etc.)
-            || self.mnemonic_starts_with("b.")
-            // Compare and branch
-            || self.mnemonic_eq("cbz")
-            || self.mnemonic_eq("cbnz")
-            // Test and branch
-            || self.mnemonic_eq("tbz")
-            || self.mnemonic_eq("tbnz")
-    }
-
-    fn is_indirect_branch(&self) -> bool {
-        self.mnemonic_eq("br")
-            || self.mnemonic_eq("blr")
-            || self.mnemonic_starts_with("bra")
-            || self.mnemonic_starts_with("blra")
-    }
-
+impl UnresolvedInstruction<'_> {
     /// Get the branch target label if this is a direct branch.
     /// Returns None for indirect branches (br, blr) since target is a register.
     fn get_branch_target(&self) -> Option<&str> {
-        if !self.is_branch() || self.is_indirect_branch() {
+        if !self.is_branch() || self.is_indirect() {
             return None;
         }
         self.operands.last().copied()
@@ -259,14 +229,12 @@ impl<'a> ParsedAssembly<'a> {
         // Second pass: resolve branch targets in place
         for (instruction, label) in instructions.iter_mut().zip(branch_labels.iter()) {
             if let Some(label) = label {
-                let target =
-                    label_to_index
-                        .get(label)
-                        .copied()
-                        .ok_or_else(|| ResolveError::UndefinedLabel {
-                            label: label.to_string(),
-                            line: instruction.line_number,
-                        })?;
+                let target = label_to_index.get(label).copied().ok_or_else(|| {
+                    ResolveError::UndefinedLabel {
+                        label: label.to_string(),
+                        line: instruction.line_number,
+                    }
+                })?;
                 instruction.branch_target = Some(target);
             }
         }
