@@ -96,11 +96,13 @@ impl DecodedInstruction {
         None
     }
 
-    /// Get the absolute branch target address (for direct branches)
+    /// Get the absolute branch target address (for direct branches).
+    ///
+    /// Returns `None` if not a direct branch or if the target would be negative.
     pub fn branch_target(&self) -> Option<usize> {
-        self.branch_target_offset().map(|offset| {
+        self.branch_target_offset().and_then(|offset| {
             let target = self.offset as i64 + offset;
-            target as usize
+            usize::try_from(target).ok()
         })
     }
 
@@ -181,9 +183,9 @@ impl BasicInstruction for DecodedInstruction {
 /// - Target is byte offset (for both positions and branch targets)
 impl CfgInstruction for DecodedInstruction {
     fn branch_target(&self) -> Option<usize> {
-        self.branch_target_offset().map(|offset| {
+        self.branch_target_offset().and_then(|offset| {
             let target = self.offset as i64 + offset;
-            target as usize
+            usize::try_from(target).ok()
         })
     }
 

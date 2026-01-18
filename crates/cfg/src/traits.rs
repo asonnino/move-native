@@ -32,31 +32,31 @@ pub trait BasicInstruction {
     /// Check if this is a branch instruction.
     #[inline]
     fn is_branch(&self) -> bool {
-        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_some_and(|c| c.is_branch)
+        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_branch
     }
 
     /// Check if this is an indirect (register-target) branch.
     #[inline]
     fn is_indirect(&self) -> bool {
-        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_some_and(|c| c.is_indirect)
+        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_indirect
     }
 
     /// Check if this is a call instruction (BL, BLR, etc.).
     #[inline]
     fn is_call(&self) -> bool {
-        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_some_and(|c| c.is_call)
+        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_call
     }
 
     /// Check if this is a return instruction (RET, RETAA, etc.).
     #[inline]
     fn is_return(&self) -> bool {
-        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_some_and(|c| c.is_return)
+        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_return
     }
 
     /// Check if this is a conditional branch.
     #[inline]
     fn is_conditional(&self) -> bool {
-        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_some_and(|c| c.is_conditional)
+        ClassifiedOpcode::from_mnemonic(self.mnemonic()).is_conditional
     }
 }
 

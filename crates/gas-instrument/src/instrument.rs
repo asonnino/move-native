@@ -72,6 +72,7 @@ impl<'a> Instrumenter<'a> {
             .iter()
             .filter_map(|line| line.label.map(|s| s.to_string()))
             .collect();
+
         Self {
             lines,
             cfg: &cfg_result.cfg,

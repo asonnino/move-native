@@ -177,9 +177,9 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
             .collect();
 
         for node in back_edge_sources {
-            debug_assert!(
+            assert!(
                 self.graph[node].instruction_count > 0,
-                "back-edge should have instructions"
+                "back-edge source block has no instructions"
             );
             // Get branch target directly from the terminator instruction
             if let Some(term_idx) = self.graph[node].terminator_index {

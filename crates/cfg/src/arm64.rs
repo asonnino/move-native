@@ -193,13 +193,14 @@ impl ClassifiedOpcode {
             .unwrap_or(&Self::UNKNOWN)
     }
 
-    /// Classify by mnemonic string (for gas-instrument)
+    /// Classify by mnemonic string (for gas-instrument).
     ///
-    /// Returns None for unknown mnemonics.
-    pub fn from_mnemonic(mnemonic: &str) -> Option<&'static Self> {
+    /// Returns `UNKNOWN` for mnemonics not in the opcode table.
+    pub fn from_mnemonic(mnemonic: &str) -> &'static Self {
         BY_MNEMONIC
             .get(mnemonic.to_ascii_lowercase().as_str())
             .copied()
+            .unwrap_or(&Self::UNKNOWN)
     }
 }
 
@@ -1084,16 +1085,14 @@ mod tests {
 
     #[test]
     fn test_from_mnemonic() {
-        let c = ClassifiedOpcode::from_mnemonic("add").unwrap();
+        let c = ClassifiedOpcode::from_mnemonic("add");
         assert_eq!(c.mnemonic, "add");
         assert_eq!(c.check_result, CheckResult::Allowed);
 
-        let c = ClassifiedOpcode::from_mnemonic("b.eq").unwrap();
+        let c = ClassifiedOpcode::from_mnemonic("b.eq");
         assert_eq!(c.mnemonic, "b.eq");
         assert!(c.is_branch);
         assert!(c.is_conditional);
-
-        assert!(ClassifiedOpcode::from_mnemonic("nonexistent").is_none());
     }
 
     #[test]
@@ -1110,8 +1109,27 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_mnemonic_returns_none() {
-        assert!(ClassifiedOpcode::from_mnemonic("notarealinstruction").is_none());
-        assert!(ClassifiedOpcode::from_mnemonic("xyz").is_none());
+    fn test_unknown_mnemonic_returns_unknown() {
+        let c = ClassifiedOpcode::from_mnemonic("notarealinstruction");
+        assert_eq!(c.mnemonic, "unknown");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::Unknown)
+        );
+    }
+
+    #[test]
+    fn test_no_duplicate_mnemonics() {
+        use std::collections::HashSet;
+        use super::OPCODE_TABLE;
+
+        let mut seen = HashSet::new();
+        for entry in OPCODE_TABLE {
+            assert!(
+                seen.insert(entry.mnemonic),
+                "duplicate mnemonic in OPCODE_TABLE: {}",
+                entry.mnemonic
+            );
+        }
     }
 }

@@ -1,18 +1,33 @@
-//! Arm64 assembly text parser
+//! Arm64 assembly text parser.
 //!
 //! Parses GNU-style assembly syntax as produced by LLVM/GCC.
+//!
+//! # Two-Phase Parsing
+//!
+//! Parsing happens in two phases:
+//!
+//! 1. **Text parsing** ([`ParsedAssembly::parse`]): Splits input into lines,
+//!    identifies labels, directives, and instructions. No validation is done.
+//!
+//! 2. **Label resolution** ([`ParsedAssembly::resolve`]): Filters to actual
+//!    instructions and resolves branch target labels to instruction indices.
 
 use std::collections::HashMap;
 
 use cfg::{BasicInstruction, CfgInstruction};
 
-/// Error during label resolution
+/// Error during label resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
-    /// Labels at end of file with no following instruction
+    /// Labels at end of file with no following instruction.
     TrailingLabels(Vec<String>),
-    /// Branch references an undefined label
-    UndefinedLabel { label: String, line: usize },
+    /// Branch references an undefined label.
+    UndefinedLabel {
+        /// The undefined label name.
+        label: String,
+        /// Line number where the reference occurs.
+        line: usize,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -22,7 +37,7 @@ impl std::fmt::Display for ResolveError {
                 write!(f, "trailing labels with no instruction: {labels:?}")
             }
             ResolveError::UndefinedLabel { label, line } => {
-                write!(f, "undefined label '{label}' referenced at line {line}",)
+                write!(f, "undefined label '{label}' referenced at line {line}")
             }
         }
     }
@@ -30,19 +45,19 @@ impl std::fmt::Display for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
-/// A resolved instruction with all labels resolved to instruction indices.
+/// A resolved instruction with branch targets as instruction indices.
 ///
-/// This is the output of the resolution pass. Every item represents an actual
-/// CPU instruction (no label-only lines or directives).
+/// This is the output of [`ParsedAssembly::resolve`]. Each instance represents
+/// an actual CPU instruction (no label-only lines or directives).
 #[derive(Debug, Clone)]
 pub struct ResolvedInstruction {
-    /// Index in the instruction stream (0-based)
+    /// Index in the resolved instruction stream (0-based).
     pub index: usize,
-    /// The mnemonic (always present)
+    /// The instruction mnemonic (e.g., "mov", "b.lt", "ret").
     pub mnemonic: String,
-    /// Branch target as instruction index (if this is a branch)
+    /// Branch target as instruction index, if this is a direct branch.
     pub branch_target: Option<usize>,
-    /// Original line number (1-indexed, for error messages and output mapping)
+    /// Original source line number (1-indexed).
     pub line_number: usize,
 }
 
@@ -62,54 +77,44 @@ impl CfgInstruction for ResolvedInstruction {
     }
 }
 
-/// A parsed line from an assembly file
-pub struct ParsedLine<'a> {
-    /// Label defined on this line (e.g., ".Lloop" from ".Lloop:")
-    pub label: Option<&'a str>,
-    /// The statement on this line (instruction, directive, or empty)
-    pub statement: Statement<'a>,
-    /// Original line number (1-indexed)
-    pub line_number: usize,
-    /// Original text (for reconstruction)
-    pub original: &'a str,
-}
-
-/// The content of an assembly line after any label
+/// The content of an assembly line after any label.
 pub enum Statement<'a> {
-    /// A CPU instruction
+    /// A CPU instruction.
     Instruction(UnresolvedInstruction<'a>),
-    /// An assembler directive (e.g., .global, .align) - contents not parsed
+    /// An assembler directive (e.g., `.global`, `.align`).
     Directive,
-    /// Empty line or label-only
+    /// Empty line or label-only.
     Empty,
 }
 
-/// An assembly instruction
+/// An unresolved instruction with operands as raw strings.
+///
+/// Branch targets are still label names, not instruction indices.
 pub struct UnresolvedInstruction<'a> {
-    /// The mnemonic (e.g., "mov", "b.lt", "ret")
+    /// The mnemonic (e.g., "mov", "b.lt", "ret").
     pub mnemonic: &'a str,
-    /// Operands as strings (e.g., ["x0", "#0"])
+    /// Operands as raw strings (e.g., `["x0", "#0"]` or `["x0", "[sp, #16]"]`).
     pub operands: Vec<&'a str>,
 }
 
 impl<'a> UnresolvedInstruction<'a> {
-    /// Parse an instruction from a line of text
-    fn parse(line: &'a str) -> Self {
-        let line = line.trim();
+    /// Parse an instruction from text (after removing label and comments).
+    fn parse(text: &'a str) -> Self {
+        let text = text.trim();
 
-        // Find mnemonic (first word, possibly with condition like "b.lt")
-        let mut parts = line.splitn(2, |c: char| c.is_whitespace());
-
+        // Split into mnemonic and operands
+        let mut parts = text.splitn(2, |c: char| c.is_whitespace());
         let mnemonic = parts.next().unwrap_or("");
         let operands_str = parts.next().unwrap_or("");
 
-        // Parse operands (comma-separated, but handle brackets)
         let operands = Self::parse_operands(operands_str);
 
         Self { mnemonic, operands }
     }
 
-    /// Parse comma-separated operands, handling brackets for addressing modes
+    /// Parse comma-separated operands, respecting brackets for addressing modes.
+    ///
+    /// Commas inside `[...]` are not treated as separators.
     fn parse_operands(s: &'a str) -> Vec<&'a str> {
         let s = s.trim();
         if s.is_empty() {
@@ -135,13 +140,25 @@ impl<'a> UnresolvedInstruction<'a> {
             }
         }
 
-        // Don't forget the last operand
+        // Last operand
         let operand = s[start..].trim();
         if !operand.is_empty() {
             operands.push(operand);
         }
 
         operands
+    }
+
+    /// Get the branch target label, if this is a direct branch.
+    ///
+    /// Returns `None` for:
+    /// - Non-branch instructions
+    /// - Indirect branches (br, blr, ret) where the target is a register
+    fn branch_target_label(&self) -> Option<&str> {
+        if !self.is_branch() || self.is_indirect() {
+            return None;
+        }
+        self.operands.last().copied()
     }
 }
 
@@ -151,113 +168,111 @@ impl BasicInstruction for UnresolvedInstruction<'_> {
     }
 }
 
-impl UnresolvedInstruction<'_> {
-    /// Get the branch target label if this is a direct branch.
-    /// Returns None for indirect branches (br, blr) since target is a register.
-    fn get_branch_target(&self) -> Option<&str> {
-        if !self.is_branch() || self.is_indirect() {
-            return None;
-        }
-        self.operands.last().copied()
-    }
+/// A parsed line from an assembly file.
+pub struct ParsedLine<'a> {
+    /// Label defined on this line (e.g., `".Lloop"` from `".Lloop:"`).
+    pub label: Option<&'a str>,
+    /// The statement on this line.
+    pub statement: Statement<'a>,
+    /// Original line number (1-indexed).
+    pub line_number: usize,
+    /// Original line text (for reconstruction or error messages).
+    pub original: &'a str,
 }
 
-/// Parsed assembly text, ready for resolution or instrumentation.
+/// Parsed assembly text, ready for resolution or inspection.
+/// let instructions = asm.resolve()?;
 pub struct ParsedAssembly<'a> {
     lines: Vec<ParsedLine<'a>>,
 }
 
 impl<'a> ParsedAssembly<'a> {
-    /// Parse assembly text.
+    /// Parse assembly text into lines.
+    ///
+    /// This performs text parsing only. No validation is done on mnemonics
+    /// or operands. Labels are not yet resolved to instruction indices.
     pub fn parse(input: &'a str) -> Self {
         let lines = input
             .lines()
             .enumerate()
-            .map(|(idx, line_text)| Self::parse_line(line_text, idx + 1))
+            .map(|(idx, text)| Self::parse_line(text, idx + 1))
             .collect();
         Self { lines }
     }
 
     /// Resolve labels to instruction indices.
     ///
-    /// This function:
-    /// 1. Filters to only actual instructions (skips labels-only, directives, empty lines)
-    /// 2. Maps labels to the index of the first instruction at or after them
-    /// 3. Resolves branch target labels to instruction indices
+    /// This filters to only actual instructions (skipping label-only lines,
+    /// directives, and empty lines) and resolves branch target labels to
+    /// instruction indices.
     ///
-    /// Returns a clean instruction stream where every item is an instruction with
-    /// resolved branch targets.
+    /// # Errors
+    ///
+    /// - [`ResolveError::TrailingLabels`]: Labels at end of file with no instruction
+    /// - [`ResolveError::UndefinedLabel`]: Branch references an undefined label
     pub fn resolve(&self) -> Result<Vec<ResolvedInstruction>, ResolveError> {
-        // First pass: build instructions with None branch_target, track labels separately
+        // First pass: build instructions, collect labels
         let mut instructions: Vec<ResolvedInstruction> = Vec::new();
-        let mut branch_labels: Vec<Option<&str>> = Vec::new(); // parallel to instructions
+        let mut branch_labels: Vec<Option<&str>> = Vec::new();
         let mut pending_labels: Vec<&str> = Vec::new();
         let mut label_to_index: HashMap<&str, usize> = HashMap::new();
 
         for line in &self.lines {
-            // Accumulate any labels we encounter
             if let Some(label) = line.label {
                 pending_labels.push(label);
             }
 
-            // When we hit an instruction, all pending labels resolve to it
-            if let Statement::Instruction(ref instruction) = line.statement {
+            if let Statement::Instruction(ref instr) = line.statement {
                 let index = instructions.len();
 
+                // All pending labels point to this instruction
                 for label in pending_labels.drain(..) {
                     label_to_index.insert(label, index);
                 }
 
                 instructions.push(ResolvedInstruction {
                     index,
-                    mnemonic: instruction.mnemonic.to_string(),
-                    branch_target: None, // resolved in second pass
+                    mnemonic: instr.mnemonic.to_string(),
+                    branch_target: None,
                     line_number: line.line_number,
                 });
-                branch_labels.push(instruction.get_branch_target());
+                branch_labels.push(instr.branch_target_label());
             }
-            // Directives and empty: skip, but labels before them stay pending
         }
 
-        // Trailing labels with no following instruction
         if !pending_labels.is_empty() {
             return Err(ResolveError::TrailingLabels(
                 pending_labels.into_iter().map(String::from).collect(),
             ));
         }
 
-        // Second pass: resolve branch targets in place
-        for (instruction, label) in instructions.iter_mut().zip(branch_labels.iter()) {
+        // Second pass: resolve branch targets
+        for (instr, label) in instructions.iter_mut().zip(branch_labels.iter()) {
             if let Some(label) = label {
                 let target = label_to_index.get(label).copied().ok_or_else(|| {
                     ResolveError::UndefinedLabel {
                         label: label.to_string(),
-                        line: instruction.line_number,
+                        line: instr.line_number,
                     }
                 })?;
-                instruction.branch_target = Some(target);
+                instr.branch_target = Some(target);
             }
         }
 
         Ok(instructions)
     }
 
-    /// Access the parsed lines.
+    /// Access the parsed lines for inspection.
     pub fn lines(&self) -> &[ParsedLine<'a>] {
         &self.lines
     }
 
-    /// Parse a single line of assembly
-    fn parse_line(line: &'a str, line_number: usize) -> ParsedLine<'a> {
-        let original = line;
+    /// Parse a single line of assembly.
+    fn parse_line(text: &'a str, line_number: usize) -> ParsedLine<'a> {
+        let original = text;
+        let text = Self::strip_comment(text).trim();
 
-        // Remove comments
-        let line = Self::remove_comments(line);
-        // Trim whitespace
-        let line = line.trim();
-
-        // Empty line
-        if line.is_empty() {
+        if text.is_empty() {
             return ParsedLine {
                 label: None,
                 statement: Statement::Empty,
@@ -266,16 +281,8 @@ impl<'a> ParsedAssembly<'a> {
             };
         }
 
-        let mut label = None;
-        let mut rest = line;
+        let (label, rest) = Self::split_label(text);
 
-        // Check for label (ends with ':')
-        if let Some(colon_position) = Self::find_label_colon(line) {
-            label = Some(line[..colon_position].trim());
-            rest = line[colon_position + 1..].trim();
-        }
-
-        // Empty after label
         if rest.is_empty() {
             return ParsedLine {
                 label,
@@ -285,7 +292,6 @@ impl<'a> ParsedAssembly<'a> {
             };
         }
 
-        // Check for directive (starts with '.')
         if rest.starts_with('.') {
             return ParsedLine {
                 label,
@@ -295,7 +301,6 @@ impl<'a> ParsedAssembly<'a> {
             };
         }
 
-        // Otherwise it's an instruction
         ParsedLine {
             label,
             statement: Statement::Instruction(UnresolvedInstruction::parse(rest)),
@@ -304,41 +309,42 @@ impl<'a> ParsedAssembly<'a> {
         }
     }
 
-    /// Remove comments from a line
-    /// Supports multiple comment styles:
-    /// - // (C++ style)
-    /// - /* */ (C style, single line only)
-    /// - ; (traditional assembly style)
-    /// - @ (GNU ARM assembler style)
-    fn remove_comments(line: &str) -> &str {
-        // Find the earliest comment start position
-        let mut earliest_pos = line.len();
+    /// Remove comments from a line.
+    ///
+    /// Supports: `//`, `/* */`, `;`, `@`
+    fn strip_comment(line: &str) -> &str {
+        let mut end = line.len();
 
-        // C++ style comments
         if let Some(pos) = line.find("//") {
-            earliest_pos = earliest_pos.min(pos);
+            end = end.min(pos);
         }
-
-        // C style comments (simplified - assumes single line)
         if let Some(pos) = line.find("/*") {
-            earliest_pos = earliest_pos.min(pos);
+            end = end.min(pos);
         }
-
-        // Traditional assembly semicolon comments
         if let Some(pos) = line.find(';') {
-            earliest_pos = earliest_pos.min(pos);
+            end = end.min(pos);
         }
-
-        // GNU ARM assembler @ comments
         if let Some(pos) = line.find('@') {
-            earliest_pos = earliest_pos.min(pos);
+            end = end.min(pos);
         }
 
-        &line[..earliest_pos]
+        &line[..end]
     }
 
-    /// Find the position of a label-ending colon
-    /// Labels can contain alphanumeric chars, underscores, dots, and $
+    /// Split a line into optional label and remaining text.
+    fn split_label(line: &str) -> (Option<&str>, &str) {
+        if let Some(colon_pos) = Self::find_label_colon(line) {
+            let label = line[..colon_pos].trim();
+            let rest = line[colon_pos + 1..].trim();
+            (Some(label), rest)
+        } else {
+            (None, line)
+        }
+    }
+
+    /// Find position of label-ending colon.
+    ///
+    /// Valid label characters: alphanumeric, `_`, `.`, `$`
     fn find_label_colon(line: &str) -> Option<usize> {
         let mut chars = line.char_indices().peekable();
 
@@ -350,16 +356,14 @@ impl<'a> ParsedAssembly<'a> {
             chars.next();
         }
 
-        // Collect label characters
-        while let Some((pos, c)) = chars.next() {
+        // Scan label characters
+        for (pos, c) in chars {
             if c == ':' {
                 return Some(pos);
             }
-            // Valid label characters
             if c.is_alphanumeric() || c == '_' || c == '.' || c == '$' {
                 continue;
             }
-            // Hit something else (like whitespace or instruction)
             break;
         }
 
@@ -367,484 +371,576 @@ impl<'a> ParsedAssembly<'a> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use indoc::indoc;
+#[cfg(test)]
+mod tests {
+    use cfg::{BasicInstruction, CfgInstruction};
+    use indoc::indoc;
 
-//     use super::parse;
+    use super::{ParsedAssembly, ParsedLine, ResolveError, Statement, UnresolvedInstruction};
 
-//     #[test]
-//     fn test_parse_label() {
-//         let lines = parse(".Lloop:\n");
-//         assert_eq!(lines[0].label, Some(".Lloop"));
-//         assert!(lines[0].instruction.is_none());
-//     }
+    fn parse_single_line(text: &str) -> ParsedLine<'_> {
+        ParsedAssembly::parse_line(text, 1)
+    }
 
-//     #[test]
-//     fn test_parse_instruction() {
-//         let lines = parse("    mov x0, #0\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "mov");
-//         assert_eq!(instr.operands, vec!["x0", "#0"]);
-//     }
+    fn get_instruction<'a>(line: &'a ParsedLine<'a>) -> &'a UnresolvedInstruction<'a> {
+        match &line.statement {
+            Statement::Instruction(instr) => instr,
+            _ => panic!("expected instruction"),
+        }
+    }
 
-//     #[test]
-//     fn test_parse_directive() {
-//         let lines = parse(".global _test_loop\n");
-//         let dir = lines[0].directive.as_ref().unwrap();
-//         assert_eq!(dir.name, "global");
-//         assert_eq!(dir.args, vec!["_test_loop"]);
-//     }
+    // Basic line parsing
 
-//     #[test]
-//     fn test_parse_branch() {
-//         let lines = parse("    b.lt .Lloop\n");
-//         let instruction = lines[0].instruction.as_ref().unwrap();
-//         assert!(instruction.is_branch());
-//         assert_eq!(instruction.get_branch_target(), Some(".Lloop"));
-//     }
+    #[test]
+    fn test_empty_line() {
+        let line = parse_single_line("");
+        assert!(line.label.is_none());
+        assert!(matches!(line.statement, Statement::Empty));
+    }
 
-//     #[test]
-//     fn test_parse_label_with_instruction() {
-//         let lines = parse("_start: mov x0, #1\n");
-//         assert_eq!(lines[0].label, Some("_start"));
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "mov");
-//     }
+    #[test]
+    fn test_whitespace_only() {
+        let line = parse_single_line("    \t  ");
+        assert!(line.label.is_none());
+        assert!(matches!(line.statement, Statement::Empty));
+    }
 
-//     #[test]
-//     fn test_parse_memory_operand() {
-//         let lines = parse("    ldr x0, [x1, #8]\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ldr");
-//         assert_eq!(instr.operands, vec!["x0", "[x1, #8]"]);
-//     }
+    #[test]
+    fn test_label_only() {
+        let line = parse_single_line(".Lloop:");
+        assert_eq!(line.label, Some(".Lloop"));
+        assert!(matches!(line.statement, Statement::Empty));
+    }
 
-//     #[test]
-//     fn test_indirect_branch_br() {
-//         let lines = parse("    br x0\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "br should be recognized as a branch");
-//         assert!(
-//             instr.is_indirect_branch(),
-//             "br should be recognized as indirect"
-//         );
-//         assert!(
-//             !instr.is_conditional_branch(),
-//             "br should not be conditional"
-//         );
-//         assert_eq!(
-//             instr.get_branch_target(),
-//             None,
-//             "indirect branch has no static target"
-//         );
-//     }
+    #[test]
+    fn test_label_with_instruction() {
+        let line = parse_single_line("_start: mov x0, #1");
+        assert_eq!(line.label, Some("_start"));
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "mov");
+        assert_eq!(instr.operands, vec!["x0", "#1"]);
+    }
 
-//     #[test]
-//     fn test_indirect_branch_blr() {
-//         let lines = parse("    blr x30\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "blr should be recognized as a branch");
-//         assert!(
-//             instr.is_indirect_branch(),
-//             "blr should be recognized as indirect"
-//         );
-//         assert_eq!(
-//             instr.get_branch_target(),
-//             None,
-//             "indirect branch has no static target"
-//         );
-//     }
+    #[test]
+    fn test_directive() {
+        let line = parse_single_line(".global _start");
+        assert!(line.label.is_none());
+        assert!(matches!(line.statement, Statement::Directive));
+    }
 
-//     #[test]
-//     fn test_direct_branch_has_target() {
-//         // Direct unconditional branch
-//         let lines = parse("    b .Llabel\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch());
-//         assert!(!instr.is_indirect_branch());
-//         assert_eq!(instr.get_branch_target(), Some(".Llabel"));
+    #[test]
+    fn test_label_with_directive() {
+        let line = parse_single_line("my_data: .quad 0x1234");
+        assert_eq!(line.label, Some("my_data"));
+        assert!(matches!(line.statement, Statement::Directive));
+    }
 
-//         // Direct branch with link (call)
-//         let lines = parse("    bl _function\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch());
-//         assert!(!instr.is_indirect_branch());
-//         assert_eq!(instr.get_branch_target(), Some("_function"));
-//     }
+    #[test]
+    fn test_simple_instruction() {
+        let line = parse_single_line("    mov x0, #0");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "mov");
+        assert_eq!(instr.operands, vec!["x0", "#0"]);
+    }
 
-//     #[test]
-//     fn test_semicolon_comments() {
-//         // Semicolon comment at end of line
-//         let lines = parse("    mov x0, #0 ; initialize counter\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "mov");
-//         assert_eq!(instr.operands, vec!["x0", "#0"]);
+    #[test]
+    fn test_instruction_no_operands() {
+        let line = parse_single_line("    ret");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "ret");
+        assert!(instr.operands.is_empty());
 
-//         // Semicolon comment on its own line
-//         let lines = parse("; this is a comment\n");
-//         assert!(lines[0].instruction.is_none());
-//         assert!(lines[0].label.is_none());
-//     }
+        let line = parse_single_line("    nop");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "nop");
+        assert!(instr.operands.is_empty());
+    }
 
-//     #[test]
-//     fn test_at_sign_comments() {
-//         // @ comment at end of line (GNU ARM assembler style)
-//         let lines = parse("    add x0, x0, #1 @ increment\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "add");
-//         assert_eq!(instr.operands, vec!["x0", "x0", "#1"]);
+    #[test]
+    fn test_three_operand_instruction() {
+        let line = parse_single_line("    add x0, x1, x2");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "add");
+        assert_eq!(instr.operands, vec!["x0", "x1", "x2"]);
+    }
 
-//         // @ comment on its own line
-//         let lines = parse("@ GNU style comment\n");
-//         assert!(lines[0].instruction.is_none());
-//     }
+    // Memory addressing operands
 
-//     #[test]
-//     fn test_cpp_style_comments() {
-//         // // comment at end of line
-//         let lines = parse("    ret // return to caller\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ret");
-//     }
+    #[test]
+    fn test_simple_memory_operand() {
+        let line = parse_single_line("    ldr x0, [x1, #8]");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "ldr");
+        assert_eq!(instr.operands, vec!["x0", "[x1, #8]"]);
+    }
 
-//     #[test]
-//     fn test_c_style_comments() {
-//         // /* */ comment at end of line
-//         let lines = parse("    nop /* do nothing */\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "nop");
-//     }
+    #[test]
+    fn test_post_index_addressing() {
+        let line = parse_single_line("    ldr x0, [x1], #8");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.operands, vec!["x0", "[x1]", "#8"]);
+    }
 
-//     #[test]
-//     fn test_multiple_comment_styles_earliest_wins() {
-//         // Semicolon appears before //
-//         let lines = parse("    mov x0, #1 ; comment // not parsed\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.operands, vec!["x0", "#1"]);
+    #[test]
+    fn test_pre_index_writeback() {
+        let line = parse_single_line("    ldr x0, [x1, #8]!");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.operands, vec!["x0", "[x1, #8]!"]);
+    }
 
-//         // // appears before ;
-//         let lines = parse("    mov x0, #2 // comment ; not parsed\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.operands, vec!["x0", "#2"]);
-//     }
+    #[test]
+    fn test_ldp_stp_pair() {
+        let line = parse_single_line("    ldp x0, x1, [sp, #16]");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "ldp");
+        assert_eq!(instr.operands, vec!["x0", "x1", "[sp, #16]"]);
 
-//     #[test]
-//     fn test_is_return() {
-//         let lines = parse("    ret\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_return());
-//         assert!(!instr.is_branch());
+        let line = parse_single_line("    stp x29, x30, [sp, #-16]!");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "stp");
+        assert_eq!(instr.operands, vec!["x29", "x30", "[sp, #-16]!"]);
+    }
 
-//         // Case insensitivity
-//         let lines = parse("    RET\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_return());
-//     }
+    // Comments
 
-//     #[test]
-//     fn test_cbz_cbnz_branches() {
-//         // cbz - compare and branch if zero
-//         let lines = parse("    cbz x0, .Lzero\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "cbz should be a branch");
-//         assert!(instr.is_conditional_branch(), "cbz should be conditional");
-//         assert!(!instr.is_indirect_branch(), "cbz should not be indirect");
-//         assert_eq!(instr.get_branch_target(), Some(".Lzero"));
+    #[test]
+    fn test_semicolon_comment() {
+        let line = parse_single_line("    mov x0, #0 ; initialize counter");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "mov");
+        assert_eq!(instr.operands, vec!["x0", "#0"]);
+    }
 
-//         // cbnz - compare and branch if not zero
-//         let lines = parse("    cbnz w5, .Lnonzero\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "cbnz should be a branch");
-//         assert!(instr.is_conditional_branch(), "cbnz should be conditional");
-//         assert_eq!(instr.get_branch_target(), Some(".Lnonzero"));
-//     }
+    #[test]
+    fn test_at_sign_comment() {
+        let line = parse_single_line("    add x0, x0, #1 @ increment");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "add");
+        assert_eq!(instr.operands, vec!["x0", "x0", "#1"]);
+    }
 
-//     #[test]
-//     fn test_tbz_tbnz_branches() {
-//         // tbz - test bit and branch if zero (3 operands)
-//         let lines = parse("    tbz x0, #63, .Lpositive\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "tbz should be a branch");
-//         assert!(instr.is_conditional_branch(), "tbz should be conditional");
-//         assert!(!instr.is_indirect_branch(), "tbz should not be indirect");
-//         assert_eq!(instr.get_branch_target(), Some(".Lpositive"));
-//         assert_eq!(instr.operands.len(), 3);
+    #[test]
+    fn test_cpp_style_comment() {
+        let line = parse_single_line("    ret // return to caller");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "ret");
+    }
 
-//         // tbnz - test bit and branch if not zero
-//         let lines = parse("    tbnz w1, #0, .Lodd\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "tbnz should be a branch");
-//         assert!(instr.is_conditional_branch(), "tbnz should be conditional");
-//         assert_eq!(instr.get_branch_target(), Some(".Lodd"));
-//     }
+    #[test]
+    fn test_c_style_comment() {
+        let line = parse_single_line("    nop /* do nothing */");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "nop");
+    }
 
-//     #[test]
-//     fn test_pac_branches() {
-//         // braaz - branch to register with pointer authentication
-//         let lines = parse("    braaz x0\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "braaz should be a branch");
-//         assert!(instr.is_indirect_branch(), "braaz should be indirect");
-//         assert_eq!(instr.get_branch_target(), None);
+    #[test]
+    fn test_comment_only_line() {
+        let line = parse_single_line("; this is a comment");
+        assert!(matches!(line.statement, Statement::Empty));
 
-//         // blraaz - branch with link, pointer authentication
-//         let lines = parse("    blraaz x1\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch(), "blraaz should be a branch");
-//         assert!(instr.is_indirect_branch(), "blraaz should be indirect");
-//     }
+        let line = parse_single_line("@ GNU style comment");
+        assert!(matches!(line.statement, Statement::Empty));
 
-//     #[test]
-//     fn test_label_with_directive() {
-//         let lines = parse("my_data: .quad 0x1234\n");
-//         assert_eq!(lines[0].label, Some("my_data"));
-//         let dir = lines[0].directive.as_ref().unwrap();
-//         assert_eq!(dir.name, "quad");
-//         assert_eq!(dir.args, vec!["0x1234"]);
-//         assert!(lines[0].instruction.is_none());
-//     }
+        let line = parse_single_line("// C++ comment");
+        assert!(matches!(line.statement, Statement::Empty));
+    }
 
-//     #[test]
-//     fn test_empty_and_whitespace_lines() {
-//         // Empty line
-//         let lines = parse("\n");
-//         assert!(lines[0].label.is_none());
-//         assert!(lines[0].instruction.is_none());
-//         assert!(lines[0].directive.is_none());
+    #[test]
+    fn test_earliest_comment_wins() {
+        let line = parse_single_line("    mov x0, #1 ; comment // not parsed");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.operands, vec!["x0", "#1"]);
 
-//         // Whitespace only
-//         let lines = parse("    \t  \n");
-//         assert!(lines[0].label.is_none());
-//         assert!(lines[0].instruction.is_none());
-//     }
+        let line = parse_single_line("    mov x0, #2 // comment ; not parsed");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.operands, vec!["x0", "#2"]);
+    }
 
-//     #[test]
-//     fn test_multi_line_parsing() {
-//         let input = indoc! {"
-//             .global _start
-//             _start:
-//                 mov x0, #0
-//             .Lloop:
-//                 add x0, x0, #1
-//                 cmp x0, #10
-//                 b.lt .Lloop
-//                 ret
-//         "};
-//         let lines = parse(input);
-//         assert_eq!(lines.len(), 8);
+    #[test]
+    fn test_original_preserves_comments() {
+        let line = parse_single_line("    mov x0, #0 ; comment");
+        assert_eq!(line.original, "    mov x0, #0 ; comment");
+    }
 
-//         // Check line numbers
-//         assert_eq!(lines[0].line_number, 1);
-//         assert_eq!(lines[1].line_number, 2);
-//         assert_eq!(lines[7].line_number, 8);
+    // Label formats
 
-//         // Check content
-//         assert!(lines[0].directive.is_some()); // .global
-//         assert_eq!(lines[1].label, Some("_start"));
-//         assert_eq!(lines[3].label, Some(".Lloop"));
-//         assert!(lines[7].instruction.as_ref().unwrap().is_return());
-//     }
+    #[test]
+    fn test_local_label() {
+        let line = parse_single_line(".Lloop:");
+        assert_eq!(line.label, Some(".Lloop"));
+    }
 
-//     #[test]
-//     fn test_original_field_preserves_comments() {
-//         let input = "    mov x0, #0 ; this is a comment\n";
-//         let lines = parse(input);
-//         assert_eq!(lines[0].original, "    mov x0, #0 ; this is a comment");
-//     }
+    #[test]
+    fn test_global_label() {
+        let line = parse_single_line("_my_function:");
+        assert_eq!(line.label, Some("_my_function"));
+    }
 
-//     #[test]
-//     fn test_post_index_addressing() {
-//         // Post-indexed: ldr x0, [x1], #8 - comma is outside brackets
-//         let lines = parse("    ldr x0, [x1], #8\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ldr");
-//         assert_eq!(instr.operands, vec!["x0", "[x1]", "#8"]);
-//     }
+    #[test]
+    fn test_label_with_dollar_sign() {
+        let line = parse_single_line("$Lfoo$bar:");
+        assert_eq!(line.label, Some("$Lfoo$bar"));
+    }
 
-//     #[test]
-//     fn test_pre_index_writeback() {
-//         // Pre-indexed with writeback: ldr x0, [x1, #8]!
-//         let lines = parse("    ldr x0, [x1, #8]!\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ldr");
-//         assert_eq!(instr.operands, vec!["x0", "[x1, #8]!"]);
-//     }
+    #[test]
+    fn test_label_with_numbers() {
+        let line = parse_single_line("loop123:");
+        assert_eq!(line.label, Some("loop123"));
+    }
 
-//     #[test]
-//     fn test_case_insensitivity_branches() {
-//         // Uppercase
-//         let lines = parse("    B.LT .Lloop\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch());
-//         assert!(instr.is_conditional_branch());
+    // Branch instructions
 
-//         // Mixed case
-//         let lines = parse("    Cbz x0, .Lzero\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch());
-//     }
+    #[test]
+    fn test_unconditional_branch() {
+        let line = parse_single_line("    b .Lloop");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(!instr.is_conditional());
+        assert!(!instr.is_indirect());
+        assert_eq!(instr.branch_target_label(), Some(".Lloop"));
+    }
 
-//     #[test]
-//     fn test_non_branch_non_return() {
-//         let lines = parse("    add x0, x1, x2\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(!instr.is_branch());
-//         assert!(!instr.is_return());
-//         assert!(!instr.is_conditional_branch());
-//         assert!(!instr.is_indirect_branch());
-//         assert_eq!(instr.get_branch_target(), None);
-//     }
+    #[test]
+    fn test_conditional_branch() {
+        let line = parse_single_line("    b.lt .Lloop");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional());
+        assert_eq!(instr.branch_target_label(), Some(".Lloop"));
+    }
 
-//     #[test]
-//     fn test_bl_is_unconditional() {
-//         let lines = parse("    bl _function\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert!(instr.is_branch());
-//         assert!(
-//             !instr.is_conditional_branch(),
-//             "bl is a call, not conditional"
-//         );
-//     }
+    #[test]
+    fn test_branch_with_link() {
+        let line = parse_single_line("    bl _function");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_call());
+        assert!(!instr.is_conditional());
+        assert_eq!(instr.branch_target_label(), Some("_function"));
+    }
 
-//     #[test]
-//     fn test_instruction_no_operands() {
-//         let lines = parse("    ret\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ret");
-//         assert!(instr.operands.is_empty());
+    #[test]
+    fn test_cbz_cbnz() {
+        let line = parse_single_line("    cbz x0, .Lzero");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional());
+        assert_eq!(instr.branch_target_label(), Some(".Lzero"));
 
-//         let lines = parse("    nop\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "nop");
-//         assert!(instr.operands.is_empty());
-//     }
+        let line = parse_single_line("    cbnz w5, .Lnonzero");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional());
+        assert_eq!(instr.branch_target_label(), Some(".Lnonzero"));
+    }
 
-//     #[test]
-//     fn test_label_with_dollar_sign() {
-//         let lines = parse("$Lfoo$bar:\n");
-//         assert_eq!(lines[0].label, Some("$Lfoo$bar"));
-//     }
+    #[test]
+    fn test_tbz_tbnz() {
+        let line = parse_single_line("    tbz x0, #63, .Lpositive");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_conditional());
+        assert_eq!(instr.operands.len(), 3);
+        assert_eq!(instr.branch_target_label(), Some(".Lpositive"));
 
-//     #[test]
-//     fn test_all_conditional_branch_variants() {
-//         let conditions = [
-//             "b.eq", "b.ne", "b.cs", "b.cc", "b.mi", "b.pl", "b.vs", "b.vc", "b.hi", "b.ls", "b.ge",
-//             "b.lt", "b.gt", "b.le", "b.al",
-//         ];
+        let line = parse_single_line("    tbnz w1, #0, .Lodd");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert_eq!(instr.branch_target_label(), Some(".Lodd"));
+    }
 
-//         for cond in conditions {
-//             let input = format!("    {} .Ltarget\n", cond);
-//             let lines = parse(&input);
-//             let instr = lines[0].instruction.as_ref().unwrap();
-//             assert!(instr.is_branch(), "{} should be a branch", cond);
-//             assert!(
-//                 instr.is_conditional_branch(),
-//                 "{} should be conditional",
-//                 cond
-//             );
-//             assert_eq!(instr.get_branch_target(), Some(".Ltarget"));
-//         }
-//     }
+    #[test]
+    fn test_indirect_branch_br() {
+        let line = parse_single_line("    br x0");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
+        assert!(!instr.is_conditional());
+        assert_eq!(instr.branch_target_label(), None);
+    }
 
-//     #[test]
-//     fn test_ldp_stp_pair_operations() {
-//         // Load pair
-//         let lines = parse("    ldp x0, x1, [sp, #16]\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ldp");
-//         assert_eq!(instr.operands, vec!["x0", "x1", "[sp, #16]"]);
+    #[test]
+    fn test_indirect_branch_blr() {
+        let line = parse_single_line("    blr x30");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_indirect());
+        assert!(instr.is_call());
+        assert_eq!(instr.branch_target_label(), None);
+    }
 
-//         // Store pair
-//         let lines = parse("    stp x29, x30, [sp, #-16]!\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "stp");
-//         assert_eq!(instr.operands, vec!["x29", "x30", "[sp, #-16]!"]);
-//     }
+    #[test]
+    fn test_return() {
+        let line = parse_single_line("    ret");
+        let instr = get_instruction(&line);
+        assert!(instr.is_branch());
+        assert!(instr.is_return());
+        assert!(instr.is_indirect());
+        assert_eq!(instr.branch_target_label(), None);
+    }
 
-//     #[test]
-//     fn test_malformed_empty_mnemonic() {
-//         // Just a colon - creates empty label, no instruction
-//         let lines = parse(":\n");
-//         assert_eq!(lines[0].label, Some(""));
-//         assert!(lines[0].instruction.is_none());
+    #[test]
+    fn test_all_condition_codes() {
+        // Only test condition codes defined in the opcode table
+        let conditions = [
+            "b.eq", "b.ne", "b.mi", "b.pl", "b.vs", "b.vc", "b.hi", "b.ls", "b.ge", "b.lt", "b.gt",
+            "b.le", "b.al",
+        ];
 
-//         // Whitespace then colon - still finds the colon as label end
-//         let lines = parse("   :\n");
-//         assert_eq!(lines[0].label, Some("")); // empty label after trimming
-//     }
+        for cond in conditions {
+            let input = format!("    {} .Ltarget", cond);
+            let line = parse_single_line(&input);
+            let instr = get_instruction(&line);
+            assert!(instr.is_branch(), "{} should be a branch", cond);
+            assert!(instr.is_conditional(), "{} should be conditional", cond);
+            assert_eq!(instr.branch_target_label(), Some(".Ltarget"));
+        }
+    }
 
-//     #[test]
-//     fn test_malformed_multiple_colons() {
-//         let lines = parse("foo:::\n");
-//         // First colon ends the label, rest is parsed as instruction
-//         assert_eq!(lines[0].label, Some("foo"));
-//         assert!(lines[0].instruction.is_some());
-//         assert_eq!(lines[0].instruction.as_ref().unwrap().mnemonic, "::");
-//     }
+    #[test]
+    fn test_non_branch_has_no_target() {
+        let line = parse_single_line("    add x0, x1, x2");
+        let instr = get_instruction(&line);
+        assert!(!instr.is_branch());
+        assert_eq!(instr.branch_target_label(), None);
+    }
 
-//     #[test]
-//     fn test_malformed_unmatched_brackets() {
-//         // Extra closing brackets - doesn't panic due to saturating_sub
-//         let lines = parse("    ldr x0, ]]]x1, x2\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "ldr");
-//         // Parser handles this gracefully (exact output doesn't matter, just no panic)
-//         assert!(!instr.operands.is_empty());
+    // Multi-line parsing
 
-//         // Unclosed opening brackets - comma inside isn't a separator
-//         let lines = parse("    ldr x0, [x1, x2\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         // The entire "[x1, x2" is one operand because bracket never closed
-//         assert_eq!(instr.operands, vec!["x0", "[x1, x2"]);
-//     }
+    #[test]
+    fn test_multi_line_parsing() {
+        let input = indoc! {"
+            .global _start
+            _start:
+                mov x0, #0
+            .Lloop:
+                add x0, x0, #1
+                cmp x0, #10
+                b.lt .Lloop
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        assert_eq!(asm.lines().len(), 8);
 
-//     #[test]
-//     fn test_malformed_unicode_and_emoji() {
-//         // Emoji is not a valid label char (only alphanumeric, _, ., $)
-//         // So "🔥:" is parsed as instruction "🔥:" with no label
-//         let lines = parse("🔥:\n");
-//         assert!(lines[0].label.is_none());
-//         assert!(lines[0].instruction.is_some());
-//         assert_eq!(lines[0].instruction.as_ref().unwrap().mnemonic, "🔥:");
+        assert_eq!(asm.lines()[0].line_number, 1);
+        assert_eq!(asm.lines()[1].line_number, 2);
+        assert_eq!(asm.lines()[7].line_number, 8);
 
-//         // Unicode letters ARE alphanumeric, so they work in instructions
-//         let lines = parse("    日本語 x0, x1\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "日本語");
-//     }
+        assert!(matches!(asm.lines()[0].statement, Statement::Directive));
+        assert_eq!(asm.lines()[1].label, Some("_start"));
+        assert_eq!(asm.lines()[3].label, Some(".Lloop"));
 
-//     #[test]
-//     fn test_malformed_only_whitespace_and_comments() {
-//         let lines = parse("    ; just a comment\n");
-//         assert!(lines[0].instruction.is_none());
-//         assert!(lines[0].label.is_none());
+        let last_instr = get_instruction(&asm.lines()[7]);
+        assert!(last_instr.is_return());
+    }
 
-//         let lines = parse("    \t   \n");
-//         assert!(lines[0].instruction.is_none());
-//     }
+    // Label resolution
 
-//     #[test]
-//     fn test_malformed_directive_edge_cases() {
-//         // Just a dot
-//         let lines = parse(".\n");
-//         let dir = lines[0].directive.as_ref().unwrap();
-//         assert_eq!(dir.name, "");
-//         assert!(dir.args.is_empty());
+    #[test]
+    fn test_resolve_simple_loop() {
+        let input = indoc! {"
+            .Lloop:
+                add x0, x0, #1
+                b.lt .Lloop
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
 
-//         // Dot with spaces but no name
-//         let lines = parse(".   \n");
-//         let dir = lines[0].directive.as_ref().unwrap();
-//         assert_eq!(dir.name, "");
-//     }
+        assert_eq!(instructions.len(), 2);
+        assert_eq!(instructions[0].mnemonic, "add");
+        assert_eq!(instructions[0].index, 0);
+        assert_eq!(instructions[0].branch_target, None);
 
-//     #[test]
-//     fn test_malformed_nonsense_mnemonic() {
-//         // Completely made up instruction - parser doesn't validate
-//         let lines = parse("    asdfghjkl x0, x1, #999\n");
-//         let instr = lines[0].instruction.as_ref().unwrap();
-//         assert_eq!(instr.mnemonic, "asdfghjkl");
-//         assert!(!instr.is_branch());
-//         assert!(!instr.is_return());
-//     }
-// }
+        assert_eq!(instructions[1].mnemonic, "b.lt");
+        assert_eq!(instructions[1].index, 1);
+        assert_eq!(instructions[1].branch_target, Some(0));
+    }
+
+    #[test]
+    fn test_resolve_forward_branch() {
+        let input = indoc! {"
+                cbz x0, .Lskip
+                add x0, x0, #1
+            .Lskip:
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions.len(), 3);
+        assert_eq!(instructions[0].branch_target, Some(2));
+        assert_eq!(instructions[2].mnemonic, "ret");
+    }
+
+    #[test]
+    fn test_resolve_multiple_labels_same_instruction() {
+        let input = indoc! {"
+            .Lalias1:
+            .Lalias2:
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].index, 0);
+    }
+
+    #[test]
+    fn test_resolve_skips_directives() {
+        let input = indoc! {"
+            .global _start
+            .align 4
+            _start:
+                mov x0, #0
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions.len(), 2);
+        assert_eq!(instructions[0].mnemonic, "mov");
+        assert_eq!(instructions[1].mnemonic, "ret");
+    }
+
+    #[test]
+    fn test_resolve_preserves_line_numbers() {
+        let input = indoc! {"
+            .global _start
+
+            _start:
+                mov x0, #0
+
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions[0].line_number, 4);
+        assert_eq!(instructions[1].line_number, 6);
+    }
+
+    #[test]
+    fn test_resolve_error_trailing_labels() {
+        let input = indoc! {"
+                mov x0, #0
+            .Ldangling:
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let result = asm.resolve();
+
+        assert!(matches!(
+            result,
+            Err(ResolveError::TrailingLabels(ref labels)) if labels == &[".Ldangling"]
+        ));
+    }
+
+    #[test]
+    fn test_resolve_error_undefined_label() {
+        let input = indoc! {"
+                b .Lmissing
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let result = asm.resolve();
+
+        assert!(matches!(
+            result,
+            Err(ResolveError::UndefinedLabel { ref label, line: 1 }) if label == ".Lmissing"
+        ));
+    }
+
+    #[test]
+    fn test_resolve_call_target() {
+        let input = indoc! {"
+                bl _helper
+            _helper:
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions[0].branch_target, Some(1));
+    }
+
+    #[test]
+    fn test_resolve_indirect_branch_no_target() {
+        let input = indoc! {"
+                blr x0
+                ret
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        assert_eq!(instructions[0].branch_target, None);
+    }
+
+    // Trait implementations
+
+    #[test]
+    fn test_resolved_instruction_traits() {
+        let input = indoc! {"
+            .Lloop:
+                add x0, x0, #1
+                b.lt .Lloop
+        "};
+        let asm = ParsedAssembly::parse(input);
+        let instructions = asm.resolve().unwrap();
+
+        // BasicInstruction trait
+        assert_eq!(instructions[0].mnemonic(), "add");
+        assert!(!instructions[0].is_branch());
+
+        assert_eq!(instructions[1].mnemonic(), "b.lt");
+        assert!(instructions[1].is_branch());
+        assert!(instructions[1].is_conditional());
+
+        // CfgInstruction trait
+        assert_eq!(instructions[0].as_target(), 0);
+        assert_eq!(instructions[1].as_target(), 1);
+        assert_eq!(instructions[1].branch_target(), Some(0));
+    }
+
+    // Edge cases
+
+    #[test]
+    fn test_empty_label() {
+        let line = parse_single_line(":");
+        assert_eq!(line.label, Some(""));
+    }
+
+    #[test]
+    fn test_unmatched_brackets() {
+        // Extra closing brackets - doesn't panic
+        let line = parse_single_line("    ldr x0, ]]]x1, x2");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "ldr");
+
+        // Unclosed opening bracket
+        let line = parse_single_line("    ldr x0, [x1, x2");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.operands, vec!["x0", "[x1, x2"]);
+    }
+
+    #[test]
+    fn test_unknown_mnemonic() {
+        let line = parse_single_line("    asdfghjkl x0, x1, #999");
+        let instr = get_instruction(&line);
+        assert_eq!(instr.mnemonic, "asdfghjkl");
+        assert!(!instr.is_branch());
+    }
+
+    #[test]
+    fn test_resolve_error_display() {
+        let err = ResolveError::TrailingLabels(vec!["foo".into(), "bar".into()]);
+        assert!(err.to_string().contains("foo"));
+        assert!(err.to_string().contains("bar"));
+
+        let err = ResolveError::UndefinedLabel {
+            label: "missing".into(),
+            line: 42,
+        };
+        assert!(err.to_string().contains("missing"));
+        assert!(err.to_string().contains("42"));
+    }
+}
