@@ -2,31 +2,95 @@
 //!
 //! Parses GNU-style assembly syntax as produced by LLVM/GCC.
 
+use std::collections::HashMap;
+
 use cfg::InstructionInfo;
+
+/// Error during label resolution
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveError {
+    /// Labels at end of file with no following instruction
+    TrailingLabels(Vec<String>),
+    /// Branch references an undefined label
+    UndefinedLabel { label: String, line: usize },
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::TrailingLabels(labels) => {
+                write!(f, "trailing labels with no instruction: {labels:?}")
+            }
+            ResolveError::UndefinedLabel { label, line } => {
+                write!(f, "undefined label '{label}' referenced at line {line}",)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
+/// A resolved instruction with all labels resolved to instruction indices.
+///
+/// This is the output of the resolution pass. Every item represents an actual
+/// CPU instruction (no label-only lines or directives).
+#[derive(Debug, Clone)]
+pub struct ResolvedInstruction {
+    /// Index in the instruction stream (0-based)
+    pub index: usize,
+    /// The mnemonic (always present)
+    pub mnemonic: String,
+    /// Branch target as instruction index (if this is a branch)
+    pub branch_target: Option<usize>,
+    /// Original line number (1-indexed, for error messages and output mapping)
+    pub line_number: usize,
+}
+
+impl InstructionInfo for ResolvedInstruction {
+    fn mnemonic(&self) -> &str {
+        &self.mnemonic
+    }
+
+    fn branch_target(&self) -> Option<usize> {
+        self.branch_target
+    }
+
+    fn as_target(&self) -> usize {
+        self.index
+    }
+}
 
 /// A parsed line from an assembly file
 pub struct ParsedLine<'a> {
     /// Label defined on this line (e.g., ".Lloop" from ".Lloop:")
     pub label: Option<&'a str>,
-    /// Instruction on this line
-    pub instruction: Option<Instruction<'a>>,
-    /// Directive on this line (e.g., ".global", ".align")
-    pub directive: Option<Directive<'a>>,
+    /// The statement on this line (instruction, directive, or empty)
+    pub statement: Statement<'a>,
     /// Original line number (1-indexed)
     pub line_number: usize,
     /// Original text (for reconstruction)
     pub original: &'a str,
 }
 
+/// The content of an assembly line after any label
+pub enum Statement<'a> {
+    /// A CPU instruction
+    Instruction(UnresolvedInstruction<'a>),
+    /// An assembler directive (e.g., .global, .align) - contents not parsed
+    Directive,
+    /// Empty line or label-only
+    Empty,
+}
+
 /// An assembly instruction
-pub struct Instruction<'a> {
+pub struct UnresolvedInstruction<'a> {
     /// The mnemonic (e.g., "mov", "b.lt", "ret")
     pub mnemonic: &'a str,
     /// Operands as strings (e.g., ["x0", "#0"])
     pub operands: Vec<&'a str>,
 }
 
-impl<'a> Instruction<'a> {
+impl<'a> UnresolvedInstruction<'a> {
     /// Parse an instruction from a line of text
     fn parse(line: &'a str) -> Self {
         let line = line.trim();
@@ -79,13 +143,11 @@ impl<'a> Instruction<'a> {
     }
 }
 
-impl Instruction<'_> {
-    /// Case-insensitive check if mnemonic equals the given string
+impl UnresolvedInstruction<'_> {
     fn mnemonic_eq(&self, s: &str) -> bool {
         self.mnemonic.eq_ignore_ascii_case(s)
     }
 
-    /// Case-insensitive check if mnemonic starts with the given prefix
     fn mnemonic_starts_with(&self, prefix: &str) -> bool {
         // Use get() to avoid panicking on multi-byte UTF-8 boundaries
         self.mnemonic
@@ -93,13 +155,7 @@ impl Instruction<'_> {
             .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
     }
 
-    /// Check if an instruction is a return
-    pub fn is_return(&self) -> bool {
-        self.mnemonic_eq("ret")
-    }
-
-    /// Check if an instruction is a branch instruction
-    pub fn is_branch(&self) -> bool {
+    fn is_branch(&self) -> bool {
         // Unconditional direct branches
         self.mnemonic_eq("b")
             || self.mnemonic_eq("bl")
@@ -119,97 +175,108 @@ impl Instruction<'_> {
             || self.mnemonic_eq("tbnz")
     }
 
-    /// Check if this is an indirect branch (target is a register, not a label)
-    pub fn is_indirect_branch(&self) -> bool {
+    fn is_indirect_branch(&self) -> bool {
         self.mnemonic_eq("br")
             || self.mnemonic_eq("blr")
             || self.mnemonic_starts_with("bra")
             || self.mnemonic_starts_with("blra")
     }
 
-    /// Check if this is a call instruction (branch with link).
-    /// Calls save a return address and expect the callee to return.
-    pub fn is_call(&self) -> bool {
-        self.mnemonic_eq("bl") || self.mnemonic_eq("blr") || self.mnemonic_starts_with("blra")
-    }
-
-    /// Check if this is an unconditional jump (no fall-through, no return).
-    /// These transfer control permanently without saving a return address.
-    pub fn is_unconditional_jump(&self) -> bool {
-        self.mnemonic_eq("b") || self.mnemonic_eq("br") || self.mnemonic_starts_with("bra")
-    }
-
-    /// Check if a branch is conditional (can fall through)
-    pub fn is_conditional_branch(&self) -> bool {
-        // Conditional branches
-        self.mnemonic_starts_with("b.")
-            // Compare and branch
-            || self.mnemonic_eq("cbz")
-            || self.mnemonic_eq("cbnz")
-            // Test and branch
-            || self.mnemonic_eq("tbz")
-            || self.mnemonic_eq("tbnz")
-    }
-
-    /// Get the branch target label if this is a direct branch
-    /// Returns None for indirect branches (br, blr) since target is a register
-    pub fn get_branch_target(&self) -> Option<&str> {
+    /// Get the branch target label if this is a direct branch.
+    /// Returns None for indirect branches (br, blr) since target is a register.
+    fn get_branch_target(&self) -> Option<&str> {
         if !self.is_branch() || self.is_indirect_branch() {
             return None;
         }
-
-        // For conditional branches like "b.lt .Lloop", the target is the last operand
-        // For "b label" or "bl label", the target is the first/only operand
-        // For "cbz x0, label" or "tbz x0, #bit, label", the target is the last operand
         self.operands.last().copied()
     }
 }
 
-/// An assembly directive
-pub struct Directive<'a> {
-    /// The directive name without the leading dot (e.g., "global", "align")
-    pub name: &'a str,
-    /// Arguments to the directive
-    pub args: Vec<&'a str>,
+/// Parsed assembly text, ready for resolution or instrumentation.
+pub struct ParsedAssembly<'a> {
+    lines: Vec<ParsedLine<'a>>,
 }
 
-impl<'a> Directive<'a> {
-    /// Parse a directive from a line of text (must start with '.')
-    fn parse(line: &'a str) -> Self {
-        // Skip the leading dot
-        let line = &line[1..];
-
-        // Split on whitespace
-        let mut parts = line.split_whitespace();
-
-        let name = parts.next().unwrap_or("");
-        let args: Vec<&str> = parts.map(|s| s.trim_end_matches(',')).collect();
-
-        Self { name, args }
-    }
-}
-
-/// Parse assembly text into a list of parsed lines
-pub fn parse(input: &str) -> Vec<ParsedLine> {
-    Parser::new(input).parse()
-}
-
-struct Parser<'a> {
-    input: &'a str,
-}
-
-impl<'a> Parser<'a> {
-    fn new(input: &'a str) -> Self {
-        Self { input }
-    }
-
-    /// Parse assembly text into a list of parsed lines
-    fn parse(&self) -> Vec<ParsedLine<'a>> {
-        self.input
+impl<'a> ParsedAssembly<'a> {
+    /// Parse assembly text.
+    pub fn parse(input: &'a str) -> Self {
+        let lines = input
             .lines()
             .enumerate()
             .map(|(idx, line_text)| Self::parse_line(line_text, idx + 1))
-            .collect()
+            .collect();
+        Self { lines }
+    }
+
+    /// Resolve labels to instruction indices.
+    ///
+    /// This function:
+    /// 1. Filters to only actual instructions (skips labels-only, directives, empty lines)
+    /// 2. Maps labels to the index of the first instruction at or after them
+    /// 3. Resolves branch target labels to instruction indices
+    ///
+    /// Returns a clean instruction stream where every item is an instruction with
+    /// resolved branch targets.
+    pub fn resolve(&self) -> Result<Vec<ResolvedInstruction>, ResolveError> {
+        // First pass: build instructions with None branch_target, track labels separately
+        let mut instructions: Vec<ResolvedInstruction> = Vec::new();
+        let mut branch_labels: Vec<Option<&str>> = Vec::new(); // parallel to instructions
+        let mut pending_labels: Vec<&str> = Vec::new();
+        let mut label_to_index: HashMap<&str, usize> = HashMap::new();
+
+        for line in &self.lines {
+            // Accumulate any labels we encounter
+            if let Some(label) = line.label {
+                pending_labels.push(label);
+            }
+
+            // When we hit an instruction, all pending labels resolve to it
+            if let Statement::Instruction(ref instruction) = line.statement {
+                let index = instructions.len();
+
+                for label in pending_labels.drain(..) {
+                    label_to_index.insert(label, index);
+                }
+
+                instructions.push(ResolvedInstruction {
+                    index,
+                    mnemonic: instruction.mnemonic.to_string(),
+                    branch_target: None, // resolved in second pass
+                    line_number: line.line_number,
+                });
+                branch_labels.push(instruction.get_branch_target());
+            }
+            // Directives and empty: skip, but labels before them stay pending
+        }
+
+        // Trailing labels with no following instruction
+        if !pending_labels.is_empty() {
+            return Err(ResolveError::TrailingLabels(
+                pending_labels.into_iter().map(String::from).collect(),
+            ));
+        }
+
+        // Second pass: resolve branch targets in place
+        for (instruction, label) in instructions.iter_mut().zip(branch_labels.iter()) {
+            if let Some(label) = label {
+                let target =
+                    label_to_index
+                        .get(label)
+                        .copied()
+                        .ok_or_else(|| ResolveError::UndefinedLabel {
+                            label: label.to_string(),
+                            line: instruction.line_number,
+                        })?;
+                instruction.branch_target = Some(target);
+            }
+        }
+
+        Ok(instructions)
+    }
+
+    /// Access the parsed lines.
+    pub fn lines(&self) -> &[ParsedLine<'a>] {
+        &self.lines
     }
 
     /// Parse a single line of assembly
@@ -225,8 +292,7 @@ impl<'a> Parser<'a> {
         if line.is_empty() {
             return ParsedLine {
                 label: None,
-                instruction: None,
-                directive: None,
+                statement: Statement::Empty,
                 line_number,
                 original,
             };
@@ -236,17 +302,16 @@ impl<'a> Parser<'a> {
         let mut rest = line;
 
         // Check for label (ends with ':')
-        if let Some(colon_pos) = Self::find_label_colon(line) {
-            label = Some(line[..colon_pos].trim());
-            rest = line[colon_pos + 1..].trim();
+        if let Some(colon_position) = Self::find_label_colon(line) {
+            label = Some(line[..colon_position].trim());
+            rest = line[colon_position + 1..].trim();
         }
 
         // Empty after label
         if rest.is_empty() {
             return ParsedLine {
                 label,
-                instruction: None,
-                directive: None,
+                statement: Statement::Empty,
                 line_number,
                 original,
             };
@@ -256,8 +321,7 @@ impl<'a> Parser<'a> {
         if rest.starts_with('.') {
             return ParsedLine {
                 label,
-                instruction: None,
-                directive: Some(Directive::parse(rest)),
+                statement: Statement::Directive,
                 line_number,
                 original,
             };
@@ -266,8 +330,7 @@ impl<'a> Parser<'a> {
         // Otherwise it's an instruction
         ParsedLine {
             label,
-            instruction: Some(Instruction::parse(rest)),
-            directive: None,
+            statement: Statement::Instruction(UnresolvedInstruction::parse(rest)),
             line_number,
             original,
         }
@@ -333,62 +396,6 @@ impl<'a> Parser<'a> {
         }
 
         None
-    }
-}
-
-/// Extracted instruction info for CFG construction.
-///
-/// Owns its data (no lifetimes) so the resulting CFG is `'static`.
-/// Implements [`InstructionInfo`] to enable generic CFG building.
-pub struct IndexedParsedLine {
-    /// Index into the parsed lines array
-    pub index: usize,
-    /// Mnemonic of the instruction (if any)
-    pub mnemonic: Option<String>,
-    /// Branch target label (if this is a branch instruction)
-    pub branch_target: Option<String>,
-    /// Label at this line (if any)
-    pub label: Option<String>,
-}
-
-impl IndexedParsedLine {
-    /// Create indexed lines from a slice of parsed lines
-    pub fn from_lines(lines: &[ParsedLine<'_>]) -> Vec<Self> {
-        lines
-            .iter()
-            .enumerate()
-            .map(|(index, line)| Self {
-                index,
-                mnemonic: line.instruction.as_ref().map(|i| i.mnemonic.to_string()),
-                branch_target: line
-                    .instruction
-                    .as_ref()
-                    .and_then(|i| i.get_branch_target())
-                    .map(|s| s.to_string()),
-                label: line.label.map(|s| s.to_string()),
-            })
-            .collect()
-    }
-}
-
-impl InstructionInfo for IndexedParsedLine {
-    // type Position = usize;
-    type Target = String;
-
-    // fn position(&self) -> usize {
-    //     self.index
-    // }
-
-    fn mnemonic(&self) -> Option<&str> {
-        self.mnemonic.as_deref()
-    }
-
-    fn branch_target(&self) -> Option<String> {
-        self.branch_target.clone()
-    }
-
-    fn as_target(&self) -> Option<String> {
-        self.label.clone()
     }
 }
 

@@ -49,8 +49,8 @@ fn assemble(source: &str) -> Vec<u8> {
 /// Instruments the assembly using gas-instrument, then assembles it.
 fn instrument_and_assemble(source: &str) -> Vec<u8> {
     let lines = parser::parse(source);
-    let cfg = cfg::build(&lines);
-    let instrumented = instrument::instrument(&lines, &cfg);
+    let cfg_result = cfg::build(&lines).expect("CFG build failed");
+    let instrumented = instrument::instrument(&lines, &cfg_result);
 
     assemble(&instrumented)
 }

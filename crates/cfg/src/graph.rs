@@ -1,25 +1,21 @@
 //! CFG data structures
-//!
-//! Generic CFG types parameterized by instruction type.
 
 use std::{collections::HashMap, ops::Range};
 
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::InstructionInfo;
-
 /// Data stored in each basic block node
 #[derive(Debug)]
-pub struct BlockData<I: InstructionInfo> {
-    /// Label/target at the start of this block (if any)
-    pub label: Option<I::Target>,
+pub struct BlockData {
+    /// Target identifier at the start of this block (instruction index or byte offset)
+    pub label: Option<usize>,
 
     /// Range of indices into the original instruction list.
     /// E.g., for a block containing instructions 3, 4, 5 this would be `3..6`
     pub instruction_range: Range<usize>,
 
-    /// Branch target of the back-edge (label or offset), if this block ends with one.
-    pub back_edge_target: Option<I::Target>,
+    /// Branch target of the back-edge, if this block ends with one.
+    pub back_edge_target: Option<usize>,
 
     /// Index of the block's terminator instruction (branch or return).
     /// `None` if the block falls through without an explicit terminator.
@@ -30,18 +26,18 @@ pub struct BlockData<I: InstructionInfo> {
 }
 
 /// Control flow graph backed by petgraph
-pub struct Cfg<I: InstructionInfo> {
+pub struct Cfg {
     /// The underlying directed graph
-    graph: DiGraph<BlockData<I>, ()>,
-    /// Map from target (label or offset) to block node
-    target_to_block: HashMap<I::Target, NodeIndex>,
+    graph: DiGraph<BlockData, ()>,
+    /// Map from target (instruction index or byte offset) to block node
+    target_to_block: HashMap<usize, NodeIndex>,
 }
 
-impl<I: InstructionInfo> Cfg<I> {
+impl Cfg {
     /// Create a new CFG from components (used by builder)
     pub(crate) fn new(
-        graph: DiGraph<BlockData<I>, ()>,
-        target_to_block: HashMap<I::Target, NodeIndex>,
+        graph: DiGraph<BlockData, ()>,
+        target_to_block: HashMap<usize, NodeIndex>,
     ) -> Self {
         Self {
             graph,
@@ -59,8 +55,8 @@ impl<I: InstructionInfo> Cfg<I> {
         self.graph.node_count()
     }
 
-    /// Get block by target (label string or byte offset)
-    pub fn block_by_target(&self, target: &I::Target) -> Option<NodeIndex> {
+    /// Get block by target (instruction index or byte offset)
+    pub fn block_by_target(&self, target: &usize) -> Option<NodeIndex> {
         self.target_to_block.get(target).copied()
     }
 
@@ -70,7 +66,7 @@ impl<I: InstructionInfo> Cfg<I> {
     }
 
     /// Get the target of the back-edge (if any)
-    pub fn back_edge_target(&self, block: NodeIndex) -> Option<&I::Target> {
+    pub fn back_edge_target(&self, block: NodeIndex) -> Option<&usize> {
         self.graph[block].back_edge_target.as_ref()
     }
 

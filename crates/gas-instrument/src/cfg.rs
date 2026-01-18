@@ -1,16 +1,28 @@
 //! Control Flow Graph for text assembly
 //!
-//! Re-exports from the generic `cfg` crate with text-assembly-specific helpers.
+//! Re-exports from the `cfg` crate with text-assembly-specific helpers.
 
-use crate::parser::{IndexedParsedLine, ParsedLine};
+use crate::parser::{ParsedAssembly, ResolvedInstruction, ResolveError};
 
-/// Type alias for text assembly CFG
-pub type Cfg = cfg::Cfg<IndexedParsedLine>;
+/// Result of building a CFG from parsed assembly
+pub struct CfgResult {
+    /// The control flow graph
+    pub cfg: cfg::Cfg,
+    /// The resolved instructions (for mapping back to line numbers)
+    pub resolved: Vec<ResolvedInstruction>,
+}
 
-/// Build a CFG from parsed assembly lines
-pub fn build(lines: &[ParsedLine<'_>]) -> Cfg {
-    let indexed = IndexedParsedLine::from_lines(lines);
-    cfg::build_cfg(&indexed)
+/// Build a CFG from parsed assembly
+///
+/// This resolves labels to instruction indices, then builds the CFG.
+/// Returns the CFG and resolved instructions (needed to map instruction
+/// indices back to line numbers for instrumentation).
+///
+/// Returns an error if label resolution fails (undefined labels, trailing labels).
+pub fn build(asm: &ParsedAssembly<'_>) -> Result<CfgResult, ResolveError> {
+    let resolved = asm.resolve()?;
+    let cfg = cfg::build_cfg(&resolved);
+    Ok(CfgResult { cfg, resolved })
 }
 
 // Re-export NodeIndex for convenience
@@ -21,13 +33,13 @@ mod tests {
     use indoc::indoc;
 
     use super::*;
-    use crate::parser;
+    use crate::parser::ParsedAssembly;
 
     #[test]
     fn test_empty_input() {
-        let lines = parser::parse("");
-        let cfg = build(&lines);
-        assert_eq!(cfg.block_count(), 0);
+        let asm = ParsedAssembly::parse("");
+        let result = build(&asm).unwrap();
+        assert_eq!(result.cfg.block_count(), 0);
     }
 
     #[test]
@@ -41,10 +53,10 @@ mod tests {
                 b.lt .Lloop
                 ret
         "};
-        let lines = parser::parse(input);
-        let cfg = build(&lines);
+        let asm = ParsedAssembly::parse(input);
+        let result = build(&asm).unwrap();
 
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        let back_edge_count = result.cfg.blocks().filter(|&b| result.cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 1, "Should have exactly one back-edge");
     }
 
@@ -63,10 +75,10 @@ mod tests {
                 b.lt .Louter
                 ret
         "};
-        let lines = parser::parse(input);
-        let cfg = build(&lines);
+        let asm = ParsedAssembly::parse(input);
+        let result = build(&asm).unwrap();
 
-        let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+        let back_edge_count = result.cfg.blocks().filter(|&b| result.cfg.has_back_edge(b)).count();
         assert_eq!(back_edge_count, 2, "Should have two back-edges");
     }
 
@@ -79,13 +91,17 @@ mod tests {
                 b.lt .Lloop
                 ret
         "};
-        let lines = parser::parse(input);
-        let cfg = build(&lines);
+        let asm = ParsedAssembly::parse(input);
+        let result = build(&asm).unwrap();
 
-        let loop_block = cfg.block_by_target(&".Lloop".to_string()).unwrap();
+        // After resolution:
+        // - index 0: add (was .Lloop)
+        // - index 1: b.lt (back-edge to index 0)
+        // - index 2: ret
+        let loop_block = result.cfg.block_by_target(&0).unwrap();
         assert_eq!(
-            cfg.back_edge_target(loop_block),
-            Some(&".Lloop".to_string())
+            result.cfg.back_edge_target(loop_block),
+            Some(&0) // back-edge targets instruction index 0
         );
     }
 }

@@ -171,19 +171,10 @@ impl DecodedInstruction {
 /// Implementation of InstructionInfo for generic CFG building.
 ///
 /// For binary instructions:
-/// - Position is byte offset
-/// - Target is byte offset (for branch targets)
-/// - No labels (binary doesn't have symbolic labels)
+/// - Target is byte offset (for both positions and branch targets)
 impl InstructionInfo for DecodedInstruction {
-    // type Position = usize;
-    type Target = usize;
-
-    // fn position(&self) -> usize {
-    //     self.offset
-    // }
-
-    fn mnemonic(&self) -> Option<&str> {
-        Some(&self.mnemonic)
+    fn mnemonic(&self) -> &str {
+        &self.mnemonic
     }
 
     fn branch_target(&self) -> Option<usize> {
@@ -193,8 +184,8 @@ impl InstructionInfo for DecodedInstruction {
         })
     }
 
-    fn as_target(&self) -> Option<Self::Target> {
-        Some(self.offset)
+    fn as_target(&self) -> usize {
+        self.offset
     }
 }
 

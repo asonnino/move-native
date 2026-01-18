@@ -28,8 +28,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    cfg::{Cfg, NodeIndex},
-    parser::ParsedLine,
+    cfg::{CfgResult, NodeIndex},
+    parser::{ParsedLine, ResolvedInstruction, Statement},
 };
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
@@ -51,14 +51,15 @@ const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 /// .Lok_M:
 /// <original branch>
 /// ```
-pub fn instrument(lines: &[ParsedLine<'_>], cfg: &Cfg) -> String {
-    Instrumenter::new(lines, cfg).run()
+pub fn instrument(lines: &[ParsedLine<'_>], cfg_result: &CfgResult) -> String {
+    Instrumenter::new(lines, cfg_result).run()
 }
 
 /// State for instrumenting assembly with gas checks
 struct Instrumenter<'a> {
     lines: &'a [ParsedLine<'a>],
-    cfg: &'a Cfg,
+    cfg: &'a cfg::Cfg,
+    resolved: &'a [ResolvedInstruction],
     existing_labels: HashSet<String>,
     label_counter: usize,
     output: String,
@@ -66,14 +67,15 @@ struct Instrumenter<'a> {
 
 impl<'a> Instrumenter<'a> {
     /// Creates a new instrumenter, collecting existing labels to avoid collisions.
-    fn new(lines: &'a [ParsedLine<'a>], cfg: &'a Cfg) -> Self {
+    fn new(lines: &'a [ParsedLine<'a>], cfg_result: &'a CfgResult) -> Self {
         let existing_labels = lines
             .iter()
             .filter_map(|line| line.label.map(|s| s.to_string()))
             .collect();
         Self {
             lines,
-            cfg,
+            cfg: &cfg_result.cfg,
+            resolved: &cfg_result.resolved,
             existing_labels,
             label_counter: 0,
             output: String::new(),
@@ -85,7 +87,9 @@ impl<'a> Instrumenter<'a> {
         let back_edge_lines = self.find_back_edge_lines();
 
         for (idx, line) in self.lines.iter().enumerate() {
-            if let Some(&block_idx) = back_edge_lines.get(&idx) {
+            // Line indices are 0-based, line_number is 1-based
+            let line_number = idx + 1;
+            if let Some(&block_idx) = back_edge_lines.get(&line_number) {
                 self.emit_instrumented_line(line, block_idx);
             } else {
                 self.emit_original_line(line);
@@ -95,14 +99,17 @@ impl<'a> Instrumenter<'a> {
         self.output
     }
 
-    /// Maps line indices to block indices for lines containing back-edge branches.
+    /// Maps line numbers (1-indexed) to block indices for lines containing back-edge branches.
     fn find_back_edge_lines(&self) -> HashMap<usize, NodeIndex> {
         let mut back_edge_lines = HashMap::new();
 
         for block_idx in self.cfg.blocks() {
             if self.cfg.has_back_edge(block_idx) {
                 if let Some(terminator_idx) = self.cfg.terminator_index(block_idx) {
-                    back_edge_lines.insert(terminator_idx, block_idx);
+                    // terminator_idx is an instruction index in the resolved stream
+                    // Map it back to the original line number
+                    let line_number = self.resolved[terminator_idx].line_number;
+                    back_edge_lines.insert(line_number, block_idx);
                 }
             }
         }
@@ -132,10 +139,9 @@ impl<'a> Instrumenter<'a> {
         self.output.push_str(&format!("{}:\n", label));
 
         // Emit the original back-edge branch instruction
-        let instruction = line
-            .instruction
-            .as_ref()
-            .expect("back-edge terminator must have instruction");
+        let Statement::Instruction(ref instruction) = line.statement else {
+            panic!("back-edge terminator must have instruction");
+        };
         self.output.push_str(&format!(
             "    {} {}\n",
             instruction.mnemonic,
@@ -194,18 +200,18 @@ impl<'a> Instrumenter<'a> {
 mod tests {
     use indoc::indoc;
 
-    use crate::{cfg, cfg::Cfg, instrument::Instrumenter, parser, ParsedLine};
+    use crate::{cfg, cfg::CfgResult, instrument::Instrumenter, parser::ParsedAssembly};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
-    fn build_cfg(input: &str) -> (Cfg, Vec<ParsedLine>) {
-        let lines = parser::parse(input);
-        let cfg = cfg::build(&lines);
-        (cfg, lines)
+    fn build_cfg(input: &str) -> (CfgResult, ParsedAssembly) {
+        let asm = ParsedAssembly::parse(input);
+        let cfg_result = cfg::build(&asm).unwrap();
+        (cfg_result, asm)
     }
 
     #[test]
     fn test_instrument_simple_loop() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .global _test_loop
             .align 4
 
@@ -220,7 +226,7 @@ mod tests {
 
                 ret
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         assert!(output.contains("sub x23, x23, #"));
         assert!(output.contains("tbz x23, #63,"));
@@ -230,13 +236,13 @@ mod tests {
 
     #[test]
     fn test_no_instrumentation_without_loops() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .global _simple
             _simple:
                 mov x0, #42
                 ret
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         assert!(!output.contains("sub x23"));
     }
@@ -278,7 +284,7 @@ mod tests {
     fn test_nested_loop_no_double_charging() {
         // Inner loop: 3 instructions (add, cmp, b.lt)
         // Outer loop: 3 instructions (add, cmp, b.lt)
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             _nested:
                 mov x0, #0
             .Louter:
@@ -292,7 +298,7 @@ mod tests {
                 b.lt .Louter
                 ret
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         // Should have exactly 2 gas checks (one per back-edge)
         assert_eq!(output.matches("tbz x23, #63").count(), 2);
@@ -308,7 +314,7 @@ mod tests {
     fn test_nested_loop_instruction_counts() {
         // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
         // Outer block: add, cmp, b.lt = 3 instructions
-        let (cfg, _) = build_cfg(indoc! {"
+        let (cfg_result, _asm) = build_cfg(indoc! {"
             .Louter:
                 mov x1, #0
             .Linner:
@@ -323,15 +329,21 @@ mod tests {
                 ret
         "});
 
+        // After resolution, .Linner is at index 1, .Louter is at index 0
+        // (mov is at 0, add at 1, nop at 2, nop at 3, cmp at 4, b.lt at 5, ...)
+        let cfg = &cfg_result.cfg;
         let mut inner_count = None;
         let mut outer_count = None;
 
         for block_idx in cfg.blocks() {
             if cfg.has_back_edge(block_idx) {
                 let count = cfg.instruction_count(block_idx);
-                if cfg.back_edge_target(block_idx).map(|s| s.as_str()) == Some(".Linner") {
+                // back_edge_target returns instruction index now
+                // .Linner block starts at instruction index 1
+                // .Louter block starts at instruction index 0
+                if cfg.back_edge_target(block_idx) == Some(&1) {
                     inner_count = Some(count);
-                } else if cfg.back_edge_target(block_idx).map(|s| s.as_str()) == Some(".Louter") {
+                } else if cfg.back_edge_target(block_idx) == Some(&0) {
                     outer_count = Some(count);
                 }
             }
@@ -343,12 +355,12 @@ mod tests {
 
     #[test]
     fn test_label_uses_unique_prefix() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .Lloop:
                 add x0, x0, #1
                 b .Lloop
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         assert!(output.contains(".L__gas_ok_"));
         assert!(!output.contains(".Lok_"));
@@ -356,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_label_collision_avoidance() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .L__gas_ok_0:
                 nop
             .L__gas_ok_1:
@@ -365,7 +377,7 @@ mod tests {
                 add x0, x0, #1
                 b .Lloop
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         // Should skip 0 and 1 (existing) and use 2
         assert!(output.contains(".L__gas_ok_2"));
@@ -392,11 +404,11 @@ mod tests {
 
     #[test]
     fn test_self_loop_instrumentation() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .Lspin:
                 b .Lspin
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         assert!(output.contains("sub x23, x23, #1"));
         assert!(output.contains("tbz x23, #63"));
@@ -406,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_cbz_loop_instrumentation() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             _loop:
                 mov x0, #10
             .Lloop:
@@ -414,7 +426,7 @@ mod tests {
                 cbnz x0, .Lloop
                 ret
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         assert!(output.contains("sub x23, x23, #2"));
         assert!(output.contains("cbnz x0, .Lloop"));
@@ -422,12 +434,12 @@ mod tests {
 
     #[test]
     fn test_exact_gas_check_sequence() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .Lloop:
                 nop
                 b .Lloop
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         // Verify exact sequence: original instructions, then gas check before back-edge
         let expected_sequence = indoc! {"
@@ -445,13 +457,13 @@ mod tests {
     #[test]
     fn test_label_on_back_edge_preserved() {
         // When the back-edge instruction has a label, it should be preserved
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             .Lloop:
                 nop
             .Lback:
                 b .Lloop
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         // The .Lback label should appear before the gas check
         assert!(output.contains(".Lback:"));
@@ -461,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_multiple_independent_loops() {
-        let (cfg, lines) = build_cfg(indoc! {"
+        let (cfg_result, asm) = build_cfg(indoc! {"
             _func:
                 mov x0, #0
             .Lloop1:
@@ -475,7 +487,7 @@ mod tests {
                 b.lt .Lloop2
                 ret
         "});
-        let output = crate::instrument(&lines, &cfg);
+        let output = crate::instrument(asm.lines(), &cfg_result);
 
         // Both loops should be instrumented
         assert_eq!(output.matches("tbz x23, #63").count(), 2);

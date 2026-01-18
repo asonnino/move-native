@@ -10,8 +10,8 @@
 //! The CFG builder is generic over instruction types via the [`InstructionInfo`] trait.
 //! Both text assembly (gas-instrument) and binary (native-verifier) implement this trait:
 //!
-//! - Text assembly: `IndexedParsedLine` with `Target = String` (labels)
-//! - Binary: `DecodedInstruction` with `Target = usize` (byte offsets)
+//! - Text assembly: `ResolvedInstruction` (instruction indices after label resolution)
+//! - Binary: `DecodedInstruction` (byte offsets)
 //!
 //! # Modules
 //!
