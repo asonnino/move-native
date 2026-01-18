@@ -29,8 +29,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     parser::{ParsedLine, ResolvedInstruction, Statement},
+    BlockIndex,
     CfgResult,
-    NodeIndex,
 };
 
 /// Errors that can occur during instrumentation
@@ -128,7 +128,7 @@ impl<'a> Instrumenter<'a> {
     }
 
     /// Maps line numbers (1-indexed) to block indices for lines containing back-edge branches.
-    fn find_back_edge_lines(&self) -> Result<HashMap<usize, NodeIndex>, InstrumentError> {
+    fn find_back_edge_lines(&self) -> Result<HashMap<usize, BlockIndex>, InstrumentError> {
         let mut back_edge_lines = HashMap::new();
 
         for block_idx in self.cfg.blocks() {
@@ -154,7 +154,7 @@ impl<'a> Instrumenter<'a> {
     fn emit_instrumented_line(
         &mut self,
         line: &ParsedLine,
-        block_idx: NodeIndex,
+        block_idx: BlockIndex,
         line_number: usize,
     ) -> Result<(), InstrumentError> {
         let instruction_count = self.cfg.instruction_count(block_idx);

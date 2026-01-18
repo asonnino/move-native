@@ -11,7 +11,7 @@
 pub mod instrument;
 pub mod parser;
 
-pub use cfg::NodeIndex;
+pub use cfg::BlockIndex;
 pub use instrument::{instrument, InstrumentError};
 pub use parser::{
     ParsedAssembly,

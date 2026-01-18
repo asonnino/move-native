@@ -5,10 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use petgraph::graph::{DiGraph, NodeIndex};
-
 use crate::{
-    graph::{BlockData, Cfg},
+    graph::{BlockData, BlockIndex, Cfg, Graph},
     CfgInstruction,
 };
 
@@ -23,9 +21,9 @@ pub fn build_cfg<I: CfgInstruction>(instructions: &[I]) -> Cfg {
 /// Builder for constructing a CFG from instructions
 struct CfgBuilder<'a, I: CfgInstruction> {
     instructions: &'a [I],
-    graph: DiGraph<BlockData, ()>,
-    target_to_block: HashMap<usize, NodeIndex>,
-    nodes: Vec<NodeIndex>,
+    graph: Graph,
+    target_to_block: HashMap<usize, BlockIndex>,
+    nodes: Vec<BlockIndex>,
 }
 
 impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
@@ -33,7 +31,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
     fn new(instructions: &'a [I]) -> Self {
         Self {
             instructions,
-            graph: DiGraph::new(),
+            graph: Graph::default(),
             target_to_block: HashMap::new(),
             nodes: Vec::new(),
         }

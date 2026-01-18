@@ -5,10 +5,9 @@ use std::{
     ops::Range,
 };
 
-use petgraph::{
-    graph::{DiGraph, NodeIndex},
-    visit::Bfs,
-};
+pub type BlockIndex = petgraph::graph::NodeIndex;
+
+pub(crate) type Graph = petgraph::graph::DiGraph<BlockData, ()>;
 
 /// Data stored in each basic block node
 #[derive(Debug)]
@@ -34,17 +33,14 @@ pub struct BlockData {
 /// Control flow graph backed by petgraph
 pub struct Cfg {
     /// The underlying directed graph
-    graph: DiGraph<BlockData, ()>,
+    graph: Graph,
     /// Map from target (instruction index or byte offset) to block node
-    target_to_block: HashMap<usize, NodeIndex>,
+    target_to_block: HashMap<usize, BlockIndex>,
 }
 
 impl Cfg {
     /// Create a new CFG from components (used by builder)
-    pub(crate) fn new(
-        graph: DiGraph<BlockData, ()>,
-        target_to_block: HashMap<usize, NodeIndex>,
-    ) -> Self {
+    pub(crate) fn new(graph: Graph, target_to_block: HashMap<usize, BlockIndex>) -> Self {
         Self {
             graph,
             target_to_block,
@@ -52,7 +48,7 @@ impl Cfg {
     }
 
     /// Iterate over all block indices
-    pub fn blocks(&self) -> impl Iterator<Item = NodeIndex> {
+    pub fn blocks(&self) -> impl Iterator<Item = BlockIndex> {
         self.graph.node_indices()
     }
 
@@ -62,37 +58,37 @@ impl Cfg {
     }
 
     /// Get block by target (instruction index or byte offset)
-    pub fn block_by_target(&self, target: &usize) -> Option<NodeIndex> {
+    pub fn block_by_target(&self, target: &usize) -> Option<BlockIndex> {
         self.target_to_block.get(target).copied()
     }
 
     /// Check if a block has a back-edge
-    pub fn has_back_edge(&self, block: NodeIndex) -> bool {
+    pub fn has_back_edge(&self, block: BlockIndex) -> bool {
         self.graph[block].back_edge_target.is_some()
     }
 
     /// Get the target of the back-edge (if any)
-    pub fn back_edge_target(&self, block: NodeIndex) -> Option<&usize> {
+    pub fn back_edge_target(&self, block: BlockIndex) -> Option<&usize> {
         self.graph[block].back_edge_target.as_ref()
     }
 
     /// Get the index of the block's terminator instruction
-    pub fn terminator_index(&self, block: NodeIndex) -> Option<usize> {
+    pub fn terminator_index(&self, block: BlockIndex) -> Option<usize> {
         self.graph[block].terminator_index
     }
 
     /// Get the number of actual instructions in a block
-    pub fn instruction_count(&self, block: NodeIndex) -> usize {
+    pub fn instruction_count(&self, block: BlockIndex) -> usize {
         self.graph[block].instruction_count
     }
 
     /// Get the instruction range for a block
-    pub fn instruction_range(&self, block: NodeIndex) -> &Range<usize> {
+    pub fn instruction_range(&self, block: BlockIndex) -> &Range<usize> {
         &self.graph[block].instruction_range
     }
 
     /// Get all blocks reachable from the entry point (first block)
-    pub fn reachable_blocks(&self) -> HashSet<NodeIndex> {
+    pub fn reachable_blocks(&self) -> HashSet<BlockIndex> {
         let mut reachable = HashSet::new();
 
         if self.graph.node_count() == 0 {
@@ -100,8 +96,8 @@ impl Cfg {
         }
 
         // Entry point is the first block (node index 0)
-        let entry = NodeIndex::new(0);
-        let mut bfs = Bfs::new(&self.graph, entry);
+        let entry = BlockIndex::new(0);
+        let mut bfs = petgraph::visit::Bfs::new(&self.graph, entry);
 
         while let Some(node) = bfs.next(&self.graph) {
             reachable.insert(node);
@@ -111,7 +107,7 @@ impl Cfg {
     }
 
     /// Get all unreachable blocks (blocks not reachable from entry)
-    pub fn unreachable_blocks(&self) -> Vec<NodeIndex> {
+    pub fn unreachable_blocks(&self) -> Vec<BlockIndex> {
         let reachable = self.reachable_blocks();
         self.graph
             .node_indices()
