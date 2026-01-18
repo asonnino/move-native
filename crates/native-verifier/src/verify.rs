@@ -89,18 +89,30 @@ impl<'a> Verifier<'a> {
         }
 
         // Branch target validation
-        if let Some(target) = instruction.branch_target() {
-            if !self.valid_offsets.contains(&target) {
-                result.extend([VerificationError::InvalidBranchTarget {
-                    branch_offset: instruction.offset,
-                    target,
-                }]);
-            }
+        if instruction.is_branch() && !instruction.is_indirect() && !instruction.is_call() {
+            // Direct branch must have a valid, computable target
+            match instruction.branch_target() {
+                Some(target) => {
+                    if !self.valid_offsets.contains(&target) {
+                        result.extend([VerificationError::InvalidBranchTarget {
+                            branch_offset: instruction.offset,
+                            target,
+                        }]);
+                    }
 
-            // Gas sequence check (only for back-edges)
-            if target <= instruction.offset {
-                if let Some(error) = self.verify_gas_sequence_before(index, target) {
-                    result.extend([error]);
+                    // Gas sequence check (only for back-edges)
+                    if target <= instruction.offset {
+                        if let Some(error) = self.verify_gas_sequence_before(index, target) {
+                            result.extend([error]);
+                        }
+                    }
+                }
+                None => {
+                    // Direct branch with no valid target - likely negative/out-of-bounds offset
+                    result.extend([VerificationError::InvalidBranchTarget {
+                        branch_offset: instruction.offset,
+                        target: 0, // TODO: Placeholder - actual target could not be computed
+                    }]);
                 }
             }
         }
@@ -176,6 +188,25 @@ impl<'a> Verifier<'a> {
                     brk_instruction.mnemonic()
                 ),
             });
+        }
+
+        // Verify no branches target the middle of the gas sequence (tbz or brk).
+        // A branch targeting tbz or brk could allow skipping the gas decrement.
+        let tbz_offset = tbz_instruction.offset;
+        let brk_offset = brk_instruction.offset;
+
+        for instr in self.instructions.iter() {
+            if let Some(target) = instr.branch_target() {
+                if target == tbz_offset || target == brk_offset {
+                    return Some(VerificationError::MalformedGasCheck {
+                        offset: back_edge.offset,
+                        reason: format!(
+                            "branch at {:#x} targets inside gas check sequence at {:#x}",
+                            instr.offset, target
+                        ),
+                    });
+                }
+            }
         }
 
         None
@@ -302,7 +333,10 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, VerificationError::UnreachableCode { .. }))
             .collect();
-        assert!(!unreachable_errors.is_empty(), "should detect unreachable code");
+        assert!(
+            !unreachable_errors.is_empty(),
+            "should detect unreachable code"
+        );
         // The unreachable instruction is at offset 4
         assert!(result
             .errors()
@@ -323,5 +357,58 @@ mod tests {
             .errors()
             .iter()
             .any(|e| matches!(e, VerificationError::UnreachableCode { .. })));
+    }
+
+    // Security tests for vulnerability fixes
+
+    #[test]
+    fn test_zero_gas_decrement_causes_error() {
+        // sub x23, x23, #0 should cause InvalidGasModification
+        // because it writes to x23 but is NOT a valid gas decrement
+        let code = [0xf7, 0x02, 0x00, 0xd1]; // sub x23, x23, #0
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })),
+            "sub x23, x23, #0 should be flagged as invalid gas modification"
+        );
+    }
+
+    #[test]
+    fn test_x23_writeback_causes_error() {
+        // ldr x0, [x23], #8 should cause InvalidGasModification
+        let code = [0xe0, 0x86, 0x40, 0xf8]; // ldr x0, [x23], #8
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })),
+            "post-index writeback to x23 should be flagged as invalid gas modification"
+        );
+    }
+
+    #[test]
+    fn test_branch_to_out_of_bounds_negative() {
+        // A branch at offset 0 that tries to branch to a negative address
+        // b #-4 at offset 0 would target -4 which is invalid
+        // b #-4 -> 0x17ffffff
+        let code = [0xff, 0xff, 0xff, 0x17];
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidBranchTarget { .. })),
+            "branch to negative address should be rejected"
+        );
     }
 }

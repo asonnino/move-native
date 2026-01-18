@@ -54,8 +54,35 @@ impl DecodedInstruction {
         ClassifiedOpcode::from_opcode(self.opcode()).check_result
     }
 
+    /// Check if any operand has x23 writeback via load/store addressing modes
+    ///
+    /// Load/store instructions can modify the base register through pre-index or post-index
+    /// addressing modes, e.g., `ldr x0, [x23], #8` (post-index) or `ldr x0, [x23, #8]!` (pre-index
+    /// with writeback).
+    fn has_x23_writeback(&self) -> bool {
+        for op in self.operands() {
+            match op {
+                // Post-index always writes back to base register
+                Operand::RegPostIndex(reg, _) | Operand::RegPostIndexReg(reg, _)
+                    if *reg == 23 =>
+                {
+                    return true;
+                }
+                // Pre-index writes back only if writeback flag is true
+                Operand::RegPreIndex(reg, _, true) if *reg == 23 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Check if this instruction writes to register x23 (gas register)
     pub fn writes_to_x23(&self) -> bool {
+        // Check for writeback via load/store addressing modes
+        if self.has_x23_writeback() {
+            return true;
+        }
+
         // First operand is typically the destination for most instructions
         if is_x23(&self.operands()[0]) {
             // Check if this is a write operation (exclude compares and branches)
@@ -67,6 +94,9 @@ impl DecodedInstruction {
     }
 
     /// Check if this is a SUB instruction targeting x23 (gas decrement)
+    ///
+    /// Returns true only if this is `sub x23, x23, #N` where N > 0.
+    /// A decrement of 0 would allow infinite loops without gas consumption.
     pub fn is_gas_decrement(&self) -> bool {
         if !matches!(self.opcode(), Opcode::SUB | Opcode::SUBS) {
             return false;
@@ -75,7 +105,16 @@ impl DecodedInstruction {
         let ops = self.operands();
 
         // Check: sub x23, x23, #imm
-        is_x23(&ops[0]) && is_x23(&ops[1])
+        if !is_x23(&ops[0]) || !is_x23(&ops[1]) {
+            return false;
+        }
+
+        // Ensure decrement amount > 0
+        match &ops[2] {
+            Operand::Immediate(imm) => *imm > 0,
+            Operand::Imm64(imm) => *imm > 0,
+            _ => false, // Must be an immediate operand
+        }
     }
 
     #[cfg(test)]
@@ -417,5 +456,81 @@ mod tests {
         assert_eq!(instr.opcode(), Opcode::RETAA);
         assert!(instr.is_branch());
         assert!(instr.is_indirect());
+    }
+
+    // Security tests for vulnerability fixes
+
+    #[test]
+    fn test_detect_x23_writeback_post_index_load() {
+        // ldr x0, [x23], #8 -> 0xf84086e0
+        // Malicious: modifies x23 via post-index writeback
+        let code = [0xe0, 0x86, 0x40, 0xf8];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].writes_to_x23(),
+            "should detect x23 modification via post-index load"
+        );
+    }
+
+    #[test]
+    fn test_detect_x23_writeback_post_index_store() {
+        // str x0, [x23], #8 -> 0xf80086e0
+        // Malicious: modifies x23 via post-index writeback
+        let code = [0xe0, 0x86, 0x00, 0xf8];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].writes_to_x23(),
+            "should detect x23 modification via post-index store"
+        );
+    }
+
+    #[test]
+    fn test_detect_x23_writeback_pre_index() {
+        // ldr x0, [x23, #8]! -> 0xf8408ee0
+        // Malicious: modifies x23 via pre-index writeback
+        let code = [0xe0, 0x8e, 0x40, 0xf8];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].writes_to_x23(),
+            "should detect x23 modification via pre-index writeback"
+        );
+    }
+
+    #[test]
+    fn test_zero_gas_decrement_rejected() {
+        // sub x23, x23, #0 -> 0xd10002f7
+        // Malicious: appears to be gas decrement but doesn't actually decrease gas
+        let code = [0xf7, 0x02, 0x00, 0xd1];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            !instructions[0].is_gas_decrement(),
+            "sub x23, x23, #0 should NOT be a valid gas decrement"
+        );
+        assert!(
+            instructions[0].writes_to_x23(),
+            "sub x23, x23, #0 should still be detected as x23 write"
+        );
+    }
+
+    #[test]
+    fn test_no_writeback_without_flag() {
+        // ldr x0, [x23, #8] (no writeback - no '!') -> 0xf94006e0
+        // This should NOT modify x23
+        let code = [0xe0, 0x06, 0x40, 0xf9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            !instructions[0].writes_to_x23(),
+            "ldr without writeback should not modify x23"
+        );
     }
 }
