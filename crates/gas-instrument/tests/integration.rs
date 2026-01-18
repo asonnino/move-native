@@ -11,7 +11,7 @@
 //! Unlike unit tests (which use inline assembly strings), these tests serve as
 //! end-to-end validation and documentation of expected behavior on real files.
 
-use gas_instrument::{cfg, instrument, ParsedAssembly};
+use gas_instrument::{build_cfg, instrument, ParsedAssembly};
 
 const TEST_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/test_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
@@ -24,8 +24,8 @@ const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_l
 #[test]
 fn test_loop_instrumentation() {
     let asm = ParsedAssembly::parse(TEST_LOOP_ASM);
-    let cfg_result = cfg::build(&asm).unwrap();
-    let output = instrument::instrument(asm.lines(), &cfg_result);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     // Verify gas check sequence was inserted
     assert!(output.contains("sub x23, x23"), "missing gas decrement");
@@ -45,7 +45,7 @@ fn test_loop_instrumentation() {
 #[test]
 fn test_back_edge_detection() {
     let asm = ParsedAssembly::parse(TEST_LOOP_ASM);
-    let cfg_result = cfg::build(&asm).unwrap();
+    let cfg_result = build_cfg(&asm).unwrap();
     let cfg = &cfg_result.cfg;
 
     // Should detect exactly one back-edge (b.lt .Lloop)
@@ -71,9 +71,9 @@ fn test_back_edge_detection() {
 #[test]
 fn test_nested_loops_instrumentation() {
     let asm = ParsedAssembly::parse(NESTED_LOOPS_ASM);
-    let cfg_result = cfg::build(&asm).unwrap();
+    let cfg_result = build_cfg(&asm).unwrap();
     let cfg = &cfg_result.cfg;
-    let output = instrument::instrument(asm.lines(), &cfg_result);
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     // Should have exactly 2 back-edges (inner and outer)
     let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
@@ -126,7 +126,7 @@ fn test_malformed_input_does_not_panic() {
         let asm = ParsedAssembly::parse(input);
         // cfg::build may return an error for some inputs (e.g., undefined labels)
         // but should not panic
-        if let Ok(cfg_result) = cfg::build(&asm) {
+        if let Ok(cfg_result) = build_cfg(&asm) {
             let _ = instrument::instrument(asm.lines(), &cfg_result);
         }
     }
@@ -137,7 +137,7 @@ fn test_malformed_input_does_not_panic() {
 fn test_undefined_label_returns_error() {
     let input = ".Lloop:\n    add x0, x0, #1\n    b .Ltypo\n";
     let asm = ParsedAssembly::parse(input);
-    let result = cfg::build(&asm);
+    let result = build_cfg(&asm);
     assert!(result.is_err(), "expected error for undefined label");
 }
 
@@ -147,8 +147,8 @@ fn test_large_input_does_not_hang() {
     let large_input = "nop\n".repeat(10_000);
 
     let asm = ParsedAssembly::parse(&large_input);
-    let cfg_result = cfg::build(&asm).unwrap();
-    let _ = instrument::instrument(asm.lines(), &cfg_result);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let _ = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     assert_eq!(asm.lines().len(), 10_000);
 }
@@ -164,8 +164,8 @@ fn test_label_collision_does_not_hang() {
     input.push_str(".Lloop:\n    b .Lloop\n");
 
     let asm = ParsedAssembly::parse(&input);
-    let cfg_result = cfg::build(&asm).unwrap();
-    let output = instrument::instrument(asm.lines(), &cfg_result);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     // Should skip 0-99 and use 100
     assert!(output.contains(".L__gas_ok_100:"));

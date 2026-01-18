@@ -28,9 +28,23 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    cfg::{CfgResult, NodeIndex},
     parser::{ParsedLine, ResolvedInstruction, Statement},
+    CfgResult,
+    NodeIndex,
 };
+
+/// Errors that can occur during instrumentation
+#[derive(Debug, thiserror::Error)]
+pub enum InstrumentError {
+    #[error("terminator index {index} exceeds resolved instructions ({count})")]
+    InvalidTerminatorIndex { index: usize, count: usize },
+
+    #[error("back-edge at line {line} is not an instruction")]
+    NonInstructionBackEdge { line: usize },
+
+    #[error("exceeded maximum label generation attempts ({max})")]
+    LabelGenerationExhausted { max: usize },
+}
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
@@ -40,6 +54,9 @@ const MAX_SUB_IMMEDIATE: usize = 4095;
 
 /// Prefix for generated gas check labels (uses double underscore to indicate internal/generated)
 const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
+
+/// Maximum attempts for generating a unique label before giving up
+const MAX_LABEL_ATTEMPTS: usize = 10_000;
 
 /// Instrument assembly with gas checks at back-edges
 ///
@@ -51,7 +68,17 @@ const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 /// .Lok_M:
 /// <original branch>
 /// ```
-pub fn instrument(lines: &[ParsedLine<'_>], cfg_result: &CfgResult) -> String {
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - A terminator index is out of bounds
+/// - A back-edge instruction is not actually an instruction
+/// - Label generation exhausts all attempts (>10,000 collisions)
+pub fn instrument(
+    lines: &[ParsedLine<'_>],
+    cfg_result: &CfgResult,
+) -> Result<String, InstrumentError> {
     Instrumenter::new(lines, cfg_result).run()
 }
 
@@ -84,24 +111,24 @@ impl<'a> Instrumenter<'a> {
     }
 
     /// Processes all lines, inserting gas checks at back-edges.
-    fn run(mut self) -> String {
-        let back_edge_lines = self.find_back_edge_lines();
+    fn run(mut self) -> Result<String, InstrumentError> {
+        let back_edge_lines = self.find_back_edge_lines()?;
 
         for (idx, line) in self.lines.iter().enumerate() {
             // Line indices are 0-based, line_number is 1-based
             let line_number = idx + 1;
             if let Some(&block_idx) = back_edge_lines.get(&line_number) {
-                self.emit_instrumented_line(line, block_idx);
+                self.emit_instrumented_line(line, block_idx, line_number)?;
             } else {
                 self.emit_original_line(line);
             }
         }
 
-        self.output
+        Ok(self.output)
     }
 
     /// Maps line numbers (1-indexed) to block indices for lines containing back-edge branches.
-    fn find_back_edge_lines(&self) -> HashMap<usize, NodeIndex> {
+    fn find_back_edge_lines(&self) -> Result<HashMap<usize, NodeIndex>, InstrumentError> {
         let mut back_edge_lines = HashMap::new();
 
         for block_idx in self.cfg.blocks() {
@@ -109,19 +136,29 @@ impl<'a> Instrumenter<'a> {
                 if let Some(terminator_idx) = self.cfg.terminator_index(block_idx) {
                     // terminator_idx is an instruction index in the resolved stream
                     // Map it back to the original line number
-                    let line_number = self.resolved[terminator_idx].line_number;
-                    back_edge_lines.insert(line_number, block_idx);
+                    let resolved = self.resolved.get(terminator_idx).ok_or(
+                        InstrumentError::InvalidTerminatorIndex {
+                            index: terminator_idx,
+                            count: self.resolved.len(),
+                        },
+                    )?;
+                    back_edge_lines.insert(resolved.line_number, block_idx);
                 }
             }
         }
 
-        back_edge_lines
+        Ok(back_edge_lines)
     }
 
     /// Emits gas check sequence followed by the original branch instruction.
-    fn emit_instrumented_line(&mut self, line: &ParsedLine, block_idx: NodeIndex) {
+    fn emit_instrumented_line(
+        &mut self,
+        line: &ParsedLine,
+        block_idx: NodeIndex,
+        line_number: usize,
+    ) -> Result<(), InstrumentError> {
         let instruction_count = self.cfg.instruction_count(block_idx);
-        let label = self.generate_unique_label();
+        let label = self.generate_unique_label()?;
 
         // Preserve any label on the original line
         if let Some(ref lbl) = line.label {
@@ -141,31 +178,36 @@ impl<'a> Instrumenter<'a> {
 
         // Emit the original back-edge branch instruction
         let Statement::Instruction(ref instruction) = line.statement else {
-            panic!("back-edge terminator must have instruction");
+            return Err(InstrumentError::NonInstructionBackEdge { line: line_number });
         };
         self.output.push_str(&format!(
             "    {} {}\n",
             instruction.mnemonic,
             instruction.operands.join(", ")
         ));
+
+        Ok(())
     }
 
     /// Emits a line unchanged (no gas check needed).
     fn emit_original_line(&mut self, line: &ParsedLine) {
-        self.output.push_str(&line.original);
+        self.output.push_str(line.original);
         self.output.push('\n');
     }
 
     /// Generates a unique label, skipping any that collide with existing labels.
-    fn generate_unique_label(&mut self) -> String {
-        loop {
+    fn generate_unique_label(&mut self) -> Result<String, InstrumentError> {
+        for _ in 0..MAX_LABEL_ATTEMPTS {
             let label = format!("{}{}", GAS_LABEL_PREFIX, self.label_counter);
             self.label_counter += 1;
 
             if !self.existing_labels.contains(&label) {
-                return label;
+                return Ok(label);
             }
         }
+        Err(InstrumentError::LabelGenerationExhausted {
+            max: MAX_LABEL_ATTEMPTS,
+        })
     }
 
     /// Emits sub instruction(s) to decrement gas counter (splits if count > 4095).
@@ -201,18 +243,19 @@ impl<'a> Instrumenter<'a> {
 mod tests {
     use indoc::indoc;
 
-    use crate::{cfg, cfg::CfgResult, instrument::Instrumenter, parser::ParsedAssembly};
+    use super::InstrumentError;
+    use crate::{build_cfg, instrument::Instrumenter, CfgResult, ParsedAssembly};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
-    fn build_cfg(input: &str) -> (CfgResult, ParsedAssembly) {
+    fn parse_and_build(input: &str) -> (CfgResult, ParsedAssembly) {
         let asm = ParsedAssembly::parse(input);
-        let cfg_result = cfg::build(&asm).unwrap();
+        let cfg_result = build_cfg(&asm).unwrap();
         (cfg_result, asm)
     }
 
     #[test]
     fn test_instrument_simple_loop() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .global _test_loop
             .align 4
 
@@ -227,7 +270,7 @@ mod tests {
 
                 ret
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(output.contains("sub x23, x23, #"));
         assert!(output.contains("tbz x23, #63,"));
@@ -237,13 +280,13 @@ mod tests {
 
     #[test]
     fn test_no_instrumentation_without_loops() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .global _simple
             _simple:
                 mov x0, #42
                 ret
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(!output.contains("sub x23"));
     }
@@ -285,7 +328,7 @@ mod tests {
     fn test_nested_loop_no_double_charging() {
         // Inner loop: 3 instructions (add, cmp, b.lt)
         // Outer loop: 3 instructions (add, cmp, b.lt)
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             _nested:
                 mov x0, #0
             .Louter:
@@ -299,7 +342,7 @@ mod tests {
                 b.lt .Louter
                 ret
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         // Should have exactly 2 gas checks (one per back-edge)
         assert_eq!(output.matches("tbz x23, #63").count(), 2);
@@ -315,7 +358,7 @@ mod tests {
     fn test_nested_loop_instruction_counts() {
         // Inner block: add, nop, nop, cmp, b.lt = 5 instructions
         // Outer block: add, cmp, b.lt = 3 instructions
-        let (cfg_result, _asm) = build_cfg(indoc! {"
+        let (cfg_result, _asm) = parse_and_build(indoc! {"
             .Louter:
                 mov x1, #0
             .Linner:
@@ -356,12 +399,12 @@ mod tests {
 
     #[test]
     fn test_label_uses_unique_prefix() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .Lloop:
                 add x0, x0, #1
                 b .Lloop
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(output.contains(".L__gas_ok_"));
         assert!(!output.contains(".Lok_"));
@@ -369,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_label_collision_avoidance() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .L__gas_ok_0:
                 nop
             .L__gas_ok_1:
@@ -378,7 +421,7 @@ mod tests {
                 add x0, x0, #1
                 b .Lloop
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         // Should skip 0 and 1 (existing) and use 2
         assert!(output.contains(".L__gas_ok_2"));
@@ -405,11 +448,11 @@ mod tests {
 
     #[test]
     fn test_self_loop_instrumentation() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .Lspin:
                 b .Lspin
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(output.contains("sub x23, x23, #1"));
         assert!(output.contains("tbz x23, #63"));
@@ -419,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_cbz_loop_instrumentation() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             _loop:
                 mov x0, #10
             .Lloop:
@@ -427,7 +470,7 @@ mod tests {
                 cbnz x0, .Lloop
                 ret
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(output.contains("sub x23, x23, #2"));
         assert!(output.contains("cbnz x0, .Lloop"));
@@ -435,12 +478,12 @@ mod tests {
 
     #[test]
     fn test_exact_gas_check_sequence() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .Lloop:
                 nop
                 b .Lloop
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         // Verify exact sequence: original instructions, then gas check before back-edge
         let expected_sequence = indoc! {"
@@ -458,13 +501,13 @@ mod tests {
     #[test]
     fn test_label_on_back_edge_preserved() {
         // When the back-edge instruction has a label, it should be preserved
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             .Lloop:
                 nop
             .Lback:
                 b .Lloop
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         // The .Lback label should appear before the gas check
         assert!(output.contains(".Lback:"));
@@ -474,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_multiple_independent_loops() {
-        let (cfg_result, asm) = build_cfg(indoc! {"
+        let (cfg_result, asm) = parse_and_build(indoc! {"
             _func:
                 mov x0, #0
             .Lloop1:
@@ -488,11 +531,35 @@ mod tests {
                 b.lt .Lloop2
                 ret
         "});
-        let output = crate::instrument(asm.lines(), &cfg_result);
+        let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         // Both loops should be instrumented
         assert_eq!(output.matches("tbz x23, #63").count(), 2);
         assert!(output.contains("b.lt .Lloop1"));
         assert!(output.contains("b.lt .Lloop2"));
+    }
+
+    #[test]
+    fn test_label_exhaustion_returns_error() {
+        // Create input with 10,001 labels that collide with our gas label prefix.
+        // This exceeds MAX_LABEL_ATTEMPTS (10,000), so instrumentation should fail.
+        let mut input = String::new();
+        for i in 0..10_001 {
+            input.push_str(&format!(".L__gas_ok_{}:\n    nop\n", i));
+        }
+        input.push_str(".Lloop:\n    b .Lloop\n");
+
+        let asm = ParsedAssembly::parse(&input);
+        let cfg_result = build_cfg(&asm).unwrap();
+        let result = crate::instrument(asm.lines(), &cfg_result);
+
+        assert!(
+            matches!(
+                result,
+                Err(InstrumentError::LabelGenerationExhausted { max: 10_000 })
+            ),
+            "expected LabelGenerationExhausted error, got {:?}",
+            result
+        );
     }
 }

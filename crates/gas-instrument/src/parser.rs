@@ -222,7 +222,7 @@ impl<'a> ParsedAssembly<'a> {
                 pending_labels.push(label);
             }
 
-            if let Statement::Instruction(ref instr) = line.statement {
+            if let Statement::Instruction(ref instruction) = line.statement {
                 let index = instructions.len();
 
                 // All pending labels point to this instruction
@@ -232,11 +232,11 @@ impl<'a> ParsedAssembly<'a> {
 
                 instructions.push(ResolvedInstruction {
                     index,
-                    mnemonic: instr.mnemonic.to_string(),
+                    mnemonic: instruction.mnemonic.to_string(),
                     branch_target: None,
                     line_number: line.line_number,
                 });
-                branch_labels.push(instr.branch_target_label());
+                branch_labels.push(instruction.branch_target_label());
             }
         }
 
@@ -247,15 +247,15 @@ impl<'a> ParsedAssembly<'a> {
         }
 
         // Second pass: resolve branch targets
-        for (instr, label) in instructions.iter_mut().zip(branch_labels.iter()) {
+        for (instruction, label) in instructions.iter_mut().zip(branch_labels.iter()) {
             if let Some(label) = label {
                 let target = label_to_index.get(label).copied().ok_or_else(|| {
                     ResolveError::UndefinedLabel {
                         label: label.to_string(),
-                        line: instr.line_number,
+                        line: instruction.line_number,
                     }
                 })?;
-                instr.branch_target = Some(target);
+                instruction.branch_target = Some(target);
             }
         }
 
@@ -384,7 +384,7 @@ mod tests {
 
     fn get_instruction<'a>(line: &'a ParsedLine<'a>) -> &'a UnresolvedInstruction<'a> {
         match &line.statement {
-            Statement::Instruction(instr) => instr,
+            Statement::Instruction(instruction) => instruction,
             _ => panic!("expected instruction"),
         }
     }
@@ -416,9 +416,9 @@ mod tests {
     fn test_label_with_instruction() {
         let line = parse_single_line("_start: mov x0, #1");
         assert_eq!(line.label, Some("_start"));
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "mov");
-        assert_eq!(instr.operands, vec!["x0", "#1"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "mov");
+        assert_eq!(instruction.operands, vec!["x0", "#1"]);
     }
 
     #[test]
@@ -438,30 +438,30 @@ mod tests {
     #[test]
     fn test_simple_instruction() {
         let line = parse_single_line("    mov x0, #0");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "mov");
-        assert_eq!(instr.operands, vec!["x0", "#0"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "mov");
+        assert_eq!(instruction.operands, vec!["x0", "#0"]);
     }
 
     #[test]
     fn test_instruction_no_operands() {
         let line = parse_single_line("    ret");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "ret");
-        assert!(instr.operands.is_empty());
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "ret");
+        assert!(instruction.operands.is_empty());
 
         let line = parse_single_line("    nop");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "nop");
-        assert!(instr.operands.is_empty());
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "nop");
+        assert!(instruction.operands.is_empty());
     }
 
     #[test]
     fn test_three_operand_instruction() {
         let line = parse_single_line("    add x0, x1, x2");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "add");
-        assert_eq!(instr.operands, vec!["x0", "x1", "x2"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "add");
+        assert_eq!(instruction.operands, vec!["x0", "x1", "x2"]);
     }
 
     // Memory addressing operands
@@ -469,36 +469,36 @@ mod tests {
     #[test]
     fn test_simple_memory_operand() {
         let line = parse_single_line("    ldr x0, [x1, #8]");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "ldr");
-        assert_eq!(instr.operands, vec!["x0", "[x1, #8]"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "ldr");
+        assert_eq!(instruction.operands, vec!["x0", "[x1, #8]"]);
     }
 
     #[test]
     fn test_post_index_addressing() {
         let line = parse_single_line("    ldr x0, [x1], #8");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.operands, vec!["x0", "[x1]", "#8"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.operands, vec!["x0", "[x1]", "#8"]);
     }
 
     #[test]
     fn test_pre_index_writeback() {
         let line = parse_single_line("    ldr x0, [x1, #8]!");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.operands, vec!["x0", "[x1, #8]!"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.operands, vec!["x0", "[x1, #8]!"]);
     }
 
     #[test]
     fn test_ldp_stp_pair() {
         let line = parse_single_line("    ldp x0, x1, [sp, #16]");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "ldp");
-        assert_eq!(instr.operands, vec!["x0", "x1", "[sp, #16]"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "ldp");
+        assert_eq!(instruction.operands, vec!["x0", "x1", "[sp, #16]"]);
 
         let line = parse_single_line("    stp x29, x30, [sp, #-16]!");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "stp");
-        assert_eq!(instr.operands, vec!["x29", "x30", "[sp, #-16]!"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "stp");
+        assert_eq!(instruction.operands, vec!["x29", "x30", "[sp, #-16]!"]);
     }
 
     // Comments
@@ -506,31 +506,31 @@ mod tests {
     #[test]
     fn test_semicolon_comment() {
         let line = parse_single_line("    mov x0, #0 ; initialize counter");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "mov");
-        assert_eq!(instr.operands, vec!["x0", "#0"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "mov");
+        assert_eq!(instruction.operands, vec!["x0", "#0"]);
     }
 
     #[test]
     fn test_at_sign_comment() {
         let line = parse_single_line("    add x0, x0, #1 @ increment");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "add");
-        assert_eq!(instr.operands, vec!["x0", "x0", "#1"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "add");
+        assert_eq!(instruction.operands, vec!["x0", "x0", "#1"]);
     }
 
     #[test]
     fn test_cpp_style_comment() {
         let line = parse_single_line("    ret // return to caller");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "ret");
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "ret");
     }
 
     #[test]
     fn test_c_style_comment() {
         let line = parse_single_line("    nop /* do nothing */");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "nop");
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "nop");
     }
 
     #[test]
@@ -548,12 +548,12 @@ mod tests {
     #[test]
     fn test_earliest_comment_wins() {
         let line = parse_single_line("    mov x0, #1 ; comment // not parsed");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.operands, vec!["x0", "#1"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.operands, vec!["x0", "#1"]);
 
         let line = parse_single_line("    mov x0, #2 // comment ; not parsed");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.operands, vec!["x0", "#2"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.operands, vec!["x0", "#2"]);
     }
 
     #[test]
@@ -593,90 +593,90 @@ mod tests {
     #[test]
     fn test_unconditional_branch() {
         let line = parse_single_line("    b .Lloop");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(!instr.is_conditional());
-        assert!(!instr.is_indirect());
-        assert_eq!(instr.branch_target_label(), Some(".Lloop"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(!instruction.is_conditional());
+        assert!(!instruction.is_indirect());
+        assert_eq!(instruction.branch_target_label(), Some(".Lloop"));
     }
 
     #[test]
     fn test_conditional_branch() {
         let line = parse_single_line("    b.lt .Lloop");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_conditional());
-        assert_eq!(instr.branch_target_label(), Some(".Lloop"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_conditional());
+        assert_eq!(instruction.branch_target_label(), Some(".Lloop"));
     }
 
     #[test]
     fn test_branch_with_link() {
         let line = parse_single_line("    bl _function");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_call());
-        assert!(!instr.is_conditional());
-        assert_eq!(instr.branch_target_label(), Some("_function"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_call());
+        assert!(!instruction.is_conditional());
+        assert_eq!(instruction.branch_target_label(), Some("_function"));
     }
 
     #[test]
     fn test_cbz_cbnz() {
         let line = parse_single_line("    cbz x0, .Lzero");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_conditional());
-        assert_eq!(instr.branch_target_label(), Some(".Lzero"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_conditional());
+        assert_eq!(instruction.branch_target_label(), Some(".Lzero"));
 
         let line = parse_single_line("    cbnz w5, .Lnonzero");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_conditional());
-        assert_eq!(instr.branch_target_label(), Some(".Lnonzero"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_conditional());
+        assert_eq!(instruction.branch_target_label(), Some(".Lnonzero"));
     }
 
     #[test]
     fn test_tbz_tbnz() {
         let line = parse_single_line("    tbz x0, #63, .Lpositive");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_conditional());
-        assert_eq!(instr.operands.len(), 3);
-        assert_eq!(instr.branch_target_label(), Some(".Lpositive"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_conditional());
+        assert_eq!(instruction.operands.len(), 3);
+        assert_eq!(instruction.branch_target_label(), Some(".Lpositive"));
 
         let line = parse_single_line("    tbnz w1, #0, .Lodd");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert_eq!(instr.branch_target_label(), Some(".Lodd"));
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert_eq!(instruction.branch_target_label(), Some(".Lodd"));
     }
 
     #[test]
     fn test_indirect_branch_br() {
         let line = parse_single_line("    br x0");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_indirect());
-        assert!(!instr.is_conditional());
-        assert_eq!(instr.branch_target_label(), None);
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_indirect());
+        assert!(!instruction.is_conditional());
+        assert_eq!(instruction.branch_target_label(), None);
     }
 
     #[test]
     fn test_indirect_branch_blr() {
         let line = parse_single_line("    blr x30");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_indirect());
-        assert!(instr.is_call());
-        assert_eq!(instr.branch_target_label(), None);
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_indirect());
+        assert!(instruction.is_call());
+        assert_eq!(instruction.branch_target_label(), None);
     }
 
     #[test]
     fn test_return() {
         let line = parse_single_line("    ret");
-        let instr = get_instruction(&line);
-        assert!(instr.is_branch());
-        assert!(instr.is_return());
-        assert!(instr.is_indirect());
-        assert_eq!(instr.branch_target_label(), None);
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(instruction.is_return());
+        assert!(instruction.is_indirect());
+        assert_eq!(instruction.branch_target_label(), None);
     }
 
     #[test]
@@ -690,19 +690,23 @@ mod tests {
         for cond in conditions {
             let input = format!("    {} .Ltarget", cond);
             let line = parse_single_line(&input);
-            let instr = get_instruction(&line);
-            assert!(instr.is_branch(), "{} should be a branch", cond);
-            assert!(instr.is_conditional(), "{} should be conditional", cond);
-            assert_eq!(instr.branch_target_label(), Some(".Ltarget"));
+            let instruction = get_instruction(&line);
+            assert!(instruction.is_branch(), "{} should be a branch", cond);
+            assert!(
+                instruction.is_conditional(),
+                "{} should be conditional",
+                cond
+            );
+            assert_eq!(instruction.branch_target_label(), Some(".Ltarget"));
         }
     }
 
     #[test]
     fn test_non_branch_has_no_target() {
         let line = parse_single_line("    add x0, x1, x2");
-        let instr = get_instruction(&line);
-        assert!(!instr.is_branch());
-        assert_eq!(instr.branch_target_label(), None);
+        let instruction = get_instruction(&line);
+        assert!(!instruction.is_branch());
+        assert_eq!(instruction.branch_target_label(), None);
     }
 
     // Multi-line parsing
@@ -730,8 +734,8 @@ mod tests {
         assert_eq!(asm.lines()[1].label, Some("_start"));
         assert_eq!(asm.lines()[3].label, Some(".Lloop"));
 
-        let last_instr = get_instruction(&asm.lines()[7]);
-        assert!(last_instr.is_return());
+        let last_instruction = get_instruction(&asm.lines()[7]);
+        assert!(last_instruction.is_return());
     }
 
     // Label resolution
@@ -913,21 +917,21 @@ mod tests {
     fn test_unmatched_brackets() {
         // Extra closing brackets - doesn't panic
         let line = parse_single_line("    ldr x0, ]]]x1, x2");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "ldr");
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "ldr");
 
         // Unclosed opening bracket
         let line = parse_single_line("    ldr x0, [x1, x2");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.operands, vec!["x0", "[x1, x2"]);
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.operands, vec!["x0", "[x1, x2"]);
     }
 
     #[test]
     fn test_unknown_mnemonic() {
         let line = parse_single_line("    asdfghjkl x0, x1, #999");
-        let instr = get_instruction(&line);
-        assert_eq!(instr.mnemonic, "asdfghjkl");
-        assert!(!instr.is_branch());
+        let instruction = get_instruction(&line);
+        assert_eq!(instruction.mnemonic, "asdfghjkl");
+        assert!(!instruction.is_branch());
     }
 
     #[test]

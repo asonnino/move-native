@@ -96,16 +96,6 @@ impl DecodedInstruction {
         None
     }
 
-    /// Get the absolute branch target address (for direct branches).
-    ///
-    /// Returns `None` if not a direct branch or if the target would be negative.
-    pub fn branch_target(&self) -> Option<usize> {
-        self.branch_target_offset().and_then(|offset| {
-            let target = self.offset as i64 + offset;
-            usize::try_from(target).ok()
-        })
-    }
-
     /// Check if this instruction writes to register x23 (gas register)
     pub fn writes_to_x23(&self) -> bool {
         // First operand is typically the destination for most instructions
@@ -233,6 +223,7 @@ pub fn decode_instructions(code: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
 
 #[cfg(test)]
 mod tests {
+    use cfg::CfgInstruction;
     use yaxpeax_arm::armv8::a64::Opcode;
 
     use crate::DecodeError;

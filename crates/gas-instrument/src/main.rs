@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use gas_instrument::{cfg, instrument, parser::ParsedAssembly};
+use gas_instrument::{build_cfg, instrument, ParsedAssembly};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -34,7 +34,7 @@ fn main() {
     let asm = ParsedAssembly::parse(&input);
 
     // Build CFG (resolves labels to instruction indices)
-    let cfg_result = match cfg::build(&asm) {
+    let cfg_result = match build_cfg(&asm) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("Error building CFG: {e}");
@@ -43,7 +43,13 @@ fn main() {
     };
 
     // Instrument
-    let output = instrument::instrument(asm.lines(), &cfg_result);
+    let output = match instrument(asm.lines(), &cfg_result) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("Error instrumenting: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Write to stdout
     print!("{output}");

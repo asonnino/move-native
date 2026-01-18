@@ -17,6 +17,7 @@
 
 use std::{env, fs, process};
 
+use cfg::CfgInstruction;
 use native_verifier::decode_instructions;
 use object::{Object, ObjectSection};
 
@@ -72,16 +73,16 @@ fn main() {
     let mut back_edge_count = 0;
     let mut gas_decrement_count = 0;
 
-    for instr in &instructions {
-        if instr.is_branch() {
+    for instruction in &instructions {
+        if instruction.is_branch() {
             branch_count += 1;
-            if let Some(target) = instr.branch_target() {
-                if target <= instr.offset {
+            if let Some(target) = instruction.branch_target() {
+                if target <= instruction.offset {
                     back_edge_count += 1;
                 }
             }
         }
-        if instr.is_gas_decrement() {
+        if instruction.is_gas_decrement() {
             gas_decrement_count += 1;
         }
     }
@@ -93,7 +94,7 @@ fn main() {
 
     // For now, just dump the first 20 instructions
     println!("\nFirst 20 instructions:");
-    for instr in instructions.iter().take(20) {
-        println!("  {:04x}: {}", instr.offset, instr.instruction);
+    for instruction in instructions.iter().take(20) {
+        println!("  {:04x}: {}", instruction.offset, instruction.instruction);
     }
 }

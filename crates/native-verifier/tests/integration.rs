@@ -12,7 +12,8 @@
 
 use std::process::Command;
 
-use gas_instrument::{cfg, instrument, parser};
+use cfg::CfgInstruction;
+use gas_instrument::{instrument, parser};
 use native_verifier::decode_instructions;
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
@@ -49,8 +50,8 @@ fn assemble(source: &str) -> Vec<u8> {
 /// Instruments the assembly using gas-instrument, then assembles it.
 fn instrument_and_assemble(source: &str) -> Vec<u8> {
     let asm = parser::ParsedAssembly::parse(source);
-    let cfg_result = cfg::build(&asm).expect("CFG build failed");
-    let instrumented = instrument::instrument(asm.lines(), &cfg_result);
+    let cfg_result = gas_instrument::build_cfg(&asm).expect("CFG build failed");
+    let instrumented = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     assemble(&instrumented)
 }
@@ -142,9 +143,9 @@ fn test_all_instructions_have_valid_opcodes() {
     let code = instrument_and_assemble(TEST_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
 
-    for instr in &instructions {
+    for instruction in &instructions {
         // Just accessing opcode() verifies the instruction decoded properly
-        let _ = instr.opcode();
+        let _ = instruction.opcode();
         // If we got here without panic, the instruction is valid
     }
 }
