@@ -44,6 +44,7 @@
     "Lunreachable",
     "Lzero",
     "MOVZ",
+    "notarealinstruction",
     "petgraph",
     "RETAA",
     "RETAB",

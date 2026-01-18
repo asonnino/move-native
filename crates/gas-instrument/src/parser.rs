@@ -2,6 +2,8 @@
 //!
 //! Parses GNU-style assembly syntax as produced by LLVM/GCC.
 
+use cfg::InstructionInfo;
+
 /// A parsed line from an assembly file
 pub struct ParsedLine<'a> {
     /// Label defined on this line (e.g., ".Lloop" from ".Lloop:")
@@ -331,6 +333,66 @@ impl<'a> Parser<'a> {
         }
 
         None
+    }
+}
+
+/// Extracted instruction info for CFG construction.
+///
+/// Owns its data (no lifetimes) so the resulting CFG is `'static`.
+/// Implements [`InstructionInfo`] to enable generic CFG building.
+pub struct IndexedParsedLine {
+    /// Index into the parsed lines array
+    pub index: usize,
+    /// Mnemonic of the instruction (if any)
+    pub mnemonic: Option<String>,
+    /// Branch target label (if this is a branch instruction)
+    pub branch_target: Option<String>,
+    /// Label at this line (if any)
+    pub label: Option<String>,
+}
+
+impl IndexedParsedLine {
+    /// Create indexed lines from a slice of parsed lines
+    pub fn from_lines(lines: &[ParsedLine<'_>]) -> Vec<Self> {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| Self {
+                index,
+                mnemonic: line.instruction.as_ref().map(|i| i.mnemonic.to_string()),
+                branch_target: line
+                    .instruction
+                    .as_ref()
+                    .and_then(|i| i.get_branch_target())
+                    .map(|s| s.to_string()),
+                label: line.label.map(|s| s.to_string()),
+            })
+            .collect()
+    }
+}
+
+impl InstructionInfo for IndexedParsedLine {
+    type Position = usize;
+    type Target = String;
+
+    fn position(&self) -> usize {
+        self.index
+    }
+
+    fn mnemonic(&self) -> Option<&str> {
+        self.mnemonic.as_deref()
+    }
+
+    fn branch_target(&self) -> Option<String> {
+        self.branch_target.clone()
+    }
+
+    fn label(&self) -> Option<String> {
+        self.label.clone()
+    }
+
+    fn position_as_target(&self) -> Option<String> {
+        None // Text assembly uses labels, not position comparison
     }
 }
 

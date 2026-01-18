@@ -2,7 +2,7 @@
 //!
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
 
-use arm64_classify::{CheckResult, ClassifiedOpcode};
+use cfg::{CheckResult, ClassifiedOpcode, InstructionInfo};
 use thiserror::Error;
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
@@ -34,6 +34,8 @@ pub struct DecodedInstruction {
     pub raw: u32,
     /// The decoded instruction
     pub instruction: Instruction,
+    /// Mnemonic string (for InstructionInfo trait)
+    mnemonic: String,
 }
 
 impl DecodedInstruction {
@@ -54,7 +56,7 @@ impl DecodedInstruction {
 
     /// Check if this instruction is a branch (conditional or unconditional)
     ///
-    /// Uses arm64_classify for consistent classification across crates.
+    /// Uses cfg for consistent classification across crates.
     pub fn is_branch(&self) -> bool {
         ClassifiedOpcode::from_opcode(self.opcode()).is_branch
     }
@@ -166,6 +168,42 @@ impl DecodedInstruction {
     }
 }
 
+/// Implementation of InstructionInfo for generic CFG building.
+///
+/// For binary instructions:
+/// - Position is byte offset
+/// - Target is byte offset (for branch targets)
+/// - No labels (binary doesn't have symbolic labels)
+impl InstructionInfo for DecodedInstruction {
+    type Position = usize;
+    type Target = usize;
+
+    fn position(&self) -> usize {
+        self.offset
+    }
+
+    fn mnemonic(&self) -> Option<&str> {
+        Some(&self.mnemonic)
+    }
+
+    fn branch_target(&self) -> Option<usize> {
+        self.branch_target_offset().map(|offset| {
+            let target = self.offset as i64 + offset;
+            target as usize
+        })
+    }
+
+    fn label(&self) -> Option<usize> {
+        // Binary doesn't have symbolic labels
+        None
+    }
+
+    fn position_as_target(&self) -> Option<usize> {
+        // Binary uses position comparison to identify branch targets
+        Some(self.offset)
+    }
+}
+
 /// Decode all instructions from a byte slice
 ///
 /// The input must be 4-byte aligned (Arm64 fixed-width instructions).
@@ -191,10 +229,12 @@ pub fn decode_instructions(code: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
                     message: format!("{:?}", e),
                 })?;
 
+        let mnemonic = instruction.opcode.to_string();
         instructions.push(DecodedInstruction {
             offset,
             raw,
             instruction,
+            mnemonic,
         });
     }
 

@@ -12,6 +12,6 @@ pub mod cfg;
 pub mod instrument;
 pub mod parser;
 
-pub use cfg::{build as build_cfg, Cfg};
+pub use cfg::{build as build_cfg, Cfg, NodeIndex};
 pub use instrument::instrument;
-pub use parser::{parse, Directive, Instruction, ParsedLine};
+pub use parser::{parse, Directive, IndexedParsedLine, Instruction, ParsedLine};

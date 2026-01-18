@@ -54,7 +54,7 @@ fn test_back_edge_detection() {
     // Verify the back-edge target is .Lloop
     let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
     assert_eq!(
-        cfg.back_edge_target_label(back_edge_block),
+        cfg.back_edge_target(back_edge_block).map(|s| s.as_str()),
         Some(".Lloop"),
         "back-edge should target .Lloop"
     );

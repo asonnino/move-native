@@ -27,9 +27,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use petgraph::graph::NodeIndex;
-
-use crate::{cfg::Cfg, parser::ParsedLine};
+use crate::{
+    cfg::{Cfg, NodeIndex},
+    parser::ParsedLine,
+};
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
@@ -50,7 +51,7 @@ const GAS_LABEL_PREFIX: &str = ".L__gas_ok_";
 /// .Lok_M:
 /// <original branch>
 /// ```
-pub fn instrument(lines: &[ParsedLine], cfg: &Cfg) -> String {
+pub fn instrument(lines: &[ParsedLine<'_>], cfg: &Cfg) -> String {
     Instrumenter::new(lines, cfg).run()
 }
 
@@ -100,8 +101,8 @@ impl<'a> Instrumenter<'a> {
 
         for block_idx in self.cfg.blocks() {
             if self.cfg.has_back_edge(block_idx) {
-                if let Some(terminator_line) = self.cfg.terminator_line(block_idx) {
-                    back_edge_lines.insert(terminator_line, block_idx);
+                if let Some(terminator_idx) = self.cfg.terminator_index(block_idx) {
+                    back_edge_lines.insert(terminator_idx, block_idx);
                 }
             }
         }
@@ -328,9 +329,9 @@ mod tests {
         for block_idx in cfg.blocks() {
             if cfg.has_back_edge(block_idx) {
                 let count = cfg.instruction_count(block_idx);
-                if cfg.back_edge_target_label(block_idx) == Some(".Linner") {
+                if cfg.back_edge_target(block_idx).map(|s| s.as_str()) == Some(".Linner") {
                     inner_count = Some(count);
-                } else if cfg.back_edge_target_label(block_idx) == Some(".Louter") {
+                } else if cfg.back_edge_target(block_idx).map(|s| s.as_str()) == Some(".Louter") {
                     outer_count = Some(count);
                 }
             }

@@ -49,5 +49,5 @@
 
 mod decode;
 
-pub use arm64_classify::{CheckResult, RejectionReason};
+pub use cfg::{CheckResult, RejectionReason};
 pub use decode::{decode_instructions, DecodeError, DecodedInstruction};

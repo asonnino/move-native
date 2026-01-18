@@ -14,10 +14,10 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-# Arm64 opcode classification (shared with native-verifier)
-arm64-classify = { path = "../arm64-classify" }
+# Shared CFG and Arm64 opcode classification
+cfg = { path = "../cfg" }
 
-# Graph algorithms for CFG
+# Graph algorithms for CFG (will be removed once CFG moves to cfg crate)
 petgraph = "0.8"
 
 [dev-dependencies]

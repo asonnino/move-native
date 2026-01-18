@@ -1,16 +1,7 @@
-//! Arm64 opcode classification - single source of truth
+//! Arm64 opcode classification
 //!
-//! This crate provides classification for Arm64 opcodes, used by both:
-//! - `native-verifier` (binary verification via `classify()`)
-//! - `gas-instrument` (assembly parsing via `classify_mnemonic()`)
-//!
-//! # Design
-//!
-//! A single list of [`ClassifiedOpcode`] entries is the source of truth.
-//! A HashMap by mnemonic is generated from this list. Both binary and text
-//! lookups use the same map (binary lookup converts `Opcode` to string first).
-//!
-//! Opcodes not in the map are unknown and rejected by default.
+//! Single source of truth for Arm64 opcode classification used by both
+//! the verifier (binary) and instrumenter (text assembly).
 
 use std::collections::HashMap;
 
