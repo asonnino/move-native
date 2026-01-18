@@ -87,15 +87,23 @@ impl Cfg {
         &self.graph[block].instruction_range
     }
 
-    /// Get all blocks reachable from the entry point (first block)
-    pub fn reachable_blocks(&self) -> HashSet<BlockIndex> {
+    /// Find all blocks not reachable from the entry point.
+    /// Performs a BFS traversal - O(V + E).
+    pub fn find_unreachable_blocks(&self) -> Vec<BlockIndex> {
+        let reachable = self.compute_reachable();
+        self.graph
+            .node_indices()
+            .filter(|node| !reachable.contains(node))
+            .collect()
+    }
+
+    fn compute_reachable(&self) -> HashSet<BlockIndex> {
         let mut reachable = HashSet::new();
 
         if self.graph.node_count() == 0 {
             return reachable;
         }
 
-        // Entry point is the first block (node index 0)
         let entry = BlockIndex::new(0);
         let mut bfs = petgraph::visit::Bfs::new(&self.graph, entry);
 
@@ -105,13 +113,90 @@ impl Cfg {
 
         reachable
     }
+}
 
-    /// Get all unreachable blocks (blocks not reachable from entry)
-    pub fn unreachable_blocks(&self) -> Vec<BlockIndex> {
-        let reachable = self.reachable_blocks();
-        self.graph
-            .node_indices()
-            .filter(|node| !reachable.contains(node))
-            .collect()
+#[cfg(test)]
+mod tests {
+    use crate::{build_cfg, traits::test_support::MockInstruction};
+
+    #[test]
+    fn test_empty_cfg_has_no_unreachable() {
+        let instructions: Vec<MockInstruction> = vec![];
+        let cfg = build_cfg(&instructions);
+
+        assert!(cfg.find_unreachable_blocks().is_empty());
+    }
+
+    #[test]
+    fn test_single_block_all_reachable() {
+        let instructions = vec![
+            MockInstruction::new("add", 0),
+            MockInstruction::new("sub", 1),
+            MockInstruction::new("ret", 2),
+        ];
+        let cfg = build_cfg(&instructions);
+
+        assert_eq!(cfg.block_count(), 1);
+        assert!(cfg.find_unreachable_blocks().is_empty());
+    }
+
+    #[test]
+    fn test_linear_code_all_reachable() {
+        // Multiple blocks connected via fall-through
+        let instructions = vec![
+            MockInstruction::new("add", 0),
+            MockInstruction::with_target("b.lt", 1, 3), // conditional branch forward
+            MockInstruction::new("mul", 2),
+            MockInstruction::new("ret", 3),
+        ];
+        let cfg = build_cfg(&instructions);
+
+        // Blocks: [add, b.lt], [mul], [ret]
+        assert_eq!(cfg.block_count(), 3);
+        assert!(cfg.find_unreachable_blocks().is_empty());
+    }
+
+    #[test]
+    fn test_unreachable_after_unconditional_branch() {
+        // Code after unconditional branch is unreachable
+        let instructions = vec![
+            MockInstruction::new("add", 0),
+            MockInstruction::with_target("b", 1, 100), // unconditional branch away
+            MockInstruction::new("sub", 2),            // unreachable
+            MockInstruction::new("mul", 3),
+        ];
+        let cfg = build_cfg(&instructions);
+
+        // Blocks: [add, b], [sub, mul]
+        // Second block is unreachable (no edge from first block)
+        assert_eq!(cfg.block_count(), 2);
+
+        let unreachable = cfg.find_unreachable_blocks();
+        assert_eq!(unreachable.len(), 1);
+
+        // Verify the unreachable block is the one starting at index 2
+        let unreachable_block = unreachable[0];
+        assert_eq!(cfg.instruction_range(unreachable_block).start, 2);
+    }
+
+    #[test]
+    fn test_unreachable_after_return() {
+        // Code after return is unreachable
+        let instructions = vec![
+            MockInstruction::new("add", 0),
+            MockInstruction::new("ret", 1),
+            MockInstruction::new("sub", 2), // unreachable
+            MockInstruction::new("mul", 3),
+        ];
+        let cfg = build_cfg(&instructions);
+
+        // Blocks: [add, ret], [sub, mul]
+        assert_eq!(cfg.block_count(), 2);
+
+        let unreachable = cfg.find_unreachable_blocks();
+        assert_eq!(unreachable.len(), 1);
+
+        let unreachable_block = unreachable[0];
+        assert_eq!(cfg.instruction_range(unreachable_block).start, 2);
     }
 }

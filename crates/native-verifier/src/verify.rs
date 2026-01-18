@@ -44,7 +44,7 @@ impl<'a> Verifier<'a> {
 
         // Check for unreachable code
         let cfg = build_cfg(self.instructions);
-        for block in cfg.unreachable_blocks() {
+        for block in cfg.find_unreachable_blocks() {
             let range = cfg.instruction_range(block);
             for index in range.clone() {
                 result.extend([VerificationError::UnreachableCode {

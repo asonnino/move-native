@@ -78,7 +78,7 @@ impl DecodedInstruction {
         is_x23(&ops[0]) && is_x23(&ops[1])
     }
 
-    /// Get the immediate value from a gas decrement instruction
+    #[cfg(test)]
     pub fn gas_decrement_amount(&self) -> Option<u32> {
         if !self.is_gas_decrement() {
             return None;
