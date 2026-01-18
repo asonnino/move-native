@@ -33,4 +33,4 @@ pub use arm64::{CheckResult, ClassifiedOpcode, RejectionReason, BY_MNEMONIC};
 pub use builder::build_cfg;
 pub use graph::{BlockData, Cfg};
 pub use petgraph::graph::NodeIndex;
-pub use traits::{BasicInstruction, CfgInstruction, InstructionInfo};
+pub use traits::{BasicInstruction, CfgInstruction};
