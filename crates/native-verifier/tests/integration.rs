@@ -1,20 +1,15 @@
 //! Integration tests for native-verifier
 //!
-//! These tests exercise the full decode pipeline on real assembly files:
+//! Tests the full pipeline: assembly → object file → decode → verify.
 //!
-//! 1. Take assembly from `tests/asm_samples/`
-//! 2. Assemble with `as` to produce object files
-//! 3. Decode the `__text` section
-//! 4. Verify all instructions decode successfully
-//!
-//! This catches any mismatch between what gas-instrument produces and what
-//! native-verifier can process.
+//! Key tests:
+//! - Raw (uninstrumented) code should FAIL verification (missing gas checks)
+//! - Instrumented code should PASS verification
 
 use std::process::Command;
 
-use cfg::{BasicInstruction, CfgInstruction};
 use gas_instrument::{instrument, parser};
-use native_verifier::decode_instructions;
+use native_verifier::{decode_instructions, VerificationError, Verifier};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
 
@@ -56,6 +51,104 @@ fn instrument_and_assemble(source: &str) -> Vec<u8> {
     assemble(&instrumented)
 }
 
+// =============================================================================
+// Raw code verification (should FAIL - missing gas checks)
+// =============================================================================
+
+#[test]
+fn test_raw_test_loop_fails_verification() {
+    let code = assemble(TEST_LOOP_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        !result.is_ok(),
+        "raw code should fail verification (no gas checks)"
+    );
+
+    // Should have errors for: indirect branch (ret) and malformed gas check
+    assert!(result
+        .errors()
+        .iter()
+        .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
+    assert!(result
+        .errors()
+        .iter()
+        .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })));
+}
+
+#[test]
+fn test_raw_nested_loops_fails_verification() {
+    let code = assemble(NESTED_LOOPS_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        !result.is_ok(),
+        "raw code should fail verification (no gas checks)"
+    );
+
+    // Should have malformed gas check errors for both back-edges
+    let malformed_gas_checks: Vec<_> = result
+        .errors()
+        .iter()
+        .filter(|e| matches!(e, VerificationError::MalformedGasCheck { .. }))
+        .collect();
+
+    assert_eq!(
+        malformed_gas_checks.len(),
+        2,
+        "expected two malformed gas check errors (one per back-edge)"
+    );
+}
+
+// =============================================================================
+// Instrumented code verification (should PASS - but fails on ret for now)
+// =============================================================================
+
+#[test]
+fn test_instrumented_test_loop_gas_checks_present() {
+    let code = instrument_and_assemble(TEST_LOOP_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    // Gas checks should be valid (no MalformedGasCheck errors)
+    assert!(
+        !result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })),
+        "instrumented code should have valid gas checks"
+    );
+
+    // Note: Still fails due to `ret` (indirect branch) - this is expected
+    // until we handle function returns properly
+    assert!(result
+        .errors()
+        .iter()
+        .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
+}
+
+#[test]
+fn test_instrumented_nested_loops_gas_checks_present() {
+    let code = instrument_and_assemble(NESTED_LOOPS_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    // No malformed gas check errors
+    assert!(
+        !result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })),
+        "instrumented code should have valid gas checks for all back-edges"
+    );
+}
+
+// =============================================================================
+// Decoding tests
+// =============================================================================
+
 #[test]
 fn test_decode_raw_test_loop() {
     let code = assemble(TEST_LOOP_ASM);
@@ -63,32 +156,6 @@ fn test_decode_raw_test_loop() {
 
     // test_loop.s has: mov, mov, add, cmp, b.lt, ret = 6 instructions
     assert_eq!(instructions.len(), 6);
-
-    // Verify we can identify the back-edge
-    let back_edges: Vec<_> = instructions
-        .iter()
-        .filter(|i| i.is_branch() && i.branch_target().map(|t| t <= i.offset).unwrap_or(false))
-        .collect();
-
-    assert_eq!(back_edges.len(), 1, "expected one back-edge");
-}
-
-#[test]
-fn test_decode_raw_nested_loops() {
-    let code = assemble(NESTED_LOOPS_ASM);
-    let instructions = decode_instructions(&code).expect("decode failed");
-
-    // Verify we can identify both back-edges
-    let back_edges: Vec<_> = instructions
-        .iter()
-        .filter(|i| i.is_branch() && i.branch_target().map(|t| t <= i.offset).unwrap_or(false))
-        .collect();
-
-    assert_eq!(
-        back_edges.len(),
-        2,
-        "expected two back-edges (inner + outer)"
-    );
 }
 
 #[test]
@@ -98,26 +165,6 @@ fn test_decode_instrumented_test_loop() {
 
     // After instrumentation: original 6 + gas check (sub, tbz, brk) = 9
     assert_eq!(instructions.len(), 9);
-
-    // Verify gas check sequence is present
-    let gas_decrements: Vec<_> = instructions
-        .iter()
-        .filter(|i| i.is_gas_decrement())
-        .collect();
-
-    assert_eq!(gas_decrements.len(), 1, "expected one gas decrement");
-
-    // Verify gas check branch (tbz x23, #63)
-    let gas_checks: Vec<_> = instructions
-        .iter()
-        .filter(|i| i.is_gas_check_branch())
-        .collect();
-
-    assert_eq!(gas_checks.len(), 1, "expected one gas check branch");
-
-    // Verify brk trap
-    let traps: Vec<_> = instructions.iter().filter(|i| i.is_brk_trap()).collect();
-    assert_eq!(traps.len(), 1, "expected one brk trap");
 }
 
 #[test]
@@ -125,27 +172,11 @@ fn test_decode_instrumented_nested_loops() {
     let code = instrument_and_assemble(NESTED_LOOPS_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
 
-    // Verify 2 gas check sequences (one per back-edge)
-    let gas_decrements: Vec<_> = instructions
+    // Should have 2 gas check sequences (one per back-edge)
+    let gas_decrements = instructions
         .iter()
         .filter(|i| i.is_gas_decrement())
-        .collect();
+        .count();
 
-    assert_eq!(gas_decrements.len(), 2, "expected two gas decrements");
-
-    let traps: Vec<_> = instructions.iter().filter(|i| i.is_brk_trap()).collect();
-    assert_eq!(traps.len(), 2, "expected two brk traps");
-}
-
-#[test]
-fn test_all_instructions_have_valid_opcodes() {
-    // Ensure every instruction decodes to a known opcode (not Invalid)
-    let code = instrument_and_assemble(TEST_LOOP_ASM);
-    let instructions = decode_instructions(&code).expect("decode failed");
-
-    for instruction in &instructions {
-        // Just accessing opcode() verifies the instruction decoded properly
-        let _ = instruction.opcode();
-        // If we got here without panic, the instruction is valid
-    }
+    assert_eq!(gas_decrements, 2, "expected two gas decrements");
 }

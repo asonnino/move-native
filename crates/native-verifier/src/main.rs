@@ -1,6 +1,6 @@
 //! CLI for native-verifier
 //!
-//! Decodes and analyzes Arm64 object files, reporting gas instrumentation status.
+//! Verifies Arm64 object files for safe deterministic execution.
 //!
 //! # Usage
 //!
@@ -17,8 +17,7 @@
 
 use std::{env, fs, process};
 
-use cfg::{BasicInstruction, CfgInstruction};
-use native_verifier::decode_instructions;
+use native_verifier::{decode_instructions, Verifier};
 use object::{Object, ObjectSection};
 
 fn main() {
@@ -57,7 +56,8 @@ fn main() {
     });
 
     println!(
-        "Code section: {} bytes ({} instructions)",
+        "Verifying: {} ({} bytes, {} instructions)",
+        path,
         code.len(),
         code.len() / 4
     );
@@ -68,33 +68,16 @@ fn main() {
         process::exit(1);
     });
 
-    // Print summary
-    let mut branch_count = 0;
-    let mut back_edge_count = 0;
-    let mut gas_decrement_count = 0;
+    // Run verification
+    let result = Verifier::new(&instructions).verify();
 
-    for instruction in &instructions {
-        if instruction.is_branch() {
-            branch_count += 1;
-            if let Some(target) = instruction.branch_target() {
-                if target <= instruction.offset {
-                    back_edge_count += 1;
-                }
-            }
+    if result.is_ok() {
+        println!("Verification PASSED");
+    } else {
+        println!("Verification FAILED ({} errors):", result.errors().len());
+        for error in result.errors() {
+            println!("  {}", error);
         }
-        if instruction.is_gas_decrement() {
-            gas_decrement_count += 1;
-        }
-    }
-
-    println!("Decoded {} instructions", instructions.len());
-    println!("  Branches: {}", branch_count);
-    println!("  Back-edges: {}", back_edge_count);
-    println!("  Gas decrements: {}", gas_decrement_count);
-
-    // For now, just dump the first 20 instructions
-    println!("\nFirst 20 instructions:");
-    for instruction in instructions.iter().take(20) {
-        println!("  {:04x}: {}", instruction.offset, instruction.instruction);
+        process::exit(1);
     }
 }
