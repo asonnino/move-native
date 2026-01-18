@@ -175,12 +175,12 @@ impl DecodedInstruction {
 /// - Target is byte offset (for branch targets)
 /// - No labels (binary doesn't have symbolic labels)
 impl InstructionInfo for DecodedInstruction {
-    type Position = usize;
+    // type Position = usize;
     type Target = usize;
 
-    fn position(&self) -> usize {
-        self.offset
-    }
+    // fn position(&self) -> usize {
+    //     self.offset
+    // }
 
     fn mnemonic(&self) -> Option<&str> {
         Some(&self.mnemonic)
@@ -193,13 +193,7 @@ impl InstructionInfo for DecodedInstruction {
         })
     }
 
-    fn label(&self) -> Option<usize> {
-        // Binary doesn't have symbolic labels
-        None
-    }
-
-    fn position_as_target(&self) -> Option<usize> {
-        // Binary uses position comparison to identify branch targets
+    fn as_target(&self) -> Option<Self::Target> {
         Some(self.offset)
     }
 }

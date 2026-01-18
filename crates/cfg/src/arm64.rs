@@ -197,7 +197,9 @@ impl ClassifiedOpcode {
     ///
     /// Returns None for unknown mnemonics.
     pub fn from_mnemonic(mnemonic: &str) -> Option<&'static Self> {
-        BY_MNEMONIC.get(mnemonic).copied()
+        BY_MNEMONIC
+            .get(mnemonic.to_ascii_lowercase().as_str())
+            .copied()
     }
 }
 
