@@ -283,6 +283,7 @@ impl<'a> ParsedAssembly<'a> {
 
         let (label, rest) = Self::split_label(text);
 
+        // Empty line after label
         if rest.is_empty() {
             return ParsedLine {
                 label,
@@ -292,6 +293,7 @@ impl<'a> ParsedAssembly<'a> {
             };
         }
 
+        // Directive
         if rest.starts_with('.') {
             return ParsedLine {
                 label,
@@ -301,6 +303,7 @@ impl<'a> ParsedAssembly<'a> {
             };
         }
 
+        // Must be an instruction
         ParsedLine {
             label,
             statement: Statement::Instruction(UnresolvedInstruction::parse(rest)),
@@ -311,7 +314,10 @@ impl<'a> ParsedAssembly<'a> {
 
     /// Remove comments from a line.
     ///
-    /// Supports: `//`, `/* */`, `;`, `@`
+    /// Supports: `//`, `/*`, `;`, `@`
+    ///
+    /// TODO: Multi-line `/* ... */` comments are not handled (strips from `/*` to EOL only).
+    /// TODO: `#` comments (used by some assemblers) are not supported.
     fn strip_comment(line: &str) -> &str {
         let mut end = line.len();
 
