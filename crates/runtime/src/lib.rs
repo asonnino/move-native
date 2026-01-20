@@ -1,0 +1,73 @@
+//! Execution runtime for gas-instrumented native Move code
+//!
+//! This crate provides the runtime environment for executing Arm64 code
+//! that has been instrumented with gas metering. Based on the DeCl paper
+//! (OSDI 2025 - "Deterministic Client: Enforcing Determinism on Untrusted Machine Code").
+//!
+//! # Overview
+//!
+//! The runtime handles:
+//! - Loading native modules (.dylib on macOS, .so on Linux)
+//! - Setting up the gas counter in register x23
+//! - Installing a SIGTRAP handler to catch out-of-gas conditions
+//! - Executing functions and reporting gas consumption
+//!
+//! # Gas Instrumentation Protocol
+//!
+//! The runtime expects code instrumented with the following sequence at back-edges:
+//!
+//! ```asm
+//! sub x23, x23, #N      // decrement gas by N (instructions in block)
+//! tbz x23, #63, .Lok    // if bit 63 is 0 (positive), continue
+//! brk #0                // trap - out of gas
+//! .Lok:
+//! <back-edge branch>    // the original loop branch
+//! ```
+//!
+//! When gas goes negative and `brk #0` is executed, the SIGTRAP handler:
+//! 1. Sets an out-of-gas flag
+//! 2. Advances PC past the brk instruction
+//! 3. Allows execution to cleanly return
+//!
+//! # Example
+//!
+//! ```ignore
+//! use runtime::{execute, NativeModule};
+//!
+//! // Load a compiled module
+//! let module = NativeModule::load("my_module.dylib")?;
+//!
+//! // Get a function from the module
+//! let entry = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
+//!
+//! // Execute with gas limit
+//! let result = unsafe { execute(*entry, 1_000_000) }?;
+//!
+//! if result.completed {
+//!     println!("Completed successfully, used {} gas", result.gas_consumed);
+//! } else {
+//!     println!("Out of gas after {} gas consumed", result.gas_consumed);
+//! }
+//! ```
+//!
+//! # Platform Support
+//!
+//! Currently supported platforms:
+//! - macOS on Apple Silicon (aarch64-apple-darwin)
+//! - Linux on aarch64 (aarch64-unknown-linux-gnu)
+//!
+//! # Thread Safety
+//!
+//! The current implementation assumes single-threaded execution of gas-instrumented
+//! code. The global out-of-gas flag is shared across all executions.
+
+mod cache;
+mod entry;
+mod error;
+mod loader;
+mod signal;
+
+pub use cache::{ModuleCache, ModuleId};
+pub use entry::{execute, GasResult};
+pub use error::{RuntimeError, RuntimeResult};
+pub use loader::{NativeModule, Symbol};
