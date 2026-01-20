@@ -3,7 +3,6 @@
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
 
 use cfg::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
-use thiserror::Error;
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
 
@@ -16,7 +15,7 @@ fn is_x23(op: &Operand) -> bool {
 }
 
 /// Errors that can occur during decoding
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("failed to decode instruction at offset {offset:#x}: {message}")]
     InvalidInstruction { offset: usize, message: String },
@@ -63,9 +62,7 @@ impl DecodedInstruction {
         for op in self.operands() {
             match op {
                 // Post-index always writes back to base register
-                Operand::RegPostIndex(reg, _) | Operand::RegPostIndexReg(reg, _)
-                    if *reg == 23 =>
-                {
+                Operand::RegPostIndex(reg, _) | Operand::RegPostIndexReg(reg, _) if *reg == 23 => {
                     return true;
                 }
                 // Pre-index writes back only if writeback flag is true
@@ -118,7 +115,7 @@ impl DecodedInstruction {
     }
 
     #[cfg(test)]
-    pub fn gas_decrement_amount(&self) -> Option<u32> {
+    fn gas_decrement_amount(&self) -> Option<u32> {
         if !self.is_gas_decrement() {
             return None;
         }

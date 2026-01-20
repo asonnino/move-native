@@ -7,22 +7,12 @@ repository.workspace = true
 description = "Verifies Arm64 binaries for deterministic execution and gas instrumentation"
 
 [dependencies]
-# Shared CFG and Arm64 opcode classification
-cfg = { path = "../cfg" }
-
-# Arm64 disassembly - stable Rust, well-maintained
-yaxpeax-arm = "0.4"
-yaxpeax-arch = "0.3"
-
-# Binary format parsing (Mach-O, ELF)
-object = { version = "0.38.1", default-features = false, features = [
-    "read",
-    "macho",
-] }
-
-# Error handling
+cfg.workspace = true
+yaxpeax-arm.workspace = true
+yaxpeax-arch.workspace = true
 thiserror.workspace = true
+object = { version = "0.38", default-features = false, features = ["read", "macho", "elf"] }
 
 [dev-dependencies]
-tempfile = "3"
-gas-instrument = { path = "../gas-instrument" }
+tempfile.workspace = true
+gas-instrument.workspace = true

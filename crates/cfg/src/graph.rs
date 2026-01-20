@@ -1,9 +1,6 @@
 //! CFG data structures
 
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-};
+use std::{collections::HashSet, ops::Range};
 
 pub type BlockIndex = petgraph::graph::NodeIndex;
 
@@ -12,9 +9,6 @@ pub(crate) type Graph = petgraph::graph::DiGraph<BlockData, ()>;
 /// Data stored in each basic block node
 #[derive(Debug)]
 pub struct BlockData {
-    /// Target identifier at the start of this block (instruction index or byte offset)
-    pub label: Option<usize>,
-
     /// Range of indices into the original instruction list.
     /// E.g., for a block containing instructions 3, 4, 5 this would be `3..6`
     pub instruction_range: Range<usize>,
@@ -22,9 +16,12 @@ pub struct BlockData {
     /// Branch target of the back-edge, if this block ends with one.
     pub back_edge_target: Option<usize>,
 
-    /// Index of the block's terminator instruction (branch or return).
-    /// `None` if the block falls through without an explicit terminator.
-    pub terminator_index: Option<usize>,
+    /// Whether this block ends with an explicit terminator instruction.
+    ///
+    /// A **terminator** is the instruction that ends a basic block's control flow -
+    /// either a branch instruction (conditional or unconditional) or a return.
+    /// Blocks without an explicit terminator "fall through" to the next block.
+    pub has_explicit_terminator: bool,
 
     /// Number of actual instructions in this block
     pub instruction_count: usize,
@@ -34,17 +31,12 @@ pub struct BlockData {
 pub struct Cfg {
     /// The underlying directed graph
     graph: Graph,
-    /// Map from target (instruction index or byte offset) to block node
-    target_to_block: HashMap<usize, BlockIndex>,
 }
 
 impl Cfg {
-    /// Create a new CFG from components (used by builder)
-    pub(crate) fn new(graph: Graph, target_to_block: HashMap<usize, BlockIndex>) -> Self {
-        Self {
-            graph,
-            target_to_block,
-        }
+    /// Create a new CFG from graph (used by builder)
+    pub(crate) fn new(graph: Graph) -> Self {
+        Self { graph }
     }
 
     /// Iterate over all block indices
@@ -53,13 +45,15 @@ impl Cfg {
     }
 
     /// Get the number of blocks
+    #[cfg(test)]
     pub fn block_count(&self) -> usize {
         self.graph.node_count()
     }
 
-    /// Get block by target (instruction index or byte offset)
-    pub fn block_by_target(&self, target: &usize) -> Option<BlockIndex> {
-        self.target_to_block.get(target).copied()
+    /// Get the number of blocks with back-edges
+    #[cfg(test)]
+    pub fn back_edge_count(&self) -> usize {
+        self.blocks().filter(|&b| self.has_back_edge(b)).count()
     }
 
     /// Check if a block has a back-edge
@@ -72,9 +66,19 @@ impl Cfg {
         self.graph[block].back_edge_target.as_ref()
     }
 
-    /// Get the index of the block's terminator instruction
+    /// Get the index of the block's terminator instruction.
+    ///
+    /// Returns `Some(index)` if the block has an explicit terminator (branch or return),
+    /// where index is derived from `instruction_range.end - 1`.
+    /// Returns `None` if the block falls through without an explicit terminator.
     pub fn terminator_index(&self, block: BlockIndex) -> Option<usize> {
-        self.graph[block].terminator_index
+        let data = &self.graph[block];
+        if data.has_explicit_terminator {
+            // The terminator is always the last instruction in the block
+            Some(data.instruction_range.end - 1)
+        } else {
+            None
+        }
     }
 
     /// Get the number of actual instructions in a block
@@ -97,6 +101,9 @@ impl Cfg {
             .collect()
     }
 
+    /// Computes all blocks reachable from the entry point via BFS.
+    /// BlockIndex 0 is the entry point by construction: the CFG builder
+    /// always creates the first block for the function's first instruction.
     fn compute_reachable(&self) -> HashSet<BlockIndex> {
         let mut reachable = HashSet::new();
 
@@ -117,7 +124,7 @@ impl Cfg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{build_cfg, traits::test_support::MockInstruction};
+    use crate::{build_cfg, traits::mock_instruction::MockInstruction};
 
     #[test]
     fn test_empty_cfg_has_no_unreachable() {

@@ -14,14 +14,9 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-# Shared CFG and Arm64 opcode classification
-cfg = { path = "../cfg" }
-
-# Graph algorithms for CFG (will be removed once CFG moves to cfg crate)
-petgraph = "0.8"
-
-# Derive Error trait for custom error types
-thiserror = "2"
+cfg.workspace = true
+petgraph.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 indoc = "2"

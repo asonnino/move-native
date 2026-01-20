@@ -9,3 +9,11 @@ repository = "https://github.com/alberto/move-native"
 
 [workspace.dependencies]
 thiserror = "2"
+petgraph = "0.8"
+yaxpeax-arm = "0.4"
+yaxpeax-arch = "0.3"
+tempfile = "3"
+
+# Internal crates
+cfg = { path = "crates/cfg" }
+gas-instrument = { path = "crates/gas-instrument" }

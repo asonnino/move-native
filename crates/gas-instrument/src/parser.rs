@@ -50,15 +50,15 @@ impl std::error::Error for ResolveError {}
 /// This is the output of [`ParsedAssembly::resolve`]. Each instance represents
 /// an actual CPU instruction (no label-only lines or directives).
 #[derive(Debug, Clone)]
-pub struct ResolvedInstruction {
+pub(crate) struct ResolvedInstruction {
     /// Index in the resolved instruction stream (0-based).
-    pub index: usize,
+    pub(crate) index: usize,
     /// The instruction mnemonic (e.g., "mov", "b.lt", "ret").
-    pub mnemonic: String,
+    pub(crate) mnemonic: String,
     /// Branch target as instruction index, if this is a direct branch.
-    pub branch_target: Option<usize>,
+    pub(crate) branch_target: Option<usize>,
     /// Original source line number (1-indexed).
-    pub line_number: usize,
+    pub(crate) line_number: usize,
 }
 
 impl BasicInstruction for ResolvedInstruction {
@@ -78,7 +78,7 @@ impl CfgInstruction for ResolvedInstruction {
 }
 
 /// The content of an assembly line after any label.
-pub enum Statement<'a> {
+pub(crate) enum Statement<'a> {
     /// A CPU instruction.
     Instruction(UnresolvedInstruction<'a>),
     /// An assembler directive (e.g., `.global`, `.align`).
@@ -90,11 +90,11 @@ pub enum Statement<'a> {
 /// An unresolved instruction with operands as raw strings.
 ///
 /// Branch targets are still label names, not instruction indices.
-pub struct UnresolvedInstruction<'a> {
+pub(crate) struct UnresolvedInstruction<'a> {
     /// The mnemonic (e.g., "mov", "b.lt", "ret").
-    pub mnemonic: &'a str,
+    pub(crate) mnemonic: &'a str,
     /// Operands as raw strings (e.g., `["x0", "#0"]` or `["x0", "[sp, #16]"]`).
-    pub operands: Vec<&'a str>,
+    pub(crate) operands: Vec<&'a str>,
 }
 
 impl<'a> UnresolvedInstruction<'a> {
@@ -123,7 +123,7 @@ impl<'a> UnresolvedInstruction<'a> {
 
         let mut operands = Vec::new();
         let mut start = 0;
-        let mut bracket_depth: i32 = 0;
+        let mut bracket_depth: usize = 0;
 
         for (i, c) in s.char_indices() {
             match c {
@@ -171,13 +171,13 @@ impl BasicInstruction for UnresolvedInstruction<'_> {
 /// A parsed line from an assembly file.
 pub struct ParsedLine<'a> {
     /// Label defined on this line (e.g., `".Lloop"` from `".Lloop:"`).
-    pub label: Option<&'a str>,
+    pub(crate) label: Option<&'a str>,
     /// The statement on this line.
-    pub statement: Statement<'a>,
+    pub(crate) statement: Statement<'a>,
     /// Original line number (1-indexed).
-    pub line_number: usize,
+    pub(crate) line_number: usize,
     /// Original line text (for reconstruction or error messages).
-    pub original: &'a str,
+    pub(crate) original: &'a str,
 }
 
 /// Parsed assembly text, ready for resolution or inspection.
@@ -210,7 +210,7 @@ impl<'a> ParsedAssembly<'a> {
     ///
     /// - [`ResolveError::TrailingLabels`]: Labels at end of file with no instruction
     /// - [`ResolveError::UndefinedLabel`]: Branch references an undefined label
-    pub fn resolve(&self) -> Result<Vec<ResolvedInstruction>, ResolveError> {
+    pub(crate) fn resolve(&self) -> Result<Vec<ResolvedInstruction>, ResolveError> {
         // First pass: build instructions, collect labels
         let mut instructions: Vec<ResolvedInstruction> = Vec::new();
         let mut branch_labels: Vec<Option<&str>> = Vec::new();

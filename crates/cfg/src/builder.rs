@@ -44,7 +44,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
         self.add_edges();
         self.identify_back_edges();
 
-        Cfg::new(self.graph, self.target_to_block)
+        Cfg::new(self.graph)
     }
 
     /// Find basic block boundaries.
@@ -74,7 +74,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 block_starts.push(idx);
             }
 
-            previous_was_branch = item.is_branch() || item.is_return();
+            previous_was_branch = item.is_branch();
         }
 
         block_starts
@@ -90,17 +90,13 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
 
             let instruction_range = start_idx..end_idx;
 
-            // Get the target identifier from the first item in the block
-            let label = Some(self.instructions[start_idx].as_target());
-
             // All items are instructions, count = range length
             let instruction_count = instruction_range.len();
 
             let node = self.graph.add_node(BlockData {
-                label,
                 instruction_range: instruction_range.clone(),
-                back_edge_target: None,
-                terminator_index: None,
+                back_edge_target: None,         // to be filled later
+                has_explicit_terminator: false, // to be filled later
                 instruction_count,
             });
             self.nodes.push(node);
@@ -123,13 +119,17 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
             if let Some(terminator_idx) = block.instruction_range.clone().last() {
                 let item = &self.instructions[terminator_idx];
 
-                if item.is_branch() || item.is_return() {
-                    self.graph[node].terminator_index = Some(terminator_idx);
+                if item.is_branch() {
+                    self.graph[node].has_explicit_terminator = true;
                 }
 
-                // Add edge to branch target (if direct branch, not a call)
-                if item.is_branch() && !item.is_call() {
+                // Add edge to branch target if one exists.
+                // Calls are excluded (they return to next instruction, not jump to target).
+                // Non-branches and indirect branches have no target (branch_target() = None).
+                if !item.is_call() {
                     if let Some(target) = item.branch_target() {
+                        // Target may not exist if it's outside the function's instruction
+                        // range (adversarial code) - the verifier will reject these later.
                         if let Some(&target_node) = self.target_to_block.get(&target) {
                             self.graph.add_edge(node, target_node, ());
                         }
@@ -137,7 +137,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 }
 
                 // Add fall-through edge (if not return and not unconditional jump)
-                if !item.is_return() && !item.is_unconditional_jump() {
+                if !item.is_branch() || item.is_conditional() || item.is_call() {
                     if let Some(&next_node) = self.nodes.get(block_idx + 1) {
                         self.graph.add_edge(node, next_node, ());
                     }
@@ -150,7 +150,6 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
     }
 
     /// Compute dominators and mark back-edges.
-    ///
     /// A back-edge is an edge A → B where B dominates A.
     fn identify_back_edges(&mut self) {
         if self.nodes.is_empty() {
@@ -179,9 +178,14 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 self.graph[node].instruction_count > 0,
                 "back-edge source block has no instructions"
             );
-            // Get branch target directly from the terminator instruction
-            if let Some(term_idx) = self.graph[node].terminator_index {
-                if let Some(target) = self.instructions[term_idx].branch_target() {
+            // Get branch target directly from the terminator instruction.
+            // Back-edge sources must have an explicit terminator (the branch that creates the back-edge).
+            let block = &self.graph[node];
+            if block.has_explicit_terminator {
+                let terminator_idx = block.instruction_range.end - 1;
+                // Indirect branches have no static target. This can happen if the back-edge is via
+                // fall-through from an indirect branch. The verifier will reject indirect branches.
+                if let Some(target) = self.instructions[terminator_idx].branch_target() {
                     self.graph[node].back_edge_target = Some(target);
                 }
             }
@@ -191,12 +195,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{traits::test_support::MockInstruction, Cfg};
-
-    // Helper to count back-edges in a CFG
-    fn count_back_edges(cfg: &Cfg) -> usize {
-        cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count()
-    }
+    use crate::traits::mock_instruction::MockInstruction;
 
     #[test]
     fn test_empty_input() {
@@ -204,7 +203,7 @@ mod tests {
         let cfg = crate::build_cfg(&instructions);
 
         assert_eq!(cfg.block_count(), 0);
-        assert_eq!(count_back_edges(&cfg), 0);
+        assert_eq!(cfg.back_edge_count(), 0);
     }
 
     #[test]
@@ -213,7 +212,7 @@ mod tests {
         let cfg = crate::build_cfg(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
-        assert_eq!(count_back_edges(&cfg), 0);
+        assert_eq!(cfg.back_edge_count(), 0);
 
         // Check block range
         let block = cfg.blocks().next().unwrap();
@@ -346,7 +345,7 @@ mod tests {
 
         // Single block with a back-edge to itself
         assert_eq!(cfg.block_count(), 1);
-        assert_eq!(count_back_edges(&cfg), 1);
+        assert_eq!(cfg.back_edge_count(), 1);
 
         let block = cfg.blocks().next().unwrap();
         assert!(cfg.has_back_edge(block));
@@ -360,7 +359,7 @@ mod tests {
         let cfg = crate::build_cfg(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
-        assert_eq!(count_back_edges(&cfg), 1);
+        assert_eq!(cfg.back_edge_count(), 1);
 
         let block = cfg.blocks().next().unwrap();
         assert_eq!(cfg.back_edge_target(block), Some(&0));
@@ -386,7 +385,7 @@ mod tests {
         // Blocks: [mov], [add, b.lt], [cmp, b.ne]
         // Block at index 1 is a branch target, block at index 3 is after a branch
         assert_eq!(cfg.block_count(), 3);
-        assert_eq!(count_back_edges(&cfg), 2);
+        assert_eq!(cfg.back_edge_count(), 2);
     }
 
     #[test]
@@ -406,7 +405,7 @@ mod tests {
 
         // 3 blocks: [cmp, b.eq], [add], [ret]
         assert_eq!(cfg.block_count(), 3);
-        assert_eq!(count_back_edges(&cfg), 0);
+        assert_eq!(cfg.back_edge_count(), 0);
     }
 
     #[test]
@@ -421,7 +420,7 @@ mod tests {
         let cfg = crate::build_cfg(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
-        assert_eq!(count_back_edges(&cfg), 0);
+        assert_eq!(cfg.back_edge_count(), 0);
         assert_eq!(cfg.instruction_count(cfg.blocks().next().unwrap()), 4);
     }
 
@@ -444,7 +443,7 @@ mod tests {
 
         // Blocks: [cmp, b.ge], [add, b], [ret]
         assert_eq!(cfg.block_count(), 3);
-        assert_eq!(count_back_edges(&cfg), 1);
+        assert_eq!(cfg.back_edge_count(), 1);
 
         // The block containing the back-edge should be identified
         let blocks: Vec<_> = cfg.blocks().collect();
@@ -469,7 +468,7 @@ mod tests {
         // 2 blocks: [mov, bl], [ret]
         // The call has fall-through because it's not an unconditional jump
         assert_eq!(cfg.block_count(), 2);
-        assert_eq!(count_back_edges(&cfg), 0);
+        assert_eq!(cfg.back_edge_count(), 0);
     }
 
     #[test]
@@ -490,25 +489,6 @@ mod tests {
         // Blocks: [b.eq], [b.lt], [add], [ret]
         // Each conditional branch ends its block, and ret is a target
         assert_eq!(cfg.block_count(), 4);
-        assert_eq!(count_back_edges(&cfg), 0);
-    }
-
-    #[test]
-    fn test_block_by_target() {
-        let instructions = vec![
-            MockInstruction::new("add", 0),
-            MockInstruction::with_target("b.lt", 1, 3),
-            MockInstruction::new("mul", 2),
-            MockInstruction::new("sub", 3),
-        ];
-        let cfg = crate::build_cfg(&instructions);
-
-        // Should be able to look up blocks by their starting target
-        assert!(cfg.block_by_target(&0).is_some());
-        assert!(cfg.block_by_target(&2).is_some());
-        assert!(cfg.block_by_target(&3).is_some());
-
-        // Target 1 is in block starting at 0
-        assert!(cfg.block_by_target(&1).is_some());
+        assert_eq!(cfg.back_edge_count(), 0);
     }
 }

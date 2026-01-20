@@ -7,11 +7,6 @@ repository.workspace = true
 description = "Control flow graph analysis and Arm64 opcode classification"
 
 [dependencies]
-# Arm64 opcode types
-yaxpeax-arm = "0.4"
-
-# Static map initialization
+yaxpeax-arm.workspace = true
+petgraph.workspace = true
 lazy_static = "1.4"
-
-# Graph data structure for CFG
-petgraph = "0.8"

@@ -13,21 +13,14 @@ pub mod parser;
 
 pub use cfg::BlockIndex;
 pub use instrument::{instrument, InstrumentError};
-pub use parser::{
-    ParsedAssembly,
-    ParsedLine,
-    ResolveError,
-    ResolvedInstruction,
-    Statement,
-    UnresolvedInstruction,
-};
+pub use parser::{ParsedAssembly, ParsedLine, ResolveError};
 
 /// Result of building a CFG from parsed assembly
 pub struct CfgResult {
     /// The control flow graph
     pub cfg: cfg::Cfg,
     /// The resolved instructions (for mapping back to line numbers)
-    pub resolved: Vec<ResolvedInstruction>,
+    pub(crate) resolved: Vec<parser::ResolvedInstruction>,
 }
 
 /// Build a CFG from parsed assembly

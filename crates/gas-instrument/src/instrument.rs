@@ -247,7 +247,7 @@ mod tests {
     use crate::{build_cfg, instrument::Instrumenter, CfgResult, ParsedAssembly};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
-    fn parse_and_build(input: &str) -> (CfgResult, ParsedAssembly) {
+    fn parse_and_build(input: &str) -> (CfgResult, ParsedAssembly<'_>) {
         let asm = ParsedAssembly::parse(input);
         let cfg_result = build_cfg(&asm).unwrap();
         (cfg_result, asm)

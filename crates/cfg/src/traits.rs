@@ -81,16 +81,10 @@ pub trait CfgInstruction: BasicInstruction {
     /// - Text: instruction index
     /// - Binary: byte offset
     fn as_target(&self) -> usize;
-
-    /// Check if this is an unconditional jump (not a call or return).
-    #[inline]
-    fn is_unconditional_jump(&self) -> bool {
-        self.is_branch() && !self.is_conditional() && !self.is_call()
-    }
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
+pub(crate) mod mock_instruction {
     use super::{BasicInstruction, CfgInstruction};
 
     /// Mock instruction for testing trait implementations and CFG construction.
@@ -138,8 +132,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::MockInstruction;
-    use super::*;
+    use super::{mock_instruction::MockInstruction, *};
 
     #[test]
     fn test_is_branch() {
@@ -227,34 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_unconditional_jump() {
-        // B is unconditional jump
-        assert!(MockInstruction::new("b", 0).is_unconditional_jump());
-
-        // Conditional branches are not unconditional jumps
-        assert!(!MockInstruction::new("b.lt", 0).is_unconditional_jump());
-        assert!(!MockInstruction::new("cbz", 0).is_unconditional_jump());
-        assert!(!MockInstruction::new("tbz", 0).is_unconditional_jump());
-
-        // BL is not an unconditional jump (it's a call)
-        assert!(!MockInstruction::new("bl", 0).is_unconditional_jump());
-
-        // RET is not an unconditional jump (it's a return)
-        // Note: RET is_branch but is_return, so it's excluded by the trait logic
-        // The trait says is_unconditional_jump = is_branch && !is_conditional && !is_call
-        // RET doesn't have is_unconditional_jump return true because the logic
-        // doesn't explicitly exclude returns, let's check what the trait actually does
-        let ret = MockInstruction::new("ret", 0);
-        // is_branch: true, is_conditional: false, is_call: false
-        // So ret.is_unconditional_jump() would be true based on the trait definition
-        // But semantically, we might want to check the actual behavior
-        // Looking at the trait: is_branch && !is_conditional && !is_call
-        // RET: is_branch=true, is_conditional=false, is_call=false => true
-        // This test documents the actual behavior
-        assert!(ret.is_unconditional_jump());
-    }
-
-    #[test]
     fn test_non_branch_classification() {
         // Arithmetic instructions are not branches
         assert!(!MockInstruction::new("mov", 0).is_branch());
@@ -269,7 +234,6 @@ mod tests {
         assert!(!MockInstruction::new("add", 0).is_conditional());
         assert!(!MockInstruction::new("add", 0).is_call());
         assert!(!MockInstruction::new("add", 0).is_return());
-        assert!(!MockInstruction::new("add", 0).is_unconditional_jump());
     }
 
     #[test]
@@ -283,5 +247,36 @@ mod tests {
         assert!(!MockInstruction::new("b", 0).is_indirect());
         assert!(!MockInstruction::new("bl", 0).is_indirect());
         assert!(!MockInstruction::new("b.lt", 0).is_indirect());
+    }
+
+    #[test]
+    fn test_classification_invariants() {
+        // All returns are branches
+        for mnemonic in ["ret", "retaa", "retab"] {
+            let instruction = MockInstruction::new(mnemonic, 0);
+            assert!(instruction.is_return());
+            assert!(instruction.is_branch());
+        }
+
+        // All calls are branches
+        for mnemonic in ["bl", "blr"] {
+            let instruction = MockInstruction::new(mnemonic, 0);
+            assert!(instruction.is_call());
+            assert!(instruction.is_branch());
+        }
+
+        // All indirect branches are branches
+        for mnemonic in ["br", "blr", "ret"] {
+            let instruction = MockInstruction::new(mnemonic, 0);
+            assert!(instruction.is_indirect());
+            assert!(instruction.is_branch());
+        }
+
+        // All conditional instructions are branches
+        for mnemonic in ["b.lt", "b.eq", "b.ne", "cbz", "cbnz", "tbz", "tbnz"] {
+            let instruction = MockInstruction::new(mnemonic, 0);
+            assert!(instruction.is_conditional());
+            assert!(instruction.is_branch());
+        }
     }
 }
