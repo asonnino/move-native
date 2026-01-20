@@ -8,12 +8,14 @@
 //!
 //! Based on the DeCl paper: "Deterministic Client: Enforcing Determinism on Untrusted Machine Code"
 
+pub mod error;
 pub mod instrument;
 pub mod parser;
 
 pub use cfg::BlockIndex;
-pub use instrument::{instrument, InstrumentError};
-pub use parser::{ParsedAssembly, ParsedLine, ResolveError};
+pub use error::{InstrumentError, ResolveError};
+pub use instrument::instrument;
+pub use parser::{ParsedAssembly, ParsedLine};
 
 /// Result of building a CFG from parsed assembly
 pub struct CfgResult {

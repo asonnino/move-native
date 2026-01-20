@@ -28,23 +28,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    error::InstrumentError,
     parser::{ParsedLine, ResolvedInstruction, Statement},
     BlockIndex,
     CfgResult,
 };
-
-/// Errors that can occur during instrumentation
-#[derive(Debug, thiserror::Error)]
-pub enum InstrumentError {
-    #[error("terminator index {index} exceeds resolved instructions ({count})")]
-    InvalidTerminatorIndex { index: usize, count: usize },
-
-    #[error("back-edge at line {line} is not an instruction")]
-    NonInstructionBackEdge { line: usize },
-
-    #[error("exceeded maximum label generation attempts ({max})")]
-    LabelGenerationExhausted { max: usize },
-}
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
 const GAS_REGISTER: &str = "x23";
@@ -71,10 +59,7 @@ const MAX_LABEL_ATTEMPTS: usize = 10_000;
 ///
 /// # Errors
 ///
-/// Returns an error if:
-/// - A terminator index is out of bounds
-/// - A back-edge instruction is not actually an instruction
-/// - Label generation exhausts all attempts (>10,000 collisions)
+/// Returns an error if label generation exhausts all attempts (>10,000 collisions).
 pub fn instrument(
     lines: &[ParsedLine<'_>],
     cfg_result: &CfgResult,
@@ -112,15 +97,15 @@ impl<'a> Instrumenter<'a> {
 
     /// Processes all lines, inserting gas checks at back-edges.
     fn run(mut self) -> Result<String, InstrumentError> {
-        let back_edge_lines = self.find_back_edge_lines()?;
+        let back_edge_lines = self.find_back_edge_lines();
 
         for (idx, line) in self.lines.iter().enumerate() {
             // Line indices are 0-based, line_number is 1-based
             let line_number = idx + 1;
             if let Some(&block_idx) = back_edge_lines.get(&line_number) {
-                self.emit_instrumented_line(line, block_idx, line_number)?;
+                self.instrument_back_edge(line, block_idx)?;
             } else {
-                self.emit_original_line(line);
+                self.emit_line(line);
             }
         }
 
@@ -128,34 +113,33 @@ impl<'a> Instrumenter<'a> {
     }
 
     /// Maps line numbers (1-indexed) to block indices for lines containing back-edge branches.
-    fn find_back_edge_lines(&self) -> Result<HashMap<usize, BlockIndex>, InstrumentError> {
+    fn find_back_edge_lines(&self) -> HashMap<usize, BlockIndex> {
         let mut back_edge_lines = HashMap::new();
 
         for block_idx in self.cfg.blocks() {
             if self.cfg.has_back_edge(block_idx) {
-                if let Some(terminator_idx) = self.cfg.terminator_index(block_idx) {
-                    // terminator_idx is an instruction index in the resolved stream
-                    // Map it back to the original line number
-                    let resolved = self.resolved.get(terminator_idx).ok_or(
-                        InstrumentError::InvalidTerminatorIndex {
-                            index: terminator_idx,
-                            count: self.resolved.len(),
-                        },
-                    )?;
-                    back_edge_lines.insert(resolved.line_number, block_idx);
-                }
+                let terminator_idx = self
+                    .cfg
+                    .terminator_index(block_idx)
+                    .expect("back-edge block must have terminator");
+                // terminator_idx is an instruction index in the resolved stream
+                // Map it back to the original line number
+                let resolved = self
+                    .resolved
+                    .get(terminator_idx)
+                    .expect("terminator index must be valid");
+                back_edge_lines.insert(resolved.line_number, block_idx);
             }
         }
 
-        Ok(back_edge_lines)
+        back_edge_lines
     }
 
-    /// Emits gas check sequence followed by the original branch instruction.
-    fn emit_instrumented_line(
+    /// Instruments a back-edge with gas check sequence.
+    fn instrument_back_edge(
         &mut self,
         line: &ParsedLine,
         block_idx: BlockIndex,
-        line_number: usize,
     ) -> Result<(), InstrumentError> {
         let instruction_count = self.cfg.instruction_count(block_idx);
         let label = self.generate_unique_label()?;
@@ -178,7 +162,7 @@ impl<'a> Instrumenter<'a> {
 
         // Emit the original back-edge branch instruction
         let Statement::Instruction(ref instruction) = line.statement else {
-            return Err(InstrumentError::NonInstructionBackEdge { line: line_number });
+            unreachable!("back-edge line must contain an instruction");
         };
         self.output.push_str(&format!(
             "    {} {}\n",
@@ -189,8 +173,8 @@ impl<'a> Instrumenter<'a> {
         Ok(())
     }
 
-    /// Emits a line unchanged (no gas check needed).
-    fn emit_original_line(&mut self, line: &ParsedLine) {
+    /// Emits a line unchanged.
+    fn emit_line(&mut self, line: &ParsedLine) {
         self.output.push_str(line.original);
         self.output.push('\n');
     }
@@ -224,16 +208,12 @@ impl<'a> Instrumenter<'a> {
         let mut instructions = Vec::new();
         while count > MAX_SUB_IMMEDIATE {
             instructions.push(format!(
-                "    sub {}, {}, #{}",
-                GAS_REGISTER, GAS_REGISTER, MAX_SUB_IMMEDIATE
+                "    sub {GAS_REGISTER}, {GAS_REGISTER}, #{MAX_SUB_IMMEDIATE}"
             ));
             count -= MAX_SUB_IMMEDIATE;
         }
         if count > 0 {
-            instructions.push(format!(
-                "    sub {}, {}, #{}",
-                GAS_REGISTER, GAS_REGISTER, count
-            ));
+            instructions.push(format!("    sub {GAS_REGISTER}, {GAS_REGISTER}, #{count}"));
         }
         instructions
     }

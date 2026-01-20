@@ -16,34 +16,7 @@ use std::collections::HashMap;
 
 use cfg::{BasicInstruction, CfgInstruction};
 
-/// Error during label resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolveError {
-    /// Labels at end of file with no following instruction.
-    TrailingLabels(Vec<String>),
-    /// Branch references an undefined label.
-    UndefinedLabel {
-        /// The undefined label name.
-        label: String,
-        /// Line number where the reference occurs.
-        line: usize,
-    },
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ResolveError::TrailingLabels(labels) => {
-                write!(f, "trailing labels with no instruction: {labels:?}")
-            }
-            ResolveError::UndefinedLabel { label, line } => {
-                write!(f, "undefined label '{label}' referenced at line {line}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ResolveError {}
+use crate::error::ResolveError;
 
 /// A resolved instruction with branch targets as instruction indices.
 ///
@@ -233,7 +206,7 @@ impl<'a> ParsedAssembly<'a> {
                 instructions.push(ResolvedInstruction {
                     index,
                     mnemonic: instruction.mnemonic.to_string(),
-                    branch_target: None,
+                    branch_target: None, // to be resolved in second pass
                     line_number: line.line_number,
                 });
                 branch_labels.push(instruction.branch_target_label());
