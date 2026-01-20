@@ -9,7 +9,7 @@ use gas_instrument::{instrument, parser};
 use runtime::{execute, NativeModule};
 use tempfile::TempDir;
 
-const TEST_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/test_loop.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 
 /// Instruments the assembly using gas-instrument.
 fn instrument_asm(source: &str) -> String {
@@ -118,12 +118,12 @@ fn build_instrumented_lib(source: &str, symbol_name: &str) -> (TempDir, std::pat
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_execute_with_sufficient_gas() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(TEST_LOOP_ASM, "test_loop");
+    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
-            .get_function::<unsafe extern "C" fn()>("test_loop")
+            .get_function::<unsafe extern "C" fn()>("simple_loop")
             .expect("failed to get function")
     };
 
@@ -155,12 +155,12 @@ fn test_execute_with_sufficient_gas() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_execute_with_insufficient_gas() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(TEST_LOOP_ASM, "test_loop");
+    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
-            .get_function::<unsafe extern "C" fn()>("test_loop")
+            .get_function::<unsafe extern "C" fn()>("simple_loop")
             .expect("failed to get function")
     };
 
@@ -180,7 +180,7 @@ fn test_execute_with_insufficient_gas() {
 
 #[test]
 fn test_symbol_not_found() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(TEST_LOOP_ASM, "test_loop");
+    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let result = unsafe { module.get_function::<unsafe extern "C" fn()>("nonexistent_symbol") };
@@ -207,12 +207,12 @@ fn test_load_nonexistent_library() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_multiple_executions() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(TEST_LOOP_ASM, "test_loop");
+    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
-            .get_function::<unsafe extern "C" fn()>("test_loop")
+            .get_function::<unsafe extern "C" fn()>("simple_loop")
             .expect("failed to get function")
     };
 
@@ -230,12 +230,12 @@ fn test_multiple_executions() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_out_of_gas_then_successful() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(TEST_LOOP_ASM, "test_loop");
+    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
-            .get_function::<unsafe extern "C" fn()>("test_loop")
+            .get_function::<unsafe extern "C" fn()>("simple_loop")
             .expect("failed to get function")
     };
 

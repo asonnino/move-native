@@ -13,7 +13,7 @@ use native_verifier::{decode_instructions, VerificationError, Verifier};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
 
-const TEST_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/test_loop.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
 
 /// Assembles the given assembly source and returns the code section bytes.
@@ -54,8 +54,8 @@ fn instrument_and_assemble(source: &str) -> Vec<u8> {
 // Raw code verification (should FAIL - missing gas checks)
 
 #[test]
-fn test_raw_test_loop_fails_verification() {
-    let code = assemble(TEST_LOOP_ASM);
+fn test_raw_simple_loop_fails_verification() {
+    let code = assemble(SIMPLE_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
     let result = Verifier::new(&instructions).verify();
 
@@ -103,8 +103,8 @@ fn test_raw_nested_loops_fails_verification() {
 // Instrumented code verification (should PASS - but fails on ret for now)
 
 #[test]
-fn test_instrumented_test_loop_gas_checks_present() {
-    let code = instrument_and_assemble(TEST_LOOP_ASM);
+fn test_instrumented_simple_loop_gas_checks_present() {
+    let code = instrument_and_assemble(SIMPLE_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
     let result = Verifier::new(&instructions).verify();
 
@@ -144,17 +144,17 @@ fn test_instrumented_nested_loops_gas_checks_present() {
 // Decoding tests
 
 #[test]
-fn test_decode_raw_test_loop() {
-    let code = assemble(TEST_LOOP_ASM);
+fn test_decode_raw_simple_loop() {
+    let code = assemble(SIMPLE_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
 
-    // test_loop.s has: mov, mov, add, cmp, b.lt, ret = 6 instructions
+    // simple_loop.s has: mov, mov, add, cmp, b.lt, ret = 6 instructions
     assert_eq!(instructions.len(), 6);
 }
 
 #[test]
-fn test_decode_instrumented_test_loop() {
-    let code = instrument_and_assemble(TEST_LOOP_ASM);
+fn test_decode_instrumented_simple_loop() {
+    let code = instrument_and_assemble(SIMPLE_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
 
     // After instrumentation: original 6 + gas check (sub, tbz, brk) = 9

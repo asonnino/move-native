@@ -13,7 +13,7 @@
 
 use gas_instrument::{build_cfg, instrument, ParsedAssembly};
 
-const TEST_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/test_loop.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
 
 /// Tests the full instrumentation pipeline on a simple loop.
@@ -22,8 +22,8 @@ const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_l
 /// - Gas check sequence (`sub x23` / `tbz x23, #63` / `brk #0`) is inserted
 /// - Original labels and branch targets are preserved
 #[test]
-fn test_loop_instrumentation() {
-    let asm = ParsedAssembly::parse(TEST_LOOP_ASM);
+fn simple_loop_instrumentation() {
+    let asm = ParsedAssembly::parse(SIMPLE_LOOP_ASM);
     let cfg_result = build_cfg(&asm).unwrap();
     let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
@@ -33,18 +33,18 @@ fn test_loop_instrumentation() {
     assert!(output.contains("brk #0"), "missing out-of-gas trap");
 
     // Verify the original code is still present
-    assert!(output.contains("_test_loop:"), "missing function label");
+    assert!(output.contains("_simple_loop:"), "missing function label");
     assert!(output.contains(".Lloop:"), "missing loop label");
     assert!(output.contains("b.lt .Lloop"), "missing back-edge branch");
 }
 
 /// Tests that CFG analysis correctly identifies back-edges.
 ///
-/// The `test_loop.s` file has exactly one back-edge: `b.lt .Lloop`
+/// The `simple_loop.s` file has exactly one back-edge: `b.lt .Lloop`
 /// which branches backward to the loop header.
 #[test]
 fn test_back_edge_detection() {
-    let asm = ParsedAssembly::parse(TEST_LOOP_ASM);
+    let asm = ParsedAssembly::parse(SIMPLE_LOOP_ASM);
     let cfg_result = build_cfg(&asm).unwrap();
     let cfg = &cfg_result.cfg;
 
@@ -53,7 +53,7 @@ fn test_back_edge_detection() {
     assert_eq!(back_edge_count, 1, "expected exactly one back-edge");
 
     // Verify the back-edge target is the loop header (instruction index 2)
-    // After resolution: _test_loop (0), mov (1), mov (2), .Lloop/add (3), cmp (4), b.lt (5), ret (6)
+    // After resolution: _simple_loop (0), mov (1), mov (2), .Lloop/add (3), cmp (4), b.lt (5), ret (6)
     // Wait, labels are resolved - .Lloop resolves to the instruction after it
     let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
     // The back-edge target is an instruction index, not a label name

@@ -318,11 +318,11 @@ Based on DeCl, allow approximately:
 ## Example: Hand-Written Test Assembly
 
 ```asm
-// test_loop.s - Simple loop for testing gas instrumentation
-.global _test_loop
+// simple_loop.s - Simple loop for testing gas instrumentation
+.global _simple_loop
 .align 4
 
-_test_loop:
+_simple_loop:
     mov x0, #0              // counter = 0
     mov x1, #1000000        // limit
 
