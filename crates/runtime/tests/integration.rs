@@ -6,8 +6,11 @@ use std::path::Path;
 use std::process::Command;
 
 use gas_instrument::{instrument, parser};
-use runtime::{Executor, NativeModule};
+use runtime::{Executor, ModuleCache};
 use tempfile::TempDir;
+
+/// The function type for all test functions
+type TestFn = unsafe extern "C" fn();
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 
@@ -121,15 +124,15 @@ fn test_execute_with_sufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let module = NativeModule::load(&lib_path).expect("failed to load module");
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
     let entry = unsafe {
-        module
-            .get_function::<unsafe extern "C" fn()>("simple_loop")
+        cache
+            .get_or_load(&lib_path, "simple_loop")
             .expect("failed to get function")
     };
 
     // Execute with plenty of gas (loop runs 1000 times, each iteration ~3 gas)
-    let result = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
+    let result = unsafe { executor.execute(entry, 100_000) }.expect("execute failed");
 
     assert!(
         result.completed,
@@ -159,15 +162,15 @@ fn test_execute_with_insufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let module = NativeModule::load(&lib_path).expect("failed to load module");
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
     let entry = unsafe {
-        module
-            .get_function::<unsafe extern "C" fn()>("simple_loop")
+        cache
+            .get_or_load(&lib_path, "simple_loop")
             .expect("failed to get function")
     };
 
     // Execute with very little gas (not enough to complete the loop)
-    let result = unsafe { executor.execute(*entry, 10) }.expect("execute failed");
+    let result = unsafe { executor.execute(entry, 10) }.expect("execute failed");
 
     assert!(
         !result.completed,
@@ -184,8 +187,8 @@ fn test_execute_with_insufficient_gas() {
 fn test_symbol_not_found() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
-    let module = NativeModule::load(&lib_path).expect("failed to load module");
-    let result = unsafe { module.get_function::<unsafe extern "C" fn()>("nonexistent_symbol") };
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
+    let result = unsafe { cache.get_or_load(&lib_path, "nonexistent_symbol") };
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -198,7 +201,8 @@ fn test_symbol_not_found() {
 
 #[test]
 fn test_load_nonexistent_library() {
-    let result = NativeModule::load("/nonexistent/path/to/library.dylib");
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
+    let result = unsafe { cache.get_or_load("/nonexistent/path/to/library.dylib", "func") };
     assert!(result.is_err());
     match result.unwrap_err() {
         runtime::RuntimeError::LoadError { .. } => {}
@@ -212,16 +216,16 @@ fn test_multiple_executions() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let module = NativeModule::load(&lib_path).expect("failed to load module");
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
     let entry = unsafe {
-        module
-            .get_function::<unsafe extern "C" fn()>("simple_loop")
+        cache
+            .get_or_load(&lib_path, "simple_loop")
             .expect("failed to get function")
     };
 
     // Execute multiple times to ensure state is properly reset between executions
     for i in 0..3 {
-        let result = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
+        let result = unsafe { executor.execute(entry, 100_000) }.expect("execute failed");
         assert!(
             result.completed,
             "execution {} should complete with sufficient gas",
@@ -236,19 +240,19 @@ fn test_out_of_gas_then_successful() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let module = NativeModule::load(&lib_path).expect("failed to load module");
+    let mut cache: ModuleCache<TestFn> = ModuleCache::new();
     let entry = unsafe {
-        module
-            .get_function::<unsafe extern "C" fn()>("simple_loop")
+        cache
+            .get_or_load(&lib_path, "simple_loop")
             .expect("failed to get function")
     };
 
     // First execution: out of gas
-    let result1 = unsafe { executor.execute(*entry, 10) }.expect("execute failed");
+    let result1 = unsafe { executor.execute(entry, 10) }.expect("execute failed");
     assert!(!result1.completed, "should run out of gas");
 
     // Second execution: should succeed (state properly reset)
-    let result2 = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
+    let result2 = unsafe { executor.execute(entry, 100_000) }.expect("execute failed");
     assert!(
         result2.completed,
         "should complete after previous out-of-gas"

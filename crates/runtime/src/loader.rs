@@ -9,33 +9,11 @@ use libloading::{Library, Symbol as LibSymbol};
 
 use crate::error::{RuntimeError, RuntimeResult};
 
-/// A function symbol from a native module
+/// A loaded native module (internal use only)
 ///
-/// This is a wrapper around the raw function pointer that provides
-/// safe access to the function.
-pub struct Symbol<F: 'static> {
-    inner: LibSymbol<'static, F>,
-}
-
-impl<F: 'static> std::fmt::Debug for Symbol<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Symbol").finish_non_exhaustive()
-    }
-}
-
-impl<F: 'static> std::ops::Deref for Symbol<F> {
-    type Target = F;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-/// A loaded native module
-///
-/// Wraps a dynamically loaded library (.dylib on macOS, .so on Linux)
-/// and provides safe access to exported functions.
-pub struct NativeModule {
+/// Wraps a dynamically loaded library (.dylib on macOS, .so on Linux).
+/// This module is dangerous, use `ModuleCache` for the public API.
+pub(crate) struct NativeModule {
     library: Library,
 }
 
@@ -47,7 +25,7 @@ impl std::fmt::Debug for NativeModule {
 
 impl NativeModule {
     /// Load a native module from the specified path
-    pub fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Self> {
+    pub(crate) fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Self> {
         let path = path.as_ref();
         // Safety: The library is loaded with default flags.
         // The caller must ensure the library is safe to load.
@@ -59,36 +37,15 @@ impl NativeModule {
         Ok(Self { library })
     }
 
-    /// Get a function symbol from the module
-    ///
-    /// # Type Parameters
-    ///
-    /// * `F` - The function signature type (e.g., `unsafe extern "C" fn()`)
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The symbol name to look up
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeError::SymbolNotFound` if the symbol doesn't exist.
+    /// Get a function pointer from the module
     ///
     /// # Safety
     ///
     /// The caller must ensure:
     /// - The type parameter `F` matches the actual function signature
     /// - The function is safe to call (e.g., properly instrumented)
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use runtime::NativeModule;
-    ///
-    /// let module = NativeModule::load("my_module.dylib")?;
-    /// let func = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
-    /// # Ok::<(), runtime::RuntimeError>(())
-    /// ```
-    pub unsafe fn get_function<F: 'static>(&self, name: &str) -> RuntimeResult<Symbol<F>> {
+    /// - The module (`self`) outlives usage of the returned function pointer
+    pub(crate) unsafe fn get_function<F: Copy + 'static>(&self, name: &str) -> RuntimeResult<F> {
         // Note: dlsym handles platform symbol conventions automatically.
         // On macOS, dlsym("foo") finds "_foo" in Mach-O binaries.
         // On Linux, dlsym("foo") finds "foo" in ELF binaries.
@@ -99,11 +56,8 @@ impl NativeModule {
                     symbol: name.to_string(),
                 })?;
 
-        Ok(Symbol {
-            // Leak the symbol to get a 'static lifetime
-            // This is safe because the Library outlives the Symbol usage
-            inner: std::mem::transmute(symbol),
-        })
+        // Dereference to get the raw function pointer
+        Ok(*symbol)
     }
 }
 
@@ -111,7 +65,8 @@ impl NativeModule {
 mod tests {
     use std::path::Path;
 
-    use crate::{NativeModule, RuntimeError};
+    use super::NativeModule;
+    use crate::RuntimeError;
 
     #[test]
     fn test_load_nonexistent() {

@@ -51,4 +51,3 @@ mod signal;
 pub use cache::{ModuleCache, ModuleId};
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
-pub use loader::{NativeModule, Symbol};

@@ -33,12 +33,14 @@ pub struct GasResult {
 /// # Example
 ///
 /// ```no_run
-/// use runtime::{Executor, NativeModule};
+/// use runtime::{Executor, ModuleCache};
+///
+/// type MoveFn = unsafe extern "C" fn();
 ///
 /// let executor = Executor::init()?;
-/// let module = NativeModule::load("my_module.dylib")?;
-/// let entry = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
-/// let result = unsafe { executor.execute(*entry, 1_000_000) }?;
+/// let mut cache: ModuleCache<MoveFn> = ModuleCache::new();
+/// let function = unsafe { cache.get_or_load("my_module.dylib", "my_function")? };
+/// let result = unsafe { executor.execute(function, 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {

@@ -14,10 +14,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    error::RuntimeResult,
-    loader::{NativeModule, Symbol},
-};
+use crate::{error::RuntimeResult, loader::NativeModule};
 
 /// Identifier for a native module
 ///
@@ -59,7 +56,7 @@ impl FunctionId {
 
 /// Cache for loaded native modules and function lookups
 ///
-/// Generic over `F`, the function signature type. All cached functions
+/// Generic over `F`, the function pointer type. All cached functions
 /// must have the same signature (uniform ABI).
 ///
 /// Caches both modules (to avoid repeated dlopen) and function pointers
@@ -67,7 +64,7 @@ impl FunctionId {
 ///
 /// # Type Parameters
 ///
-/// * `F` - The function signature type (e.g., `unsafe extern "C" fn(*mut Context)`)
+/// * `F` - The function pointer type (e.g., `unsafe extern "C" fn(*mut Context)`)
 ///
 /// # Example
 ///
@@ -89,22 +86,22 @@ impl FunctionId {
 /// state database rather than the filesystem. Native module bytes would
 /// be stored in RocksDB keyed by module ID, and loaded via memfd_create
 /// to maintain consistency with on-chain state.
-pub struct ModuleCache<F: 'static> {
+pub struct ModuleCache<F: Copy + 'static> {
     /// In-memory cache of loaded modules
     modules: HashMap<ModuleId, Arc<NativeModule>>,
-    /// In-memory cache of function symbols
-    functions: HashMap<FunctionId, Symbol<F>>,
+    /// In-memory cache of function pointers
+    functions: HashMap<FunctionId, F>,
     /// Marker for the function type
     _marker: PhantomData<F>,
 }
 
-impl<F: 'static> Default for ModuleCache<F> {
+impl<F: Copy + 'static> Default for ModuleCache<F> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<F: 'static> ModuleCache<F> {
+impl<F: Copy + 'static> ModuleCache<F> {
     /// Create a new empty cache
     pub fn new() -> Self {
         Self::with_capacity(0, 0)
@@ -122,7 +119,7 @@ impl<F: 'static> ModuleCache<F> {
     /// Get or load a function from a module
     ///
     /// Loads the module if not already cached, then looks up the function
-    /// symbol if not already cached. Both are cached for future calls.
+    /// pointer if not already cached. Both are cached for future calls.
     ///
     /// # Arguments
     ///
@@ -142,13 +139,13 @@ impl<F: 'static> ModuleCache<F> {
         &mut self,
         module_path: impl AsRef<Path>,
         function_name: &str,
-    ) -> RuntimeResult<&Symbol<F>> {
+    ) -> RuntimeResult<F> {
         let module_id = ModuleId::new(module_path.as_ref());
         let function_id = FunctionId::new(module_id.clone(), function_name);
 
         // Use entry API to avoid borrow conflicts
         match self.functions.entry(function_id) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Occupied(e) => Ok(*e.get()),
             Entry::Vacant(e) => {
                 // Load module if not cached
                 let module = match self.modules.entry(module_id) {
@@ -160,7 +157,7 @@ impl<F: 'static> ModuleCache<F> {
 
                 // Look up function and insert into cache
                 let function = module.get_function::<F>(function_name)?;
-                Ok(e.insert(function))
+                Ok(*e.insert(function))
             }
         }
     }
