@@ -32,7 +32,10 @@
 //! # Example
 //!
 //! ```ignore
-//! use runtime::{execute, NativeModule};
+//! use runtime::{Executor, NativeModule};
+//!
+//! // Create an executor (installs signal handler)
+//! let executor = Executor::new()?;
 //!
 //! // Load a compiled module
 //! let module = NativeModule::load("my_module.dylib")?;
@@ -41,7 +44,7 @@
 //! let entry = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
 //!
 //! // Execute with gas limit
-//! let result = unsafe { execute(*entry, 1_000_000) }?;
+//! let result = unsafe { executor.execute(*entry, 1_000_000) }?;
 //!
 //! if result.completed {
 //!     println!("Completed successfully, used {} gas", result.gas_consumed);
@@ -68,6 +71,6 @@ mod loader;
 mod signal;
 
 pub use cache::{ModuleCache, ModuleId};
-pub use execute::{execute, GasResult};
 pub use error::{RuntimeError, RuntimeResult};
+pub use execute::{Executor, GasResult};
 pub use loader::{NativeModule, Symbol};

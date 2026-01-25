@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use gas_instrument::{instrument, parser};
-use runtime::{execute, NativeModule};
+use runtime::{Executor, NativeModule};
 use tempfile::TempDir;
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
@@ -120,6 +120,7 @@ fn build_instrumented_lib(source: &str, symbol_name: &str) -> (TempDir, std::pat
 fn test_execute_with_sufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
+    let executor = Executor::new().expect("failed to create executor");
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
@@ -128,7 +129,7 @@ fn test_execute_with_sufficient_gas() {
     };
 
     // Execute with plenty of gas (loop runs 1000 times, each iteration ~3 gas)
-    let result = unsafe { execute(*entry, 100_000) }.expect("execute failed");
+    let result = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
 
     assert!(
         result.completed,
@@ -157,6 +158,7 @@ fn test_execute_with_sufficient_gas() {
 fn test_execute_with_insufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
+    let executor = Executor::new().expect("failed to create executor");
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
@@ -165,7 +167,7 @@ fn test_execute_with_insufficient_gas() {
     };
 
     // Execute with very little gas (not enough to complete the loop)
-    let result = unsafe { execute(*entry, 10) }.expect("execute failed");
+    let result = unsafe { executor.execute(*entry, 10) }.expect("execute failed");
 
     assert!(
         !result.completed,
@@ -209,6 +211,7 @@ fn test_load_nonexistent_library() {
 fn test_multiple_executions() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
+    let executor = Executor::new().expect("failed to create executor");
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
@@ -218,7 +221,7 @@ fn test_multiple_executions() {
 
     // Execute multiple times to ensure state is properly reset between executions
     for i in 0..3 {
-        let result = unsafe { execute(*entry, 100_000) }.expect("execute failed");
+        let result = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
         assert!(
             result.completed,
             "execution {} should complete with sufficient gas",
@@ -232,6 +235,7 @@ fn test_multiple_executions() {
 fn test_out_of_gas_then_successful() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
+    let executor = Executor::new().expect("failed to create executor");
     let module = NativeModule::load(&lib_path).expect("failed to load module");
     let entry = unsafe {
         module
@@ -240,11 +244,11 @@ fn test_out_of_gas_then_successful() {
     };
 
     // First execution: out of gas
-    let result1 = unsafe { execute(*entry, 10) }.expect("execute failed");
+    let result1 = unsafe { executor.execute(*entry, 10) }.expect("execute failed");
     assert!(!result1.completed, "should run out of gas");
 
     // Second execution: should succeed (state properly reset)
-    let result2 = unsafe { execute(*entry, 100_000) }.expect("execute failed");
+    let result2 = unsafe { executor.execute(*entry, 100_000) }.expect("execute failed");
     assert!(
         result2.completed,
         "should complete after previous out-of-gas"

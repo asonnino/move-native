@@ -1,7 +1,7 @@
-//! Entry point for executing gas-instrumented native code
+//! Executor for gas-instrumented native code
 //!
-//! The execute function sets up the gas counter in x23, calls the native
-//! function, and returns execution results including gas consumption.
+//! The Executor handles signal handler installation and provides the
+//! execution API for running gas-instrumented Arm64 code.
 
 use std::arch::asm;
 
@@ -21,48 +21,75 @@ pub struct GasResult {
     pub gas_remaining: u64,
 }
 
-/// Execute gas-instrumented native code
+/// Executor for gas-instrumented native code
 ///
-/// Sets up x23 with the gas limit, installs the SIGTRAP handler,
-/// calls the entry function, and returns the execution result.
-///
-/// # Safety
-///
-/// The caller must ensure:
-/// - `entry` points to valid, verified, gas-instrumented Arm64 code
-/// - The code follows the gas instrumentation protocol (uses x23 for gas)
-/// - No other threads are executing gas-instrumented code concurrently
+/// Handles signal handler installation and provides the execution API.
+/// This is a zero-sized type - it just ensures the signal handler is
+/// installed before any execution.
 ///
 /// # Example
 ///
 /// ```ignore
+/// let executor = Executor::new()?;
 /// let module = NativeModule::load("my_module.dylib")?;
 /// let entry = module.get_function::<unsafe extern "C" fn()>("my_function")?;
-/// let result = unsafe { execute(entry, 1_000_000) }?;
+/// let result = unsafe { executor.execute(*entry, 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {
 ///     println!("Out of gas!");
 /// }
 /// ```
-pub unsafe fn execute(entry: unsafe extern "C" fn(), gas_limit: u64) -> RuntimeResult<GasResult> {
-    // Install the signal handler (idempotent)
-    install_handler()?;
+pub struct Executor {
+    /// Private field to prevent direct construction
+    _private: (),
+}
 
-    // Reset the out-of-gas flag
-    reset_out_of_gas();
+impl Executor {
+    /// Create a new executor
+    ///
+    /// Installs the SIGTRAP signal handler. This is idempotent - calling
+    /// `new()` multiple times is safe and will only install the handler once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signal handler cannot be installed.
+    pub fn new() -> RuntimeResult<Self> {
+        install_handler()?;
+        Ok(Self { _private: () })
+    }
 
-    // Execute with gas tracking (internally uses i64 for sign bit check)
-    let raw_remaining = execute_with_gas(entry, gas_limit as i64);
+    /// Execute gas-instrumented native code
+    ///
+    /// Sets up x23 with the gas limit, calls the entry function, and
+    /// returns the execution result.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - `entry` points to valid, verified, gas-instrumented Arm64 code
+    /// - The code follows the gas instrumentation protocol (uses x23 for gas)
+    /// - No other threads are executing gas-instrumented code concurrently
+    pub unsafe fn execute(
+        &self,
+        entry: unsafe extern "C" fn(),
+        gas_limit: u64,
+    ) -> RuntimeResult<GasResult> {
+        // Reset the out-of-gas flag
+        reset_out_of_gas();
 
-    // Clamp negative values to 0 for the public API
-    let gas_remaining = raw_remaining.max(0) as u64;
+        // Execute with gas tracking (internally uses i64 for sign bit check)
+        let raw_remaining = execute_with_gas(entry, gas_limit as i64);
 
-    Ok(GasResult {
-        completed: !is_out_of_gas(),
-        gas_consumed: gas_limit - gas_remaining,
-        gas_remaining,
-    })
+        // Clamp negative values to 0 for the public API
+        let gas_remaining = raw_remaining.max(0) as u64;
+
+        Ok(GasResult {
+            completed: !is_out_of_gas(),
+            gas_consumed: gas_limit - gas_remaining,
+            gas_remaining,
+        })
+    }
 }
 
 /// Execute the function with gas counter in x23
