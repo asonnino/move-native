@@ -9,6 +9,28 @@ use libloading::{Library, Symbol as LibSymbol};
 
 use crate::error::{RuntimeError, RuntimeResult};
 
+/// A function symbol from a native module
+///
+/// This is a wrapper around the raw function pointer that provides
+/// safe access to the function.
+pub struct Symbol<F: 'static> {
+    inner: LibSymbol<'static, F>,
+}
+
+impl<F: 'static> std::fmt::Debug for Symbol<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Symbol").finish_non_exhaustive()
+    }
+}
+
+impl<F: 'static> std::ops::Deref for Symbol<F> {
+    type Target = F;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 /// A loaded native module
 ///
 /// Wraps a dynamically loaded library (.dylib on macOS, .so on Linux)
@@ -79,28 +101,6 @@ impl NativeModule {
             // This is safe because the Library outlives the Symbol usage
             inner: std::mem::transmute(symbol),
         })
-    }
-}
-
-/// A function symbol from a native module
-///
-/// This is a wrapper around the raw function pointer that provides
-/// safe access to the function.
-pub struct Symbol<F: 'static> {
-    inner: LibSymbol<'static, F>,
-}
-
-impl<F: 'static> std::fmt::Debug for Symbol<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Symbol").finish_non_exhaustive()
-    }
-}
-
-impl<F: 'static> std::ops::Deref for Symbol<F> {
-    type Target = F;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }
 

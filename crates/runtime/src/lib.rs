@@ -34,8 +34,8 @@
 //! ```ignore
 //! use runtime::{Executor, NativeModule};
 //!
-//! // Create an executor (installs signal handler)
-//! let executor = Executor::new()?;
+//! // Initialize executor (installs signal handler)
+//! let executor = Executor::init()?;
 //!
 //! // Load a compiled module
 //! let module = NativeModule::load("my_module.dylib")?;

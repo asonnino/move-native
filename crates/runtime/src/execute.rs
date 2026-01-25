@@ -30,7 +30,7 @@ pub struct GasResult {
 /// # Example
 ///
 /// ```ignore
-/// let executor = Executor::new()?;
+/// let executor = Executor::init()?;
 /// let module = NativeModule::load("my_module.dylib")?;
 /// let entry = module.get_function::<unsafe extern "C" fn()>("my_function")?;
 /// let result = unsafe { executor.execute(*entry, 1_000_000) }?;
@@ -40,23 +40,21 @@ pub struct GasResult {
 ///     println!("Out of gas!");
 /// }
 /// ```
-pub struct Executor {
-    /// Private field to prevent direct construction
-    _private: (),
-}
+#[non_exhaustive]
+pub struct Executor;
 
 impl Executor {
-    /// Create a new executor
+    /// Initialize the executor
     ///
     /// Installs the SIGTRAP signal handler. This is idempotent - calling
-    /// `new()` multiple times is safe and will only install the handler once.
+    /// `init()` multiple times is safe and will only install the handler once.
     ///
     /// # Errors
     ///
     /// Returns an error if the signal handler cannot be installed.
-    pub fn new() -> RuntimeResult<Self> {
+    pub fn init() -> RuntimeResult<Self> {
         install_handler()?;
-        Ok(Self { _private: () })
+        Ok(Self)
     }
 
     /// Execute gas-instrumented native code
@@ -79,7 +77,7 @@ impl Executor {
         reset_out_of_gas();
 
         // Execute with gas tracking (internally uses i64 for sign bit check)
-        let raw_remaining = execute_with_gas(entry, gas_limit as i64);
+        let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
 
         // Clamp negative values to 0 for the public API
         let gas_remaining = raw_remaining.max(0) as u64;
@@ -90,47 +88,48 @@ impl Executor {
             gas_remaining,
         })
     }
-}
 
-/// Execute the function with gas counter in x23
-///
-/// This function:
-/// 1. Saves x23 to the stack (callee-saved, must preserve for caller)
-/// 2. Sets x23 to the gas limit
-/// 3. Calls the entry function
-/// 4. Reads the remaining gas from x23
-/// 5. Restores x23 from the stack
-///
-/// Returns the remaining gas value from x23 after execution.
-#[cfg(target_arch = "aarch64")]
-#[inline(never)]
-unsafe fn execute_with_gas(entry: unsafe extern "C" fn(), gas_limit: i64) -> i64 {
-    let gas_remaining: i64;
+    /// Execute the function with gas counter in x23
+    ///
+    /// This function:
+    /// 1. Saves x23 to the stack (callee-saved, must preserve for caller)
+    /// 2. Sets x23 to the gas limit
+    /// 3. Calls the entry function
+    /// 4. Reads the remaining gas from x23
+    /// 5. Restores x23 from the stack
+    ///
+    /// Returns the remaining gas value from x23 after execution.
+    #[cfg(target_arch = "aarch64")]
+    #[inline(never)]
+    unsafe fn execute_with_gas(entry: unsafe extern "C" fn(), gas_limit: i64) -> i64 {
+        let gas_remaining: i64;
 
-    asm!(
-        // Save x23 to stack (callee-saved, must preserve for our caller)
-        "str x23, [sp, #-16]!",
-        // Set gas limit
-        "mov x23, {gas_limit}",
-        // Call the function
-        "blr {entry}",
-        // Read remaining gas into x8
-        "mov x8, x23",
-        // Restore x23 from stack
-        "ldr x23, [sp], #16",
-        gas_limit = in(reg) gas_limit,
-        entry = in(reg) entry,
-        // Clobbers: all caller-saved registers (function call)
-        clobber_abi("C"),
-        // x8 is our output register
-        out("x8") gas_remaining,
-    );
+        asm!(
+            // Save x23 to stack (callee-saved, must preserve for our caller)
+            "str x23, [sp, #-16]!",
+            // Set gas limit
+            "mov x23, {gas_limit}",
+            // Call the function
+            "blr {entry}",
+            // Read remaining gas into x8
+            "mov x8, x23",
+            // Restore x23 from stack
+            "ldr x23, [sp], #16",
+            gas_limit = in(reg) gas_limit,
+            entry = in(reg) entry,
+            // Clobbers: all caller-saved registers (function call)
+            clobber_abi("C"),
+            // x8 is our output register
+            out("x8") gas_remaining,
+        );
 
-    gas_remaining
-}
+        gas_remaining
+    }
 
-/// Fallback for non-aarch64 platforms (for compilation only)
-#[cfg(not(target_arch = "aarch64"))]
-unsafe fn execute_with_gas(_entry: unsafe extern "C" fn(), _gas_limit: i64) -> i64 {
-    panic!("execute_with_gas is only supported on aarch64");
+    /// Fallback for non-aarch64 platforms (for compilation only)
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(never)]
+    unsafe fn execute_with_gas(_entry: unsafe extern "C" fn(), _gas_limit: i64) -> i64 {
+        panic!("execute_with_gas is only supported on aarch64");
+    }
 }
