@@ -71,15 +71,18 @@ impl FunctionId {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// use runtime::ModuleCache;
+///
 /// // Define your function type (typically in the compiler crate)
-/// type MoveFn = unsafe extern "C" fn(*mut Context);
+/// type MoveFn = unsafe extern "C" fn();
 ///
 /// // Create a typed cache
 /// let mut cache: ModuleCache<MoveFn> = ModuleCache::new();
 ///
 /// // Get a function (loads module on first access, caches both)
 /// let func = unsafe { cache.get_or_load("module.dylib", "my_func")? };
+/// # Ok::<(), runtime::RuntimeError>(())
 /// ```
 ///
 /// TODO: In production, the backing storage should be the blockchain

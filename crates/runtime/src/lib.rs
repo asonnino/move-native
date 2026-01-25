@@ -29,30 +29,6 @@
 //! 2. Advances PC past the brk instruction
 //! 3. Allows execution to cleanly return
 //!
-//! # Example
-//!
-//! ```ignore
-//! use runtime::{Executor, NativeModule};
-//!
-//! // Initialize executor (installs signal handler)
-//! let executor = Executor::init()?;
-//!
-//! // Load a compiled module
-//! let module = NativeModule::load("my_module.dylib")?;
-//!
-//! // Get a function from the module
-//! let entry = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
-//!
-//! // Execute with gas limit
-//! let result = unsafe { executor.execute(*entry, 1_000_000) }?;
-//!
-//! if result.completed {
-//!     println!("Completed successfully, used {} gas", result.gas_consumed);
-//! } else {
-//!     println!("Out of gas after {} gas consumed", result.gas_consumed);
-//! }
-//! ```
-//!
 //! # Platform Support
 //!
 //! Currently supported platforms:

@@ -29,16 +29,19 @@ pub struct GasResult {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// use runtime::{Executor, NativeModule};
+///
 /// let executor = Executor::init()?;
 /// let module = NativeModule::load("my_module.dylib")?;
-/// let entry = module.get_function::<unsafe extern "C" fn()>("my_function")?;
+/// let entry = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
 /// let result = unsafe { executor.execute(*entry, 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {
 ///     println!("Out of gas!");
 /// }
+/// # Ok::<(), runtime::RuntimeError>(())
 /// ```
 #[derive(Clone)]
 pub struct Executor {

@@ -81,9 +81,12 @@ impl NativeModule {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// use runtime::NativeModule;
+    ///
     /// let module = NativeModule::load("my_module.dylib")?;
     /// let func = unsafe { module.get_function::<unsafe extern "C" fn()>("my_function")? };
+    /// # Ok::<(), runtime::RuntimeError>(())
     /// ```
     pub unsafe fn get_function<F: 'static>(&self, name: &str) -> RuntimeResult<Symbol<F>> {
         // Note: dlsym handles platform symbol conventions automatically.
