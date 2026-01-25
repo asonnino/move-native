@@ -62,17 +62,18 @@ impl Executor {
     /// Sets up x23 with the gas limit, calls the entry function, and
     /// returns the execution result.
     ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
+    ///
     /// # Safety
     ///
     /// The caller must ensure:
+    /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
     /// - `entry` points to valid, verified, gas-instrumented Arm64 code
     /// - The code follows the gas instrumentation protocol (uses x23 for gas)
     /// - No other threads are executing gas-instrumented code concurrently
-    pub unsafe fn execute(
-        &self,
-        entry: unsafe extern "C" fn(),
-        gas_limit: u64,
-    ) -> RuntimeResult<GasResult> {
+    pub unsafe fn execute<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
         // Reset the out-of-gas flag
         reset_out_of_gas();
 
@@ -99,9 +100,17 @@ impl Executor {
     /// 5. Restores x23 from the stack
     ///
     /// Returns the remaining gas value from x23 after execution.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
+    /// - `entry` points to valid, callable Arm64 code
     #[cfg(target_arch = "aarch64")]
     #[inline(never)]
-    unsafe fn execute_with_gas(entry: unsafe extern "C" fn(), gas_limit: i64) -> i64 {
+    unsafe fn execute_with_gas<F: Copy>(entry: F, gas_limit: i64) -> i64 {
+        // Convert function pointer to raw pointer for inline asm
+        let entry_ptr: *const () = std::mem::transmute_copy(&entry);
         let gas_remaining: i64;
 
         asm!(
@@ -116,7 +125,7 @@ impl Executor {
             // Restore x23 from stack
             "ldr x23, [sp], #16",
             gas_limit = in(reg) gas_limit,
-            entry = in(reg) entry,
+            entry = in(reg) entry_ptr,
             // Clobbers: all caller-saved registers (function call)
             clobber_abi("C"),
             // x8 is our output register
@@ -129,7 +138,7 @@ impl Executor {
     /// Fallback for non-aarch64 platforms (for compilation only)
     #[cfg(not(target_arch = "aarch64"))]
     #[inline(never)]
-    unsafe fn execute_with_gas(_entry: unsafe extern "C" fn(), _gas_limit: i64) -> i64 {
-        panic!("execute_with_gas is only supported on aarch64");
+    unsafe fn execute_with_gas<F: Copy>(_entry: F, _gas_limit: i64) -> i64 {
+        unimplemented!("execute_with_gas is only supported on aarch64");
     }
 }
