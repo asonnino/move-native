@@ -25,20 +25,6 @@ impl std::fmt::Debug for NativeModule {
 
 impl NativeModule {
     /// Load a native module from the specified path
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the shared library (.dylib on macOS, .so on Linux)
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeError::LoadError` if the library cannot be loaded.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let module = NativeModule::load("my_module.dylib")?;
-    /// ```
     pub fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Self> {
         let path = path.as_ref();
         // Safety: The library is loaded with default flags.
@@ -120,7 +106,9 @@ impl<F: 'static> std::ops::Deref for Symbol<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::Path;
+
+    use crate::{NativeModule, RuntimeError};
 
     #[test]
     fn test_load_nonexistent() {
