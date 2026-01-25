@@ -14,6 +14,7 @@
     "cbnz",
     "CCMN",
     "CCMP",
+    "dylib",
     "ERET",
     "ERETAA",
     "ERETAB",
