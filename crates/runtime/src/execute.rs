@@ -147,17 +147,17 @@ impl Executor {
     /// - `entry` points to valid, gas-instrumented Arm64 code
     /// - `gas_limit` fits in i64
     unsafe fn execute_inner<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
-        // Reset the out-of-gas flag
-        self.handler.reset();
-
         // Execute with gas tracking (internally uses i64 for sign bit check)
         let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
+
+        // Out-of-gas is detected by checking the sign of the gas counter
+        let out_of_gas = raw_remaining < 0;
 
         // Clamp negative values to 0 for the public API
         let gas_remaining = raw_remaining.max(0) as u64;
 
         Ok(GasResult {
-            completed: !self.handler.is_out_of_gas(),
+            completed: !out_of_gas,
             gas_consumed: gas_limit - gas_remaining,
             gas_remaining,
         })

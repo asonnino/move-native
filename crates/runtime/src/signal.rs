@@ -1,10 +1,14 @@
 //! SIGTRAP handler for out-of-gas detection
 //!
 //! When the gas counter goes negative, the instrumented code executes `brk #0`
-//! which triggers SIGTRAP. The signal handler sets a flag and advances PC past
-//! the trap instruction so execution can cleanly unwind.
+//! which triggers SIGTRAP. The signal handler advances PC past the trap
+//! instruction so execution can cleanly unwind.
+//!
+//! Out-of-gas is detected by checking the gas counter (x23) after execution:
+//! - `gas_remaining >= 0` → completed normally
+//! - `gas_remaining < 0` → ran out of gas (trap was triggered)
 
-use std::{cell::Cell, mem::MaybeUninit, sync::OnceLock};
+use std::{mem::MaybeUninit, sync::OnceLock};
 
 use crate::error::{RuntimeError, RuntimeResult};
 
@@ -19,31 +23,15 @@ static HANDLER_INIT: OnceLock<RuntimeResult<()>> = OnceLock::new();
 // This allows us to detect if another component has replaced our handler.
 static OUR_HANDLER: OnceLock<usize> = OnceLock::new();
 
-// Thread-local flag indicating out-of-gas condition.
-//
-// This must be static (not a field of SignalHandler) because the signal handler
-// callback (`handle_sigtrap`) is invoked by the kernel with a fixed signature
-// and cannot access instance data - only global/thread-local state.
-//
-// It's thread-local (not global) because:
-// 1. Each thread has its own x23 register (gas counter)
-// 2. SIGTRAP from `brk #0` is a synchronous signal, delivered to the thread
-//    that executed the instruction
-// 3. This allows parallel execution of gas-instrumented code across threads
-thread_local! {
-    static OUT_OF_GAS: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Handle to the installed SIGTRAP signal handler
 ///
-/// This is a zero-sized type that provides methods for checking and resetting
-/// the out-of-gas flag. The out-of-gas flag is thread-local, allowing parallel
-/// execution of gas-instrumented code across threads.
+/// This is a zero-sized type. Creating a `SignalHandler` installs the SIGTRAP
+/// handler if not already installed. Installation is idempotent - multiple
+/// instances share the same underlying handler (which is process-wide).
 ///
-/// Creating a `SignalHandler` installs the SIGTRAP handler if not already
-/// installed. Installation is idempotent - multiple instances share the same
-/// underlying handler (which is process-wide), but each thread has its own
-/// out-of-gas flag.
+/// The signal handler simply advances PC past the `brk #0` instruction.
+/// Out-of-gas detection is done by checking if the gas counter (x23) is
+/// negative after execution - no flag or TLS is needed.
 #[derive(Clone)]
 pub(crate) struct SignalHandler;
 
@@ -60,16 +48,6 @@ impl SignalHandler {
     pub fn install() -> RuntimeResult<Self> {
         HANDLER_INIT.get_or_init(Self::install_inner).clone()?;
         Ok(Self)
-    }
-
-    /// Check if the last execution ran out of gas
-    pub fn is_out_of_gas(&self) -> bool {
-        OUT_OF_GAS.with(|flag| flag.get())
-    }
-
-    /// Reset the out-of-gas flag before execution
-    pub fn reset(&self) {
-        OUT_OF_GAS.with(|flag| flag.set(false));
     }
 
     /// Query the current SIGTRAP handler
@@ -156,15 +134,16 @@ impl SignalHandler {
 
     /// Signal handler for SIGTRAP
     ///
-    /// Sets the thread-local OUT_OF_GAS flag and advances PC past the brk instruction.
-    /// Since SIGTRAP is a synchronous signal, it runs on the same thread that
-    /// executed `brk #0`, so accessing thread-local storage is safe.
+    /// Advances PC past the `brk #0` instruction so execution can continue.
+    ///
+    /// Note: `#[inline(never)]` ensures this function has a stable address
+    /// that can be compared in `verify_installed()`.
+    #[inline(never)]
     extern "C" fn handle_sigtrap(
         _sig: libc::c_int,
         _info: *mut libc::siginfo_t,
         ctx: *mut libc::c_void,
     ) {
-        OUT_OF_GAS.with(|flag| flag.set(true));
         // Safety: ctx points to a valid ucontext_t from the kernel
         unsafe {
             Self::advance_pc(ctx);
@@ -217,23 +196,7 @@ impl SignalHandler {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        error::RuntimeError,
-        signal::{SignalHandler, OUT_OF_GAS},
-    };
-
-    #[test]
-    fn test_out_of_gas_flag() {
-        let handler = SignalHandler::install().expect("failed to install handler");
-        handler.reset();
-        assert!(!handler.is_out_of_gas());
-
-        OUT_OF_GAS.with(|flag| flag.set(true));
-        assert!(handler.is_out_of_gas());
-
-        handler.reset();
-        assert!(!handler.is_out_of_gas());
-    }
+    use crate::{error::RuntimeError, signal::SignalHandler};
 
     #[test]
     fn test_install_handler() {
