@@ -72,6 +72,15 @@ impl Executor {
     /// Sets up x23 with the gas limit, calls the entry function, and
     /// returns the execution result.
     ///
+    /// # Signal Handler Requirement
+    ///
+    /// The SIGTRAP handler installed by `Executor::init()` must remain installed.
+    /// If another component replaces the handler, execution will fail silently
+    /// (infinite loops instead of out-of-gas errors).
+    ///
+    /// In debug builds, this method verifies the handler is still installed.
+    /// In release builds, use `execute_with_sigaction_check()` for explicit verification.
+    ///
     /// # Type Parameters
     ///
     /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
@@ -88,6 +97,56 @@ impl Executor {
             return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
         }
 
+        // Verify handler in debug builds only
+        #[cfg(debug_assertions)]
+        self.handler.verify_installed()?;
+
+        self.execute_inner(entry, gas_limit)
+    }
+
+    /// Execute with explicit signal handler verification
+    ///
+    /// Like `execute()`, but always verifies the SIGTRAP handler is still installed,
+    /// regardless of build mode. Use this when you need guaranteed verification.
+    ///
+    /// # Signal Handler Requirement
+    ///
+    /// The SIGTRAP handler installed by `Executor::init()` must remain installed.
+    /// If another component replaces the handler, this method will return an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
+    /// - `entry` points to valid, verified, gas-instrumented Arm64 code
+    /// - The code follows the gas instrumentation protocol (uses x23 for gas)
+    pub unsafe fn execute_with_sigaction_check<F: Copy>(
+        &self,
+        entry: F,
+        gas_limit: u64,
+    ) -> RuntimeResult<GasResult> {
+        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
+        if gas_limit > i64::MAX as u64 {
+            return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
+        }
+
+        self.handler.verify_installed()?;
+        self.execute_inner(entry, gas_limit)
+    }
+
+    /// Inner execution logic (shared by both execute methods)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - `F` is a function pointer type
+    /// - `entry` points to valid, gas-instrumented Arm64 code
+    /// - `gas_limit` fits in i64
+    unsafe fn execute_inner<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
         // Reset the out-of-gas flag
         self.handler.reset();
 
