@@ -4,12 +4,13 @@
 //! read native module bytes from the blockchain state database (e.g., RocksDB)
 //! and load via memfd to keep state consistent with the chain.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use crate::error::RuntimeResult;
-use crate::loader::NativeModule;
+use crate::{error::RuntimeResult, loader::NativeModule};
 
 /// Identifier for a native module
 ///
@@ -90,22 +91,14 @@ impl ModuleCache {
     }
 
     /// Check if a module is cached
+    #[cfg(test)]
     pub fn contains(&self, path: impl AsRef<Path>) -> bool {
         let id = ModuleId::from(path.as_ref());
         self.loaded.contains_key(&id)
     }
 
-    /// Clear all cached modules
-    pub fn clear(&mut self) {
-        self.loaded.clear();
-    }
-
-    /// Number of cached modules
-    pub fn len(&self) -> usize {
-        self.loaded.len()
-    }
-
     /// Check if the cache is empty
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.loaded.is_empty()
     }
@@ -119,7 +112,6 @@ mod tests {
     fn test_new_cache_is_empty() {
         let cache = ModuleCache::new();
         assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
     }
 
     #[test]
@@ -139,27 +131,12 @@ mod tests {
     }
 
     #[test]
-    fn test_contains_returns_false_for_uncached() {
-        let cache = ModuleCache::new();
-        assert!(!cache.contains("/nonexistent/module.dylib"));
-    }
-
-    #[test]
     fn test_get_or_load_nonexistent_returns_error() {
         let mut cache = ModuleCache::new();
         let result = cache.get_or_load("/nonexistent/module.dylib");
         assert!(result.is_err());
         // Cache should not store failed loads
         assert!(!cache.contains("/nonexistent/module.dylib"));
-    }
-
-    #[test]
-    fn test_clear_empties_cache() {
-        let mut cache = ModuleCache::new();
-        // Since we can't easily load a real module in tests,
-        // we just verify clear works on an empty cache
-        cache.clear();
-        assert!(cache.is_empty());
     }
 
     #[test]

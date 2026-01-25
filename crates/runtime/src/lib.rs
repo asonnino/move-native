@@ -62,12 +62,12 @@
 //! code. The global out-of-gas flag is shared across all executions.
 
 mod cache;
-mod entry;
 mod error;
+mod execute;
 mod loader;
 mod signal;
 
 pub use cache::{ModuleCache, ModuleId};
-pub use entry::{execute, GasResult};
+pub use execute::{execute, GasResult};
 pub use error::{RuntimeError, RuntimeResult};
 pub use loader::{NativeModule, Symbol};
