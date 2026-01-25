@@ -53,6 +53,9 @@
     "petgraph",
     "RETAA",
     "RETAB",
+    "sigaction",
+    "SIGINFO",
+    "SIGTRAP",
     "startproc",
     "tbnz",
     "yaxpeax"

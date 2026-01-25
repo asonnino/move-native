@@ -24,6 +24,9 @@ pub struct GasResult {
 /// This is effectively zero-sized - it holds a `SignalHandler` which is
 /// itself zero-sized.
 ///
+/// Multiple `Executor` instances can coexist (via `Clone` or multiple `init()` calls)
+/// and execute concurrently on different threads,
+///
 /// # Example
 ///
 /// ```ignore
@@ -37,6 +40,7 @@ pub struct GasResult {
 ///     println!("Out of gas!");
 /// }
 /// ```
+#[derive(Clone)]
 pub struct Executor {
     handler: SignalHandler,
 }
@@ -70,7 +74,6 @@ impl Executor {
     /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
     /// - `entry` points to valid, verified, gas-instrumented Arm64 code
     /// - The code follows the gas instrumentation protocol (uses x23 for gas)
-    /// - No other threads are executing gas-instrumented code concurrently
     pub unsafe fn execute<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
         // Reset the out-of-gas flag
         self.handler.reset();

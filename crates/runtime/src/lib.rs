@@ -61,8 +61,10 @@
 //!
 //! # Thread Safety
 //!
-//! The current implementation assumes single-threaded execution of gas-instrumented
-//! code. The global out-of-gas flag is shared across all executions.
+//! The runtime supports parallel execution of gas-instrumented code across threads.
+//! Each thread has its own out-of-gas flag (thread-local storage), and since SIGTRAP
+//! is a synchronous signal delivered to the thread that executed `brk #0`, there is
+//! no cross-talk between concurrent executions.
 
 mod cache;
 mod error;
