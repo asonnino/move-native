@@ -5,10 +5,7 @@
 
 use std::arch::asm;
 
-use crate::{
-    error::RuntimeResult,
-    signal::{install_handler, is_out_of_gas, reset_out_of_gas},
-};
+use crate::{error::RuntimeResult, signal::SignalHandler};
 
 /// Result of executing native code
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,8 +21,8 @@ pub struct GasResult {
 /// Executor for gas-instrumented native code
 ///
 /// Handles signal handler installation and provides the execution API.
-/// This is a zero-sized type - it just ensures the signal handler is
-/// installed before any execution.
+/// This is effectively zero-sized - it holds a `SignalHandler` which is
+/// itself zero-sized.
 ///
 /// # Example
 ///
@@ -40,8 +37,9 @@ pub struct GasResult {
 ///     println!("Out of gas!");
 /// }
 /// ```
-#[non_exhaustive]
-pub struct Executor;
+pub struct Executor {
+    handler: SignalHandler,
+}
 
 impl Executor {
     /// Initialize the executor
@@ -53,8 +51,8 @@ impl Executor {
     ///
     /// Returns an error if the signal handler cannot be installed.
     pub fn init() -> RuntimeResult<Self> {
-        install_handler()?;
-        Ok(Self)
+        let handler = SignalHandler::install()?;
+        Ok(Self { handler })
     }
 
     /// Execute gas-instrumented native code
@@ -75,7 +73,7 @@ impl Executor {
     /// - No other threads are executing gas-instrumented code concurrently
     pub unsafe fn execute<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
         // Reset the out-of-gas flag
-        reset_out_of_gas();
+        self.handler.reset();
 
         // Execute with gas tracking (internally uses i64 for sign bit check)
         let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
@@ -84,7 +82,7 @@ impl Executor {
         let gas_remaining = raw_remaining.max(0) as u64;
 
         Ok(GasResult {
-            completed: !is_out_of_gas(),
+            completed: !self.handler.is_out_of_gas(),
             gas_consumed: gas_limit - gas_remaining,
             gas_remaining,
         })

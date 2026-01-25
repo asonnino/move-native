@@ -17,30 +17,48 @@ use crate::error::{RuntimeError, RuntimeResult};
 /// storing the cached result from installation.
 static HANDLER_INIT: OnceLock<RuntimeResult<()>> = OnceLock::new();
 
-/// Global flag indicating out-of-gas condition
+/// Global flag indicating out-of-gas condition.
+///
+/// This must be global because the signal handler (`sigtrap_handler`) is called
+/// by the kernel with a fixed signature and cannot access instance data.
 static OUT_OF_GAS: AtomicBool = AtomicBool::new(false);
 
-/// Check if the last execution ran out of gas
-pub fn is_out_of_gas() -> bool {
-    OUT_OF_GAS.load(Ordering::SeqCst)
-}
-
-/// Reset the out-of-gas flag before execution
-pub fn reset_out_of_gas() {
-    OUT_OF_GAS.store(false, Ordering::SeqCst);
-}
-
-/// Install the SIGTRAP handler (once per process)
+/// Handle to the installed SIGTRAP signal handler
 ///
-/// Uses `OnceLock` to ensure the handler is installed exactly once, regardless
-/// of how many times this function is called. After the first call, subsequent
-/// calls are nearly free (just an atomic check).
+/// This is a zero-sized type that provides methods for checking and resetting
+/// the out-of-gas flag. The underlying state is global (required for signal
+/// handlers), but this struct provides a cleaner API.
 ///
-/// # Safety
-/// This modifies global process state (signal handlers).
-/// Must be called before executing any gas-instrumented code.
-pub fn install_handler() -> RuntimeResult<()> {
-    HANDLER_INIT.get_or_init(install_handler_inner).clone()
+/// Creating a `SignalHandler` installs the SIGTRAP handler if not already
+/// installed. Installation is idempotent - multiple instances share the same
+/// underlying handler.
+#[derive(Clone, Copy)]
+pub(crate) struct SignalHandler;
+
+impl SignalHandler {
+    /// Install the SIGTRAP handler and return a handle
+    ///
+    /// Uses `OnceLock` to ensure the handler is installed exactly once per
+    /// process. After the first call, subsequent calls are nearly free
+    /// (just an atomic check).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signal handler cannot be installed.
+    pub fn install() -> RuntimeResult<Self> {
+        HANDLER_INIT.get_or_init(install_handler_inner).clone()?;
+        Ok(Self)
+    }
+
+    /// Check if the last execution ran out of gas
+    pub fn is_out_of_gas(&self) -> bool {
+        OUT_OF_GAS.load(Ordering::SeqCst)
+    }
+
+    /// Reset the out-of-gas flag before execution
+    pub fn reset(&self) {
+        OUT_OF_GAS.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Inner implementation that performs the actual sigaction syscall
@@ -125,25 +143,26 @@ unsafe fn advance_pc(_ctx: *mut c_void) {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use crate::signal::{install_handler, is_out_of_gas, reset_out_of_gas, OUT_OF_GAS};
+    use crate::signal::{SignalHandler, OUT_OF_GAS};
 
     #[test]
     fn test_out_of_gas_flag() {
-        reset_out_of_gas();
-        assert!(!is_out_of_gas());
+        let handler = SignalHandler::install().expect("failed to install handler");
+        handler.reset();
+        assert!(!handler.is_out_of_gas());
 
         OUT_OF_GAS.store(true, Ordering::SeqCst);
-        assert!(is_out_of_gas());
+        assert!(handler.is_out_of_gas());
 
-        reset_out_of_gas();
-        assert!(!is_out_of_gas());
+        handler.reset();
+        assert!(!handler.is_out_of_gas());
     }
 
     #[test]
     fn test_install_handler() {
         // Installing the handler should succeed
-        install_handler().expect("failed to install handler");
+        let _handler = SignalHandler::install().expect("failed to install handler");
         // Installing again should also succeed (idempotent)
-        install_handler().expect("failed to install handler second time");
+        let _handler2 = SignalHandler::install().expect("failed to install handler second time");
     }
 }
