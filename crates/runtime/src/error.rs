@@ -1,7 +1,11 @@
 //! Error types for the runtime crate
 
 use std::path::PathBuf;
+
 use thiserror::Error;
+
+/// Result type alias for runtime operations
+pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
 /// Runtime errors
 #[derive(Debug, Clone, Error)]
@@ -9,7 +13,7 @@ pub enum RuntimeError {
     #[error("out of gas (initial gas: {initial_gas})")]
     OutOfGas { initial_gas: i64 },
 
-    #[error("failed to load library at {path}: {reason}")]
+    #[error("{}", display_load_error(path, reason))]
     LoadError { path: PathBuf, reason: String },
 
     #[error("symbol not found: {symbol}")]
@@ -22,5 +26,16 @@ pub enum RuntimeError {
     GasLimitTooLarge { limit: u64 },
 }
 
-/// Result type alias for runtime operations
-pub type RuntimeResult<T> = Result<T, RuntimeError>;
+/// Show full path in debug builds, filename only in release
+fn display_load_error(path: &PathBuf, reason: &str) -> String {
+    #[cfg(debug_assertions)]
+    let path_display = path.display().to_string();
+
+    #[cfg(not(debug_assertions))]
+    let path_display = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<unknown>".into());
+
+    format!("failed to load library '{path_display}': {reason}")
+}
