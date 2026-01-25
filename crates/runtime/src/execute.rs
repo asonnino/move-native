@@ -5,7 +5,10 @@
 
 use std::arch::asm;
 
-use crate::{error::RuntimeResult, signal::SignalHandler};
+use crate::{
+    error::{RuntimeError, RuntimeResult},
+    signal::SignalHandler,
+};
 
 /// Result of executing native code
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,11 @@ impl Executor {
     /// - `entry` points to valid, verified, gas-instrumented Arm64 code
     /// - The code follows the gas instrumentation protocol (uses x23 for gas)
     pub unsafe fn execute<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
+        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
+        if gas_limit > i64::MAX as u64 {
+            return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
+        }
+
         // Reset the out-of-gas flag
         self.handler.reset();
 

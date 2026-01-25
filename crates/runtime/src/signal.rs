@@ -6,8 +6,6 @@
 
 use std::{cell::Cell, sync::OnceLock};
 
-use libc::{c_int, c_void, sigaction, siginfo_t, SA_SIGINFO, SIGTRAP};
-
 use crate::error::{RuntimeError, RuntimeResult};
 
 // Once guard to ensure the handler is installed exactly once per process.
@@ -75,18 +73,21 @@ impl SignalHandler {
         // Safety: We're setting up a signal handler with valid parameters
         unsafe {
             // Zero-initialize the sigaction struct
-            let mut sa: sigaction = std::mem::zeroed();
+            let mut sa: libc::sigaction = std::mem::zeroed();
 
             // Set our handler function (cast to usize for the union field)
             sa.sa_sigaction = Self::handle_sigtrap as usize;
 
             // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
             // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
-            sa.sa_flags = SA_SIGINFO;
+            sa.sa_flags = libc::SA_SIGINFO;
+
+            // Initialize signal mask to empty (no signals blocked during handler)
+            libc::sigemptyset(&mut sa.sa_mask);
 
             // Register the handler for SIGTRAP (raised by `brk #0`).
             // Args: signal number, new action, old action (null = don't save previous)
-            if sigaction(SIGTRAP, &sa, std::ptr::null_mut()) != 0 {
+            if libc::sigaction(libc::SIGTRAP, &sa, std::ptr::null_mut()) != 0 {
                 return Err(RuntimeError::SignalSetupError {
                     reason: format!("sigaction failed: {}", std::io::Error::last_os_error()),
                 });
@@ -100,7 +101,11 @@ impl SignalHandler {
     /// Sets the thread-local OUT_OF_GAS flag and advances PC past the brk instruction.
     /// Since SIGTRAP is a synchronous signal, it runs on the same thread that
     /// executed `brk #0`, so accessing thread-local storage is safe.
-    extern "C" fn handle_sigtrap(_sig: c_int, _info: *mut siginfo_t, ctx: *mut c_void) {
+    extern "C" fn handle_sigtrap(
+        _sig: libc::c_int,
+        _info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
         OUT_OF_GAS.with(|flag| flag.set(true));
         // Safety: ctx points to a valid ucontext_t from the kernel
         unsafe {
@@ -122,7 +127,7 @@ impl SignalHandler {
     /// - __fp, __lr, __sp: frame pointer, link register, stack pointer (24 bytes)
     /// - __pc: program counter at offset 272
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    unsafe fn advance_pc(ctx: *mut c_void) {
+    unsafe fn advance_pc(ctx: *mut libc::c_void) {
         // macOS arm64 mcontext layout - PC is at a specific offset
         // The ucontext_t contains uc_mcontext which points to __darwin_mcontext64
         let uctx = ctx as *mut libc::ucontext_t;
