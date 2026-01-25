@@ -15,8 +15,8 @@ pub enum VerificationError {
     #[error("indirect branch at {offset:#x}: {mnemonic}")]
     IndirectBranch { offset: usize, mnemonic: String },
 
-    #[error("invalid x23 modification at {offset:#x}: {mnemonic} (only gas decrements allowed)")]
-    InvalidGasModification { offset: usize, mnemonic: String },
+    #[error("invalid x23 usage at {offset:#x}: {mnemonic} (only gas decrements may touch x23)")]
+    InvalidGasRegisterUsage { offset: usize, mnemonic: String },
 
     #[error(
         "missing gas check before back-edge at {back_edge_offset:#x} (target: {target_offset:#x})"

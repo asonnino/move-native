@@ -80,9 +80,9 @@ impl<'a> Verifier<'a> {
             }]);
         }
 
-        // x23 protection
-        if instruction.writes_to_x23() && !instruction.is_gas_decrement() {
-            result.extend([VerificationError::InvalidGasModification {
+        // x23 protection - only gas decrement may touch x23
+        if instruction.touches_x23() && !instruction.is_gas_decrement() {
+            result.extend([VerificationError::InvalidGasRegisterUsage {
                 offset: instruction.offset,
                 mnemonic: instruction.mnemonic().to_string(),
             }]);
@@ -271,7 +271,7 @@ mod tests {
         assert!(result
             .errors()
             .iter()
-            .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })));
+            .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })));
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
         assert!(!result
             .errors()
             .iter()
-            .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })));
+            .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })));
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod tests {
             result
                 .errors()
                 .iter()
-                .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })),
+                .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })),
             "sub x23, x23, #0 should be flagged as invalid gas modification"
         );
     }
@@ -389,7 +389,7 @@ mod tests {
             result
                 .errors()
                 .iter()
-                .any(|e| matches!(e, VerificationError::InvalidGasModification { .. })),
+                .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })),
             "post-index writeback to x23 should be flagged as invalid gas modification"
         );
     }

@@ -6,14 +6,6 @@ use cfg::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
 
-/// Check if an operand is x23 (either as Register or RegisterOrSP)
-fn is_x23(op: &Operand) -> bool {
-    matches!(
-        op,
-        Operand::Register(SizeCode::X, 23) | Operand::RegisterOrSP(SizeCode::X, 23)
-    )
-}
-
 /// Errors that can occur during decoding
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -53,41 +45,57 @@ impl DecodedInstruction {
         ClassifiedOpcode::from_opcode(self.opcode()).check_result
     }
 
-    /// Check if any operand has x23 writeback via load/store addressing modes
+    /// Check if an operand is x23 as destination (either as Register or RegisterOrSP)
+    fn is_x23_destination(op: &Operand) -> bool {
+        matches!(
+            op,
+            Operand::Register(SizeCode::X, 23) | Operand::RegisterOrSP(SizeCode::X, 23)
+        )
+    }
+
+    /// Check if an operand references x23 in any position (source, destination, base, index)
+    fn operand_references_x23(op: &Operand) -> bool {
+        match op {
+            // Direct register uses
+            Operand::Register(SizeCode::X, 23) | Operand::RegisterOrSP(SizeCode::X, 23) => true,
+
+            // Register pairs (ldp/stp)
+            Operand::RegisterPair(SizeCode::X, reg) if *reg == 23 => true,
+
+            // Register with shift (e.g., x23, lsl #3 in add x0, x1, x23, lsl #3)
+            Operand::RegShift(_, _, SizeCode::X, 23) => true,
+
+            // Memory addressing - x23 as base (all forms)
+            Operand::RegPreIndex(23, _, _)
+            | Operand::RegPostIndex(23, _)
+            | Operand::RegPostIndexReg(23, _) => true,
+
+            // Memory addressing - x23 as offset register in post-index
+            Operand::RegPostIndexReg(_, 23) => true,
+
+            // Memory addressing - x23 as base or index in register offset mode
+            Operand::RegRegOffset(base, idx, _, _, _) if *base == 23 || *idx == 23 => true,
+
+            _ => false,
+        }
+    }
+
+    /// Check if this instruction references register x23 (gas register) in any operand
     ///
-    /// Load/store instructions can modify the base register through pre-index or post-index
-    /// addressing modes, e.g., `ldr x0, [x23], #8` (post-index) or `ldr x0, [x23, #8]!` (pre-index
-    /// with writeback).
-    fn has_x23_writeback(&self) -> bool {
+    /// This is a defense-in-depth measure: we forbid ANY instruction that touches x23,
+    /// unless it's the valid gas decrement `sub x23, x23, #N`. This prevents:
+    /// - Direct modifications: `mov x23, #1`
+    /// - Writeback: `ldr x0, [x23], #8`
+    /// - Store to memory: `str x23, [sp]` (could be used to save/restore)
+    /// - Use as base: `ldr x0, [x23]` (gas counter shouldn't be used as pointer)
+    /// - Use as operand: `add x0, x1, x23` (gas counter shouldn't leak to other regs)
+    pub fn touches_x23(&self) -> bool {
         for op in self.operands() {
-            match op {
-                // Post-index always writes back to base register
-                Operand::RegPostIndex(reg, _) | Operand::RegPostIndexReg(reg, _) if *reg == 23 => {
-                    return true;
-                }
-                // Pre-index writes back only if writeback flag is true
-                Operand::RegPreIndex(reg, _, true) if *reg == 23 => return true,
-                _ => {}
+            if Self::operand_references_x23(op) {
+                return true;
             }
         }
         false
-    }
-
-    /// Check if this instruction writes to register x23 (gas register)
-    pub fn writes_to_x23(&self) -> bool {
-        // Check for writeback via load/store addressing modes
-        if self.has_x23_writeback() {
-            return true;
-        }
-
-        // First operand is typically the destination for most instructions
-        if is_x23(&self.operands()[0]) {
-            // Check if this is a write operation (exclude compares and branches)
-            // Note: CMP/CMN are aliases for SUBS/ADDS with xzr destination, so they won't match x23
-            !self.is_branch() && !matches!(self.opcode(), Opcode::CCMP | Opcode::CCMN)
-        } else {
-            false
-        }
     }
 
     /// Check if this is a SUB instruction targeting x23 (gas decrement)
@@ -102,14 +110,14 @@ impl DecodedInstruction {
         let ops = self.operands();
 
         // Check: sub x23, x23, #imm
-        if !is_x23(&ops[0]) || !is_x23(&ops[1]) {
+        if !Self::is_x23_destination(&ops[0]) || !Self::is_x23_destination(&ops[1]) {
             return false;
         }
 
         // Ensure decrement amount > 0
         match &ops[2] {
-            Operand::Immediate(imm) => *imm > 0,
-            Operand::Imm64(imm) => *imm > 0,
+            Operand::Immediate(i) => *i > 0,
+            Operand::Imm64(i) => *i > 0,
             _ => false, // Must be an immediate operand
         }
     }
@@ -121,8 +129,8 @@ impl DecodedInstruction {
         }
 
         match &self.operands()[2] {
-            Operand::Immediate(imm) => Some(*imm),
-            Operand::Imm64(imm) => Some(*imm as u32),
+            Operand::Immediate(i) => Some(*i),
+            Operand::Imm64(i) => Some(*i as u32),
             _ => None,
         }
     }
@@ -138,7 +146,7 @@ impl DecodedInstruction {
         // Check: tbz x23, #63, ...
         let is_bit_63 = matches!(&ops[1], Operand::Immediate(63) | Operand::Imm16(63));
 
-        is_x23(&ops[0]) && is_bit_63
+        Self::is_x23_destination(&ops[0]) && is_bit_63
     }
 
     /// Check if this is `brk #0` (out-of-gas trap)
@@ -338,7 +346,7 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert!(instructions[0].writes_to_x23(), "should detect x23 write");
+        assert!(instructions[0].touches_x23(), "should detect x23 usage");
         assert!(
             !instructions[0].is_gas_decrement(),
             "mov should not be gas decrement"
@@ -353,7 +361,7 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
-        assert!(instructions[0].writes_to_x23(), "should detect x23 write");
+        assert!(instructions[0].touches_x23(), "should detect x23 usage");
         assert!(
             !instructions[0].is_gas_decrement(),
             "add should not be gas decrement"
@@ -411,7 +419,7 @@ mod tests {
 
         assert_eq!(instructions.len(), 1);
         assert!(instructions[0].is_gas_decrement());
-        assert!(instructions[0].writes_to_x23());
+        assert!(instructions[0].touches_x23());
         assert_eq!(instructions[0].gas_decrement_amount(), Some(5));
     }
 
@@ -424,7 +432,7 @@ mod tests {
 
         assert_eq!(instructions.len(), 1);
         assert!(!instructions[0].is_gas_decrement());
-        assert!(!instructions[0].writes_to_x23());
+        assert!(!instructions[0].touches_x23());
     }
 
     #[test]
@@ -466,8 +474,8 @@ mod tests {
 
         assert_eq!(instructions.len(), 1);
         assert!(
-            instructions[0].writes_to_x23(),
-            "should detect x23 modification via post-index load"
+            instructions[0].touches_x23(),
+            "should detect x23 usage via post-index load"
         );
     }
 
@@ -480,8 +488,8 @@ mod tests {
 
         assert_eq!(instructions.len(), 1);
         assert!(
-            instructions[0].writes_to_x23(),
-            "should detect x23 modification via post-index store"
+            instructions[0].touches_x23(),
+            "should detect x23 usage via post-index store"
         );
     }
 
@@ -494,8 +502,8 @@ mod tests {
 
         assert_eq!(instructions.len(), 1);
         assert!(
-            instructions[0].writes_to_x23(),
-            "should detect x23 modification via pre-index writeback"
+            instructions[0].touches_x23(),
+            "should detect x23 usage via pre-index writeback"
         );
     }
 
@@ -512,22 +520,51 @@ mod tests {
             "sub x23, x23, #0 should NOT be a valid gas decrement"
         );
         assert!(
-            instructions[0].writes_to_x23(),
-            "sub x23, x23, #0 should still be detected as x23 write"
+            instructions[0].touches_x23(),
+            "sub x23, x23, #0 should still be detected as x23 usage"
         );
     }
 
     #[test]
-    fn test_no_writeback_without_flag() {
+    fn test_x23_as_base_no_writeback() {
         // ldr x0, [x23, #8] (no writeback - no '!') -> 0xf94006e0
-        // This should NOT modify x23
+        // This doesn't modify x23, but DOES use it as base - should still be flagged
         let code = [0xe0, 0x06, 0x40, 0xf9];
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions.len(), 1);
         assert!(
-            !instructions[0].writes_to_x23(),
-            "ldr without writeback should not modify x23"
+            instructions[0].touches_x23(),
+            "ldr with x23 as base should be detected"
+        );
+    }
+
+    #[test]
+    fn test_x23_as_source_in_store() {
+        // str x23, [sp] -> stores x23 to stack
+        // This could be used to save/restore x23 to bypass metering
+        // str x23, [sp] -> 0xf90003f7
+        let code = [0xf7, 0x03, 0x00, 0xf9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].touches_x23(),
+            "str x23, [sp] should be detected as x23 usage"
+        );
+    }
+
+    #[test]
+    fn test_x23_as_source_operand() {
+        // add x0, x1, x23 -> uses x23 as source operand
+        // add x0, x1, x23 -> 0x8b170020
+        let code = [0x20, 0x00, 0x17, 0x8b];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].touches_x23(),
+            "add x0, x1, x23 should be detected as x23 usage"
         );
     }
 }

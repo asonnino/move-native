@@ -181,8 +181,6 @@ impl ClassifiedOpcode {
         check_result: CheckResult::Rejected(RejectionReason::Unknown),
     };
 
-    /// Classify an opcode (for native-verifier)
-    ///
     /// Converts the opcode to its mnemonic string and looks up in the map.
     /// Returns UNKNOWN for opcodes not in the map.
     pub fn from_opcode(op: Opcode) -> &'static Self {
