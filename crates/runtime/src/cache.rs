@@ -8,7 +8,7 @@
 //! and load via memfd to keep state consistent with the chain.
 
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
@@ -104,9 +104,14 @@ impl<F: 'static> Default for ModuleCache<F> {
 impl<F: 'static> ModuleCache<F> {
     /// Create a new empty cache
     pub fn new() -> Self {
+        Self::with_capacity(0, 0)
+    }
+
+    /// Create a cache with pre-allocated capacity
+    pub fn with_capacity(module_capacity: usize, function_capacity: usize) -> Self {
         Self {
-            modules: HashMap::new(),
-            functions: HashMap::new(),
+            modules: HashMap::with_capacity(module_capacity),
+            functions: HashMap::with_capacity(function_capacity),
             _marker: PhantomData,
         }
     }
@@ -138,23 +143,23 @@ impl<F: 'static> ModuleCache<F> {
         let module_id = ModuleId::new(module_path.as_ref());
         let function_id = FunctionId::new(module_id.clone(), function_name);
 
-        // Fast path: function already cached
-        if self.functions.contains_key(&function_id) {
-            return Ok(self.functions.get(&function_id).unwrap());
+        // Use entry API to avoid borrow conflicts
+        match self.functions.entry(function_id) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                // Load module if not cached
+                let module = match self.modules.entry(module_id) {
+                    Entry::Occupied(m) => Arc::clone(m.get()),
+                    Entry::Vacant(m) => {
+                        Arc::clone(m.insert(Arc::new(NativeModule::load(module_path)?)))
+                    }
+                };
+
+                // Look up function and insert into cache
+                let function = module.get_function::<F>(function_name)?;
+                Ok(e.insert(function))
+            }
         }
-
-        // Load module if not cached
-        if !self.modules.contains_key(&module_id) {
-            let module = Arc::new(NativeModule::load(module_path)?);
-            self.modules.insert(module_id.clone(), module);
-        }
-
-        // Look up function and cache it
-        let module = self.modules.get(&module_id).unwrap();
-        let symbol = module.get_function::<F>(function_name)?;
-        self.functions.insert(function_id.clone(), symbol);
-
-        Ok(self.functions.get(&function_id).unwrap())
     }
 
     /// Check if the cache is empty
