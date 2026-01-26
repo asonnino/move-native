@@ -1,0 +1,32 @@
+globs:
+  - "**/*.md"
+gitignore: true
+config:
+  default: true
+  line-length:
+    line_length: 120
+    heading_line_length: 80
+    code_block_line_length: 150
+    tables: false
+    stern: false
+  heading-style:
+    style: atx
+  ul-style:
+    style: dash
+  ol-prefix:
+    style: one
+  emphasis-style:
+    style: asterisk
+  bold-style:
+    style: asterisk
+  proper-names:
+    code_blocks: false
+    html_elements: false
+    names:
+      - Arm64
+      - DeCl
+      - GitHub
+      - LLVM
+      - Move
+      - Rust
+      - Sui

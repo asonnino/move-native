@@ -1,0 +1,6 @@
+[default]
+args = ["--include-ignored"]
+out = ["Html", "Lcov", "Xml"]
+run-types = ["Bins", "Doctests", "Examples", "Lib", "Tests"]
+skip-clean = true
+workspace = true
