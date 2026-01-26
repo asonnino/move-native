@@ -6,6 +6,7 @@
 use std::arch::asm;
 
 use crate::{
+    cache::FunctionHandle,
     error::{RuntimeError, RuntimeResult},
     signal::SignalHandler,
 };
@@ -42,8 +43,8 @@ pub struct GasResult {
 /// let capacity = NonZeroUsize::new(128).unwrap();
 /// let mut cache: ModuleCache<MoveFn> = ModuleCache::new(capacity);
 /// let cached_fn = unsafe { cache.get_or_load("my_module.dylib", "my_function")? };
-/// // cached_fn keeps the module loaded; use .ptr() to get the raw function pointer
-/// let result = unsafe { executor.execute(cached_fn.ptr(), 1_000_000) }?;
+/// // cached_fn keeps the module loaded during execution
+/// let result = unsafe { executor.execute(&cached_fn, 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {
@@ -92,19 +93,18 @@ impl Executor {
     ///
     /// The caller must ensure:
     /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
-    /// - `entry` points to valid, verified, gas-instrumented Arm64 code
+    /// - The function points to valid, verified, gas-instrumented Arm64 code
     /// - The code follows the gas instrumentation protocol (uses x23 for gas)
-    pub unsafe fn execute<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
-        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
-        if gas_limit > i64::MAX as u64 {
-            return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
-        }
-
+    pub unsafe fn execute<F: Copy>(
+        &self,
+        entry: &FunctionHandle<F>,
+        gas_limit: u64,
+    ) -> RuntimeResult<GasResult> {
         // Verify handler in debug builds only
         #[cfg(debug_assertions)]
         self.handler.verify_installed()?;
 
-        self.execute_inner(entry, gas_limit)
+        self.execute_inner(entry.ptr(), gas_limit)
     }
 
     /// Execute with explicit signal handler verification
@@ -125,20 +125,15 @@ impl Executor {
     ///
     /// The caller must ensure:
     /// - `F` is a function pointer type (e.g., `unsafe extern "C" fn()`)
-    /// - `entry` points to valid, verified, gas-instrumented Arm64 code
+    /// - The function points to valid, verified, gas-instrumented Arm64 code
     /// - The code follows the gas instrumentation protocol (uses x23 for gas)
     pub unsafe fn execute_with_sigaction_check<F: Copy>(
         &self,
-        entry: F,
+        entry: &FunctionHandle<F>,
         gas_limit: u64,
     ) -> RuntimeResult<GasResult> {
-        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
-        if gas_limit > i64::MAX as u64 {
-            return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
-        }
-
         self.handler.verify_installed()?;
-        self.execute_inner(entry, gas_limit)
+        self.execute_inner(entry.ptr(), gas_limit)
     }
 
     /// Inner execution logic (shared by both execute methods)
@@ -148,8 +143,12 @@ impl Executor {
     /// The caller must ensure:
     /// - `F` is a function pointer type
     /// - `entry` points to valid, gas-instrumented Arm64 code
-    /// - `gas_limit` fits in i64
     unsafe fn execute_inner<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
+        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
+        if gas_limit > i64::MAX as u64 {
+            return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
+        }
+
         // Execute with gas tracking (internally uses i64 for sign bit check)
         let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
 

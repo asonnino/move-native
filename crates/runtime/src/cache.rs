@@ -68,21 +68,21 @@ impl FunctionId {
 /// # Type Parameters
 ///
 /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
-pub struct CachedFunction<F: Copy> {
+pub struct FunctionHandle<F: Copy> {
     ptr: F,
     _module: Arc<NativeModule>,
 }
 
-impl<F: Copy> CachedFunction<F> {
+impl<F: Copy> FunctionHandle<F> {
     /// Get the raw function pointer
     ///
-    /// The pointer remains valid as long as this `CachedFunction` is alive.
+    /// The pointer remains valid as long as this `FunctionHandle` is alive.
     pub fn ptr(&self) -> F {
         self.ptr
     }
 }
 
-impl<F: Copy> Clone for CachedFunction<F> {
+impl<F: Copy> Clone for FunctionHandle<F> {
     fn clone(&self) -> Self {
         Self {
             ptr: self.ptr,
@@ -91,9 +91,9 @@ impl<F: Copy> Clone for CachedFunction<F> {
     }
 }
 
-impl<F: Copy + std::fmt::Debug> std::fmt::Debug for CachedFunction<F> {
+impl<F: Copy + std::fmt::Debug> std::fmt::Debug for FunctionHandle<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CachedFunction")
+        f.debug_struct("FunctionHandle")
             .field("ptr", &self.ptr)
             .finish_non_exhaustive()
     }
@@ -143,7 +143,7 @@ pub struct ModuleCache<F: Copy + 'static> {
     /// Weak refs to modules - avoids reloading from disk when module still alive
     modules: HashMap<ModuleId, Weak<NativeModule>>,
     /// LRU cache of functions - holds strong refs that keep modules alive
-    functions: LruCache<FunctionId, CachedFunction<F>>,
+    functions: LruCache<FunctionId, FunctionHandle<F>>,
     /// Marker for the function type
     _marker: PhantomData<F>,
 }
@@ -169,9 +169,9 @@ impl<F: Copy + 'static> ModuleCache<F> {
 
     /// Get or load a function from a module
     ///
-    /// Returns a `CachedFunction` that holds both the function pointer and
+    /// Returns a `FunctionHandle` that holds both the function pointer and
     /// a reference to the module. The module stays loaded as long as the
-    /// returned `CachedFunction` (or any clone of it) is alive.
+    /// returned `FunctionHandle` (or any clone of it) is alive.
     ///
     /// # Safety
     ///
@@ -186,7 +186,7 @@ impl<F: Copy + 'static> ModuleCache<F> {
         &mut self,
         module_path: impl AsRef<Path>,
         function_name: &str,
-    ) -> RuntimeResult<CachedFunction<F>> {
+    ) -> RuntimeResult<FunctionHandle<F>> {
         let module_id = ModuleId::new(module_path.as_ref());
         let function_id = FunctionId::new(module_id.clone(), function_name);
 
@@ -207,7 +207,7 @@ impl<F: Copy + 'static> ModuleCache<F> {
 
         // Look up function and insert into cache with module reference
         let ptr = module.get_function::<F>(function_name)?;
-        let cached = CachedFunction {
+        let cached = FunctionHandle {
             ptr,
             _module: module,
         };

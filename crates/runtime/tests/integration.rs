@@ -136,8 +136,8 @@ fn test_execute_with_sufficient_gas() {
     };
 
     // Execute with plenty of gas (loop runs 1000 times, each iteration ~3 gas)
-    // cached_fn keeps the module loaded while we use the function pointer
-    let result = unsafe { executor.execute(cached_fn.ptr(), 100_000) }.expect("execute failed");
+    // cached_fn keeps the module loaded during execution
+    let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
 
     assert!(
         result.completed,
@@ -175,7 +175,7 @@ fn test_execute_with_insufficient_gas() {
     };
 
     // Execute with very little gas (not enough to complete the loop)
-    let result = unsafe { executor.execute(cached_fn.ptr(), 10) }.expect("execute failed");
+    let result = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
 
     assert!(
         !result.completed,
@@ -231,7 +231,7 @@ fn test_multiple_executions() {
     // Execute multiple times to ensure state is properly reset between executions
     // cached_fn keeps the module loaded across all executions
     for i in 0..3 {
-        let result = unsafe { executor.execute(cached_fn.ptr(), 100_000) }.expect("execute failed");
+        let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
         assert!(
             result.completed,
             "execution {} should complete with sufficient gas",
@@ -254,11 +254,11 @@ fn test_out_of_gas_then_successful() {
     };
 
     // First execution: out of gas
-    let result1 = unsafe { executor.execute(cached_fn.ptr(), 10) }.expect("execute failed");
+    let result1 = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
     assert!(!result1.completed, "should run out of gas");
 
     // Second execution: should succeed (state properly reset)
-    let result2 = unsafe { executor.execute(cached_fn.ptr(), 100_000) }.expect("execute failed");
+    let result2 = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
     assert!(
         result2.completed,
         "should complete after previous out-of-gas"
