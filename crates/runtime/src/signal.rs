@@ -152,6 +152,10 @@ impl SignalHandler {
 
     /// Advance PC past the brk instruction (macOS aarch64)
     ///
+    /// ARM64 uses fixed-width 4-byte instructions, so `+= 4` always advances
+    /// exactly one instruction. This is simpler than x86-64 where variable-length
+    /// instructions would require decoding to find the next instruction boundary.
+    ///
     /// FRAGILE: This uses a hardcoded offset (272) into the mcontext struct because
     /// the `libc` crate doesn't expose mcontext fields on macOS. If Apple changes
     /// the struct layout in a future macOS version, this will silently break.
@@ -175,6 +179,9 @@ impl SignalHandler {
     }
 
     /// Advance PC past the brk instruction (Linux aarch64)
+    ///
+    /// ARM64 uses fixed-width 4-byte instructions, so `+= 4` always advances
+    /// exactly one instruction.
     ///
     /// On Linux, the ucontext_t provides direct access to the mcontext
     /// which contains the PC register.
