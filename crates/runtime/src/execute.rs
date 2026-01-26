@@ -160,7 +160,7 @@ impl Executor {
 
         Ok(GasResult {
             completed: !out_of_gas,
-            gas_consumed: gas_limit - gas_remaining,
+            gas_consumed: gas_limit.saturating_sub(gas_remaining),
             gas_remaining,
         })
     }

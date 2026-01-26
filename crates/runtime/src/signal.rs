@@ -113,7 +113,8 @@ impl SignalHandler {
 
             // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
             // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
-            sa.sa_flags = libc::SA_SIGINFO;
+            // SA_RESTART: restart interrupted syscalls instead of returning EINTR.
+            sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
 
             // Initialize signal mask to empty (no signals blocked during handler)
             libc::sigemptyset(&mut sa.sa_mask);
@@ -135,26 +136,28 @@ impl SignalHandler {
     /// Signal handler for SIGTRAP
     ///
     /// Advances PC past the `brk #0` instruction so execution can continue.
+    /// Only handles brk traps - ignores debugger breakpoints and other
+    /// SIGTRAP sources.
     ///
     /// Note: `#[inline(never)]` ensures this function has a stable address
     /// that can be compared in `verify_installed()`.
     #[inline(never)]
     extern "C" fn handle_sigtrap(
         _sig: libc::c_int,
-        _info: *mut libc::siginfo_t,
+        info: *mut libc::siginfo_t,
         ctx: *mut libc::c_void,
     ) {
-        // Safety: ctx points to a valid ucontext_t from the kernel
+        // Safety: info and ctx point to valid kernel-provided structures
         unsafe {
-            Self::advance_pc(ctx);
+            Self::handle_brk_trap(info, ctx);
         }
     }
 
-    /// Advance PC past the brk instruction (macOS aarch64)
+    /// Handle brk trap by advancing PC (macOS aarch64)
     ///
+    /// Only advances PC for brk traps (si_code == 0 on macOS).
     /// ARM64 uses fixed-width 4-byte instructions, so `+= 4` always advances
-    /// exactly one instruction. This is simpler than x86-64 where variable-length
-    /// instructions would require decoding to find the next instruction boundary.
+    /// exactly one instruction.
     ///
     /// FRAGILE: This uses a hardcoded offset (272) into the mcontext struct because
     /// the `libc` crate doesn't expose mcontext fields on macOS. If Apple changes
@@ -168,7 +171,12 @@ impl SignalHandler {
     /// - __fp, __lr, __sp: frame pointer, link register, stack pointer (24 bytes)
     /// - __pc: program counter at offset 272
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    unsafe fn advance_pc(ctx: *mut libc::c_void) {
+    unsafe fn handle_brk_trap(info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+        // macOS: brk instruction generates si_code == 0
+        // (Mach exceptions converted to POSIX signals lose detail)
+        if (*info).si_code != 0 {
+            return;
+        }
         // macOS arm64 mcontext layout - PC is at a specific offset
         // The ucontext_t contains uc_mcontext which points to __darwin_mcontext64
         let uctx = ctx as *mut libc::ucontext_t;
@@ -178,25 +186,25 @@ impl SignalHandler {
         *pc_ptr = (*pc_ptr).wrapping_add(4);
     }
 
-    /// Advance PC past the brk instruction (Linux aarch64)
+    /// Handle brk trap by advancing PC (Linux aarch64)
     ///
+    /// Only advances PC for brk traps (si_code == TRAP_BRKPT on Linux).
     /// ARM64 uses fixed-width 4-byte instructions, so `+= 4` always advances
     /// exactly one instruction.
-    ///
-    /// On Linux, the ucontext_t provides direct access to the mcontext
-    /// which contains the PC register.
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    unsafe fn advance_pc(ctx: *mut c_void) {
+    unsafe fn handle_brk_trap(info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+        // Linux: brk instruction generates si_code == TRAP_BRKPT (1)
+        const TRAP_BRKPT: libc::c_int = 1;
+        if (*info).si_code != TRAP_BRKPT {
+            return;
+        }
         let uctx = ctx as *mut libc::ucontext_t;
         (*uctx).uc_mcontext.pc += 4;
     }
 
     /// Fallback for unsupported platforms (compile-time error prevention)
     #[cfg(not(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux"))))]
-    unsafe fn advance_pc(_ctx: *mut c_void) {
-        // This will be unreachable on supported platforms
-        // On unsupported platforms, this prevents compilation errors
-        // but execution will fail at runtime
+    unsafe fn handle_brk_trap(_info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
         panic!("unsupported platform for signal handler");
     }
 }
