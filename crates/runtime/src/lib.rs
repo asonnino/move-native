@@ -45,9 +45,10 @@
 mod cache;
 mod error;
 mod execute;
-mod loader;
+mod module;
 mod signal;
 
-pub use cache::{FunctionHandle, ModuleCache, ModuleId};
+pub use cache::{ModuleCache, ModuleId};
+pub use module::{FunctionHandle, NativeModule};
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};

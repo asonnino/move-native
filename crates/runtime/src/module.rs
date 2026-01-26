@@ -3,17 +3,63 @@
 //! Provides a safe wrapper around libloading for loading compiled
 //! Move modules and resolving function symbols.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use libloading::{Library, Symbol as LibSymbol};
 
 use crate::error::{RuntimeError, RuntimeResult};
 
+/// A function pointer with its module reference
+///
+/// This wrapper ensures the module stays loaded as long as the function
+/// pointer is held. When this struct is dropped, the module reference
+/// is released (though the module may remain loaded if other references
+/// exist elsewhere).
+///
+/// # Type Parameters
+///
+/// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
+pub struct FunctionHandle<F: Copy> {
+    ptr: F,
+    module: Arc<NativeModule>,
+}
+
+impl<F: Copy> FunctionHandle<F> {
+    /// Get the raw function pointer
+    ///
+    /// The pointer remains valid as long as this `FunctionHandle` is alive.
+    pub fn ptr(&self) -> F {
+        self.ptr
+    }
+
+    /// Get a reference to the module's Arc (for cache management)
+    pub(crate) fn module(&self) -> &Arc<NativeModule> {
+        &self.module
+    }
+}
+
+impl<F: Copy> Clone for FunctionHandle<F> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            module: Arc::clone(&self.module),
+        }
+    }
+}
+
+impl<F: Copy + std::fmt::Debug> std::fmt::Debug for FunctionHandle<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FunctionHandle")
+            .field("ptr", &self.ptr)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A loaded native module (internal use only)
 ///
 /// Wraps a dynamically loaded library (.dylib on macOS, .so on Linux).
 /// This module is dangerous, use `ModuleCache` for the public API.
-pub(crate) struct NativeModule {
+pub struct NativeModule {
     library: Library,
 }
 
@@ -25,7 +71,10 @@ impl std::fmt::Debug for NativeModule {
 
 impl NativeModule {
     /// Load a native module from the specified path
-    pub(crate) fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Self> {
+    ///
+    /// Returns an `Arc<NativeModule>` to ensure the module can be shared
+    /// with `FunctionHandle`s that reference functions within it.
+    pub fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Arc<Self>> {
         let path = path.as_ref();
         // Safety: The library is loaded with default flags.
         // The caller must ensure the library is safe to load.
@@ -34,18 +83,20 @@ impl NativeModule {
             reason: e.to_string(),
         })?;
 
-        Ok(Self { library })
+        Ok(Arc::new(Self { library }))
     }
 
-    /// Get a function pointer from the module
+    /// Get a function handle from the module
     ///
     /// # Safety
     ///
     /// The caller must ensure:
     /// - The type parameter `F` matches the actual function signature
     /// - The function is safe to call (e.g., properly instrumented)
-    /// - The module (`self`) outlives usage of the returned function pointer
-    pub(crate) unsafe fn get_function<F: Copy + 'static>(&self, name: &str) -> RuntimeResult<F> {
+    pub unsafe fn get_function<F: Copy + 'static>(
+        self: Arc<Self>,
+        name: &str,
+    ) -> RuntimeResult<FunctionHandle<F>> {
         // Note: dlsym handles platform symbol conventions automatically.
         // On macOS, dlsym("foo") finds "_foo" in Mach-O binaries.
         // On Linux, dlsym("foo") finds "foo" in ELF binaries.
@@ -56,8 +107,10 @@ impl NativeModule {
                     symbol: name.to_string(),
                 })?;
 
-        // Dereference to get the raw function pointer
-        Ok(*symbol)
+        Ok(FunctionHandle {
+            ptr: *symbol,
+            module: self,
+        })
     }
 }
 

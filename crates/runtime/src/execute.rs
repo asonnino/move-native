@@ -6,8 +6,8 @@
 use std::arch::asm;
 
 use crate::{
-    cache::FunctionHandle,
     error::{RuntimeError, RuntimeResult},
+    module::FunctionHandle,
     signal::SignalHandler,
 };
 

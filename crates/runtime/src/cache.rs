@@ -18,7 +18,10 @@ use std::{
 
 use lru::LruCache;
 
-use crate::{error::RuntimeResult, loader::NativeModule};
+use crate::{
+    error::RuntimeResult,
+    module::{FunctionHandle, NativeModule},
+};
 
 /// Identifier for a native module
 ///
@@ -58,47 +61,6 @@ impl FunctionId {
     }
 }
 
-/// A cached function pointer with its module reference
-///
-/// This wrapper ensures the module stays loaded as long as the function
-/// pointer is held. When this struct is dropped, the module reference
-/// is released (though the module may remain loaded if other references
-/// exist in the cache or elsewhere).
-///
-/// # Type Parameters
-///
-/// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
-pub struct FunctionHandle<F: Copy> {
-    ptr: F,
-    _module: Arc<NativeModule>,
-}
-
-impl<F: Copy> FunctionHandle<F> {
-    /// Get the raw function pointer
-    ///
-    /// The pointer remains valid as long as this `FunctionHandle` is alive.
-    pub fn ptr(&self) -> F {
-        self.ptr
-    }
-}
-
-impl<F: Copy> Clone for FunctionHandle<F> {
-    fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-            _module: Arc::clone(&self._module),
-        }
-    }
-}
-
-impl<F: Copy + std::fmt::Debug> std::fmt::Debug for FunctionHandle<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FunctionHandle")
-            .field("ptr", &self.ptr)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Cache for loaded native modules and function lookups
 ///
 /// Generic over `F`, the function pointer type. All cached functions
@@ -122,9 +84,9 @@ impl<F: Copy + std::fmt::Debug> std::fmt::Debug for FunctionHandle<F> {
 /// let mut cache: ModuleCache<MoveFn> = ModuleCache::new(capacity);
 ///
 /// // Get a function (loads module on first access, caches both)
-/// let cached_fn = unsafe { cache.get_or_load("module.dylib", "my_func")? };
-/// // The module stays loaded as long as cached_fn is alive
-/// let func_ptr = cached_fn.ptr();
+/// let function_handler = unsafe { cache.get_or_load("module.dylib", "my_func")? };
+/// // The module stays loaded as long as function_handler is alive
+/// let ptr = function_handler.ptr();
 /// # Ok::<(), runtime::RuntimeError>(())
 /// ```
 ///
@@ -199,23 +161,19 @@ impl<F: Copy + 'static> ModuleCache<F> {
         let module = match self.modules.get(&module_id).and_then(Weak::upgrade) {
             Some(m) => m,
             None => {
-                let m = Arc::new(NativeModule::load(module_path)?);
+                let m = NativeModule::load(module_path)?;
                 self.modules.insert(module_id.clone(), Arc::downgrade(&m));
                 m
             }
         };
 
-        // Look up function and insert into cache with module reference
-        let ptr = module.get_function::<F>(function_name)?;
-        let cached = FunctionHandle {
-            ptr,
-            _module: module,
-        };
+        // Look up function - returns FunctionHandle with module reference baked in
+        let cached = module.get_function::<F>(function_name)?;
 
         // Insert into cache; if an entry was evicted, check if its module can be cleaned up
         if let Some((evicted_id, evicted_fn)) = self.functions.push(function_id, cached.clone()) {
             // If this was the last strong ref to the module, remove the stale weak ref
-            if Arc::strong_count(&evicted_fn._module) == 1 {
+            if Arc::strong_count(evicted_fn.module()) == 1 {
                 self.modules.remove(&evicted_id.module);
             }
         }
