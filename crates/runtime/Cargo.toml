@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 libloading = "0.9"
 libc = "0.2"
+lru = "0.16.3"
 thiserror.workspace = true
 
 [dev-dependencies]

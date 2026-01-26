@@ -33,14 +33,17 @@ pub struct GasResult {
 /// # Example
 ///
 /// ```no_run
+/// use std::num::NonZeroUsize;
 /// use runtime::{Executor, ModuleCache};
 ///
 /// type MoveFn = unsafe extern "C" fn();
 ///
 /// let executor = Executor::init()?;
-/// let mut cache: ModuleCache<MoveFn> = ModuleCache::new();
-/// let function = unsafe { cache.get_or_load("my_module.dylib", "my_function")? };
-/// let result = unsafe { executor.execute(function, 1_000_000) }?;
+/// let capacity = NonZeroUsize::new(128).unwrap();
+/// let mut cache: ModuleCache<MoveFn> = ModuleCache::new(capacity);
+/// let cached_fn = unsafe { cache.get_or_load("my_module.dylib", "my_function")? };
+/// // cached_fn keeps the module loaded; use .ptr() to get the raw function pointer
+/// let result = unsafe { executor.execute(cached_fn.ptr(), 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {

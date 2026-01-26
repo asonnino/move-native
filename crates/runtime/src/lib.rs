@@ -48,6 +48,6 @@ mod execute;
 mod loader;
 mod signal;
 
-pub use cache::{ModuleCache, ModuleId};
+pub use cache::{CachedFunction, ModuleCache, ModuleId};
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
