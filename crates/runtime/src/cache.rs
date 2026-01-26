@@ -7,7 +7,7 @@
 //! The cache is generic over a `ModuleStore` trait, allowing different
 //! backing stores (filesystem, database, in-memory for testing).
 
-use std::{hash::Hash, sync::Arc};
+use std::{cell::RefCell, hash::Hash, sync::Arc};
 
 use moka::sync::Cache;
 
@@ -16,6 +16,17 @@ use crate::{
     module::{FunctionHandle, NativeModule},
     store::ModuleStore,
 };
+
+/// Estimated size of a compiled native module in bytes (64 KB)
+///
+/// Used to pre-allocate the thread-local load buffer. Compiled native modules
+/// (.dylib/.so) are typically 10-200 KB, with large modules up to 1 MB.
+const ESTIMATED_MODULE_SIZE: usize = 64 * 1024;
+
+thread_local! {
+    /// Per-thread buffer for loading module bytes, avoiding allocation on cache miss
+    static LOAD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(ESTIMATED_MODULE_SIZE));
+}
 
 /// Key for function cache: (module_id, function_name)
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -129,8 +140,11 @@ where
         } else {
             self.modules
                 .try_get_with(module_id.clone(), || {
-                    let bytes = self.store.load_bytes(module_id)?;
-                    NativeModule::load_from_bytes(&bytes)
+                    LOAD_BUFFER.with(|buffer| {
+                        let mut buffer = buffer.borrow_mut();
+                        buffer.clear();
+                        self.store.load_module(module_id, &mut buffer)
+                    })
                 })
                 .map_err(Arc::unwrap_or_clone)?
         };

@@ -5,7 +5,7 @@
 //! - In-memory (unit testing with mocks)
 //! - Database (future: RocksDB for blockchain state)
 
-use std::{hash::Hash, path::PathBuf, sync::Arc};
+use std::{hash::Hash, io::Write, path::PathBuf, sync::Arc};
 
 use crate::{
     NativeModule,
@@ -24,15 +24,22 @@ pub trait ModuleStore: Send + Sync {
     /// The type used to identify modules in this store
     type Id: Clone + Eq + Hash + Send + Sync + 'static;
 
-    /// Load module bytes by ID
+    /// Load module bytes by ID into the provided writer
     ///
-    /// Returns the raw bytes of the compiled native module.
-    fn load_bytes(&self, id: &Self::Id) -> RuntimeResult<Vec<u8>>;
+    /// Writes the raw bytes of the compiled native module to `writer`.
+    fn load_bytes(&self, id: &Self::Id, writer: &mut impl Write) -> RuntimeResult<()>;
 
-    /// Load a module by ID (default: load_bytes + load_from_bytes)
-    fn load_module(&self, id: &Self::Id) -> RuntimeResult<Arc<NativeModule>> {
-        let bytes = self.load_bytes(id)?;
-        NativeModule::load_from_bytes(&bytes)
+    /// Load a module by ID
+    ///
+    /// The caller provides a reusable buffer. Call `buffer.clear()` before
+    /// calling this method if you want to reuse an existing buffer.
+    fn load_module(
+        &self,
+        id: &Self::Id,
+        buffer: &mut Vec<u8>,
+    ) -> RuntimeResult<Arc<NativeModule>> {
+        self.load_bytes(id, buffer)?;
+        NativeModule::load_from_bytes(buffer)
     }
 }
 
@@ -53,14 +60,21 @@ impl FileSystemStore {
 impl ModuleStore for FileSystemStore {
     type Id = PathBuf;
 
-    fn load_bytes(&self, id: &PathBuf) -> RuntimeResult<Vec<u8>> {
-        std::fs::read(id).map_err(|e| RuntimeError::LoadError {
+    fn load_bytes(&self, id: &PathBuf, writer: &mut impl Write) -> RuntimeResult<()> {
+        let bytes = std::fs::read(id).map_err(|e| RuntimeError::LoadError {
             path: id.clone(),
             reason: e.to_string(),
-        })
+        })?;
+        writer
+            .write_all(&bytes)
+            .map_err(|e| RuntimeError::LoadError {
+                path: id.clone(),
+                reason: e.to_string(),
+            })
     }
 
-    fn load_module(&self, id: &PathBuf) -> RuntimeResult<Arc<NativeModule>> {
+    fn load_module(&self, id: &PathBuf, _buffer: &mut Vec<u8>) -> RuntimeResult<Arc<NativeModule>> {
+        // FileSystemStore bypasses the buffer and loads directly from file
         NativeModule::load_from_file(id)
     }
 }
@@ -161,7 +175,7 @@ pub mod mock {
     impl ModuleStore for MockStore {
         type Id = usize;
 
-        fn load_bytes(&self, id: &usize) -> RuntimeResult<Vec<u8>> {
+        fn load_bytes(&self, id: &usize, writer: &mut impl std::io::Write) -> RuntimeResult<()> {
             // Increment counter first
             self.load_count.fetch_add(1, Ordering::SeqCst);
 
@@ -189,8 +203,9 @@ pub mod mock {
                 });
             }
 
-            // Return module bytes
-            self.modules
+            // Write module bytes
+            let bytes = self
+                .modules
                 .lock()
                 .unwrap()
                 .get(id)
@@ -198,6 +213,12 @@ pub mod mock {
                 .ok_or_else(|| RuntimeError::LoadError {
                     path: PathBuf::from(format!("<mock:{id}>")),
                     reason: "module not found in mock store".into(),
+                })?;
+            writer
+                .write_all(&bytes)
+                .map_err(|e| RuntimeError::LoadError {
+                    path: PathBuf::from(format!("<mock:{id}>")),
+                    reason: e.to_string(),
                 })
         }
     }
