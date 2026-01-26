@@ -13,8 +13,8 @@ path = "src/lib.rs"
 libloading = "0.9"
 libc = "0.2"
 moka = { version = "0.12", features = ["sync"] }
+tempfile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 gas-instrument.workspace = true

@@ -47,8 +47,13 @@ mod error;
 mod execute;
 mod module;
 mod signal;
+mod store;
 
 pub use cache::{ModuleCache, ModuleId};
-pub use module::{FunctionHandle, NativeModule};
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
+pub use module::{FunctionHandle, NativeModule};
+pub use store::{FileSystemStore, ModuleStore};
+
+#[cfg(test)]
+pub use store::mock::MockStore;

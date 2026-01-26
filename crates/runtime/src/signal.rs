@@ -108,8 +108,8 @@ impl SignalHandler {
             // Zero-initialize the sigaction struct
             let mut sa: libc::sigaction = std::mem::zeroed();
 
-            // Set our handler function (cast to usize for the union field)
-            sa.sa_sigaction = Self::handle_sigtrap as usize;
+            // Set our handler function (cast to pointer then usize for the union field)
+            sa.sa_sigaction = Self::handle_sigtrap as *const () as usize;
 
             // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
             // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
@@ -120,7 +120,7 @@ impl SignalHandler {
             libc::sigemptyset(&mut sa.sa_mask);
 
             // Store our handler address for later verification
-            OUR_HANDLER.get_or_init(|| Self::handle_sigtrap as usize);
+            OUR_HANDLER.get_or_init(|| Self::handle_sigtrap as *const () as usize);
 
             // Register the handler for SIGTRAP (raised by `brk #0`).
             // Args: signal number, new action, old action (null = don't save previous)
@@ -263,7 +263,7 @@ mod tests {
 
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
-            sa.sa_sigaction = dummy_handler as usize;
+            sa.sa_sigaction = dummy_handler as *const () as usize;
             sa.sa_flags = libc::SA_SIGINFO;
             libc::sigemptyset(&mut sa.sa_mask);
 

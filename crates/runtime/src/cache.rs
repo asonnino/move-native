@@ -1,12 +1,11 @@
 //! Module and function cache for native Move modules
 //!
-//! Caches function pointers to avoid repeated disk I/O and dlsym calls.
+//! Caches function pointers to avoid repeated store I/O and dlsym calls.
 //! Uses moka's concurrent cache for thread-safe access without requiring
 //! mutable references.
 //!
-//! TODO: Currently loads from filesystem. In production, this should
-//! read native module bytes from the blockchain state database (e.g., RocksDB)
-//! and load via memfd to keep state consistent with the chain.
+//! The cache is generic over a `ModuleStore` trait, allowing different
+//! backing stores (filesystem, database, in-memory for testing).
 
 use std::{
     path::{Path, PathBuf},
@@ -18,11 +17,13 @@ use moka::sync::Cache;
 use crate::{
     error::RuntimeResult,
     module::{FunctionHandle, NativeModule},
+    store::ModuleStore,
 };
 
 /// Identifier for a native module
 ///
-/// TODO: Replace with actual module ID type (e.g., Move ModuleId)
+/// Currently wraps a filesystem path. In production, this could be
+/// extended to support other ID schemes (e.g., Move ModuleId).
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(Debug))]
 pub struct ModuleId(PathBuf);
@@ -34,7 +35,6 @@ impl ModuleId {
     }
 
     /// Get the underlying path
-    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.0
     }
@@ -60,30 +60,28 @@ impl FunctionId {
 
 /// Cache for loaded native modules and function lookups
 ///
-/// Generic over `F`, the function pointer type. All cached functions
-/// must have the same signature (uniform ABI).
+/// Generic over:
+/// - `S` - The module store (where bytes come from)
+/// - `F` - The function pointer type (uniform ABI)
 ///
 /// This cache is thread-safe and can be shared across threads via `Arc<ModuleCache>`.
 /// All methods take `&self` rather than `&mut self`.
 ///
-/// # Type Parameters
-///
-/// * `F` - The function pointer type (e.g., `unsafe extern "C" fn(*mut Context)`)
-///
 /// # Example
 ///
 /// ```no_run
-/// use runtime::ModuleCache;
+/// use runtime::{ModuleCache, ModuleId, FileSystemStore};
 ///
 /// // Define your function type (typically in the compiler crate)
 /// type MoveFn = unsafe extern "C" fn();
 ///
-/// // Create a typed cache with capacity for 128 modules and 1024 functions
-/// let cache: ModuleCache<MoveFn> = ModuleCache::new(128, 1024);
+/// // Create a cache with filesystem backing
+/// let store = FileSystemStore::new();
+/// let cache: ModuleCache<FileSystemStore, MoveFn> = ModuleCache::new(store, 128, 1024);
 ///
 /// // Get a function (loads module on first access, caches both)
-/// let function_handler = unsafe { cache.get_or_load("module.dylib", "my_func")? };
-/// // The module stays loaded as long as function_handler is alive
+/// let module_id = ModuleId::new("module.dylib");
+/// let function_handler = unsafe { cache.get_or_load(&module_id, "my_func")? };
 /// let ptr = function_handler.ptr();
 /// # Ok::<(), runtime::RuntimeError>(())
 /// ```
@@ -93,27 +91,26 @@ impl FunctionId {
 /// Both the module cache and function cache use moka's LRU eviction.
 /// Modules are cached independently from functions, allowing the same
 /// module to serve multiple function lookups efficiently.
-///
-/// TODO: In production, the backing storage should be the blockchain
-/// state database rather than the filesystem. Native module bytes would
-/// be stored in RocksDB keyed by module ID, and loaded via memfd_create
-/// to maintain consistency with on-chain state.
-pub struct ModuleCache<F: Copy + Send + Sync + 'static> {
+pub struct ModuleCache<S: ModuleStore, F: Copy + Send + Sync + 'static> {
+    /// The backing store for loading module bytes
+    store: S,
     /// Cache of loaded modules - keyed by ModuleId
     modules: Cache<ModuleId, Arc<NativeModule>>,
     /// Cache of function handles - keyed by FunctionId
     functions: Cache<FunctionId, FunctionHandle<F>>,
 }
 
-impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
-    /// Create a new cache with the specified capacity limits
+impl<S: ModuleStore, F: Copy + Send + Sync + 'static> ModuleCache<S, F> {
+    /// Create a new cache with the specified store and capacity limits
     ///
     /// # Arguments
     ///
+    /// * `store` - The backing store for loading module bytes
     /// * `module_capacity` - Maximum number of modules to cache
     /// * `function_capacity` - Maximum number of functions to cache
-    pub fn new(module_capacity: u64, function_capacity: u64) -> Self {
+    pub fn new(store: S, module_capacity: u64, function_capacity: u64) -> Self {
         Self {
+            store,
             modules: Cache::builder().max_capacity(module_capacity).build(),
             functions: Cache::builder().max_capacity(function_capacity).build(),
         }
@@ -124,9 +121,6 @@ impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
     /// Returns a `FunctionHandle` that holds both the function pointer and
     /// a reference to the module. The module stays loaded as long as the
     /// returned `FunctionHandle` (or any clone of it) is alive.
-    ///
-    /// This method is thread-safe and uses `&self` rather than `&mut self`.
-    /// Concurrent calls for the same module/function will be deduplicated.
     ///
     /// # Safety
     ///
@@ -139,11 +133,9 @@ impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
     /// or `RuntimeError::SymbolNotFound` if the function doesn't exist.
     pub unsafe fn get_or_load(
         &self,
-        module_path: impl AsRef<Path>,
+        module_id: &ModuleId,
         function_name: &str,
     ) -> RuntimeResult<FunctionHandle<F>> {
-        let path = module_path.as_ref();
-        let module_id = ModuleId::new(path);
         let function_id = FunctionId::new(module_id.clone(), function_name);
 
         // Fast path: function already cached
@@ -152,11 +144,14 @@ impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
         }
 
         // Load module (fast path avoids try_get_with coordination overhead)
-        let module = if let Some(m) = self.modules.get(&module_id) {
+        let module = if let Some(m) = self.modules.get(module_id) {
             m
         } else {
             self.modules
-                .try_get_with(module_id, || NativeModule::load(path))
+                .try_get_with(module_id.clone(), || {
+                    let bytes = &self.store.load_bytes(&module_id)?;
+                    NativeModule::load_from_bytes(&bytes)
+                })
                 .map_err(Arc::unwrap_or_clone)?
         };
 
@@ -177,16 +172,7 @@ impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
 mod tests {
     use std::path::Path;
 
-    use crate::{ModuleCache, ModuleId};
-
-    // Test function type for unit tests
-    type TestFn = unsafe extern "C" fn();
-
-    #[test]
-    fn test_new_cache_is_empty() {
-        let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
-        assert!(cache.is_empty());
-    }
+    use crate::ModuleId;
 
     #[test]
     fn test_module_id_from_path() {
@@ -202,13 +188,5 @@ mod tests {
 
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
-    }
-
-    #[test]
-    fn test_get_or_load_nonexistent_module_returns_error() {
-        let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
-        let result = unsafe { cache.get_or_load("/nonexistent/module.dylib", "func") };
-        assert!(result.is_err());
-        assert!(cache.is_empty());
     }
 }

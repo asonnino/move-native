@@ -3,9 +3,14 @@
 //! Provides a safe wrapper around libloading for loading compiled
 //! Move modules and resolving function symbols.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use libloading::{Library, Symbol as LibSymbol};
+use tempfile::NamedTempFile;
 
 use crate::error::{RuntimeError, RuntimeResult};
 
@@ -19,9 +24,10 @@ use crate::error::{RuntimeError, RuntimeResult};
 /// # Type Parameters
 ///
 /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
+#[derive(Clone)]
 pub struct FunctionHandle<F: Copy> {
     ptr: F,
-    module: Arc<NativeModule>,
+    _module: Arc<NativeModule>,
 }
 
 impl<F: Copy> FunctionHandle<F> {
@@ -30,15 +36,6 @@ impl<F: Copy> FunctionHandle<F> {
     /// The pointer remains valid as long as this `FunctionHandle` is alive.
     pub fn ptr(&self) -> F {
         self.ptr
-    }
-}
-
-impl<F: Copy> Clone for FunctionHandle<F> {
-    fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-            module: Arc::clone(&self.module),
-        }
     }
 }
 
@@ -69,7 +66,7 @@ impl NativeModule {
     ///
     /// Returns an `Arc<NativeModule>` to ensure the module can be shared
     /// with `FunctionHandle`s that reference functions within it.
-    pub fn load<P: AsRef<Path>>(path: P) -> RuntimeResult<Arc<Self>> {
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> RuntimeResult<Arc<Self>> {
         let path = path.as_ref();
         // Safety: The library is loaded with default flags.
         // The caller must ensure the library is safe to load.
@@ -79,6 +76,36 @@ impl NativeModule {
         })?;
 
         Ok(Arc::new(Self { library }))
+    }
+
+    /// Load a native module from bytes
+    ///
+    /// Writes bytes to a temporary file and loads via dlopen.
+    ///
+    /// TODO: Avoid writing to disk - use memfd on Linux or direct mmap.
+    pub fn load_from_bytes(bytes: &[u8]) -> RuntimeResult<Arc<Self>> {
+        // Platform-appropriate extension
+        #[cfg(target_os = "macos")]
+        let suffix = ".dylib";
+        #[cfg(not(target_os = "macos"))]
+        let suffix = ".so";
+
+        // Write bytes to temp file
+        let mut temp_file =
+            NamedTempFile::with_suffix(suffix).map_err(|e| RuntimeError::LoadError {
+                path: PathBuf::from("<tempfile>"),
+                reason: format!("failed to create temp file: {e}"),
+            })?;
+
+        temp_file
+            .write_all(bytes)
+            .map_err(|e| RuntimeError::LoadError {
+                path: PathBuf::from("<tempfile>"),
+                reason: format!("write to temp file failed: {e}"),
+            })?;
+
+        // Load the library (temp file deleted after this, but dlopen keeps mapping valid)
+        Self::load_from_file(temp_file.path())
     }
 
     /// Get a function handle from the module
@@ -104,7 +131,7 @@ impl NativeModule {
 
         Ok(FunctionHandle {
             ptr: *symbol,
-            module: self,
+            _module: self,
         })
     }
 }
@@ -118,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent() {
-        let result = NativeModule::load("/nonexistent/path/to/library.dylib");
+        let result = NativeModule::load_from_file("/nonexistent/path/to/library.dylib");
         assert!(result.is_err());
         match result.unwrap_err() {
             RuntimeError::LoadError { path, .. } => {

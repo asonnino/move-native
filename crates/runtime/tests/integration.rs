@@ -5,7 +5,7 @@
 use std::{path::Path, process::Command};
 
 use gas_instrument::{instrument, parser};
-use runtime::{Executor, ModuleCache};
+use runtime::{Executor, FileSystemStore, ModuleCache, ModuleId};
 use tempfile::TempDir;
 
 /// The function type for all test functions
@@ -123,10 +123,12 @@ fn test_execute_with_sufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new(&lib_path);
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_or_load(&module_id, "simple_loop")
             .expect("failed to get function")
     };
 
@@ -162,10 +164,12 @@ fn test_execute_with_insufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new(&lib_path);
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_or_load(&module_id, "simple_loop")
             .expect("failed to get function")
     };
 
@@ -187,8 +191,10 @@ fn test_execute_with_insufficient_gas() {
 fn test_symbol_not_found() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
-    let result = unsafe { cache.get_or_load(&lib_path, "nonexistent_symbol") };
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new(&lib_path);
+    let result = unsafe { cache.get_or_load(&module_id, "nonexistent_symbol") };
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -201,8 +207,10 @@ fn test_symbol_not_found() {
 
 #[test]
 fn test_load_nonexistent_library() {
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
-    let result = unsafe { cache.get_or_load("/nonexistent/path/to/library.dylib", "func") };
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new("/nonexistent/path/to/library.dylib");
+    let result = unsafe { cache.get_or_load(&module_id, "func") };
     assert!(result.is_err());
     match result.unwrap_err() {
         runtime::RuntimeError::LoadError { .. } => {}
@@ -216,10 +224,12 @@ fn test_multiple_executions() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new(&lib_path);
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_or_load(&module_id, "simple_loop")
             .expect("failed to get function")
     };
 
@@ -241,10 +251,12 @@ fn test_out_of_gas_then_successful() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
+    let cache: ModuleCache<FileSystemStore, TestFn> =
+        ModuleCache::new(FileSystemStore::new(), 128, 128);
+    let module_id = ModuleId::new(&lib_path);
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_or_load(&module_id, "simple_loop")
             .expect("failed to get function")
     };
 
