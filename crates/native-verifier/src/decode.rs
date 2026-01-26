@@ -45,27 +45,46 @@ impl DecodedInstruction {
         ClassifiedOpcode::from_opcode(self.opcode()).check_result
     }
 
-    /// Check if an operand is x23 as destination (either as Register or RegisterOrSP)
+    /// Check if an operand is x23/w23 as destination (either as Register or RegisterOrSP)
+    ///
+    /// Includes w23 (32-bit alias) because writing to w23 clears x23's upper bits,
+    /// which could bypass gas checks by clearing the sign bit.
     fn is_x23_destination(op: &Operand) -> bool {
         matches!(
             op,
-            Operand::Register(SizeCode::X, 23) | Operand::RegisterOrSP(SizeCode::X, 23)
+            Operand::Register(SizeCode::X, 23)
+                | Operand::Register(SizeCode::W, 23)
+                | Operand::RegisterOrSP(SizeCode::X, 23)
+                | Operand::RegisterOrSP(SizeCode::W, 23)
         )
     }
 
-    /// Check if an operand references x23 in any position (source, destination, base, index)
+    /// Check if an operand references x23/w23 in any position (source, destination, base, index)
+    ///
+    /// Includes w23 (32-bit alias) because writing to w23 clears x23's upper bits,
+    /// which could bypass gas checks by clearing the sign bit.
     fn operand_references_x23(op: &Operand) -> bool {
         match op {
-            // Direct register uses
-            Operand::Register(SizeCode::X, 23) | Operand::RegisterOrSP(SizeCode::X, 23) => true,
+            // Direct register uses (both 64-bit x23 and 32-bit w23)
+            Operand::Register(SizeCode::X, 23)
+            | Operand::Register(SizeCode::W, 23)
+            | Operand::RegisterOrSP(SizeCode::X, 23)
+            | Operand::RegisterOrSP(SizeCode::W, 23) => true,
 
-            // Register pairs (ldp/stp)
-            Operand::RegisterPair(SizeCode::X, reg) if *reg == 23 => true,
+            // Register pairs (ldp/stp) - both sizes
+            Operand::RegisterPair(SizeCode::X, reg) | Operand::RegisterPair(SizeCode::W, reg)
+                if *reg == 23 =>
+            {
+                true
+            }
 
-            // Register with shift (e.g., x23, lsl #3 in add x0, x1, x23, lsl #3)
-            Operand::RegShift(_, _, SizeCode::X, 23) => true,
+            // Register with shift (e.g., x23, lsl #3 in add x0, x1, x23, lsl #3) - both sizes
+            Operand::RegShift(_, _, SizeCode::X, 23) | Operand::RegShift(_, _, SizeCode::W, 23) => {
+                true
+            }
 
             // Memory addressing - x23 as base (all forms)
+            // Note: base register is always 64-bit (Xn), but we check reg number
             Operand::RegPreIndex(23, _, _)
             | Operand::RegPostIndex(23, _)
             | Operand::RegPostIndexReg(23, _) => true,
@@ -565,6 +584,42 @@ mod tests {
         assert!(
             instructions[0].touches_x23(),
             "add x0, x1, x23 should be detected as x23 usage"
+        );
+    }
+
+    #[test]
+    fn test_detect_w23_modification() {
+        // mov w23, #1 -> 0x52800037 (MOVZ w23, #1)
+        // Malicious: writing to w23 clears x23's upper 32 bits, bypassing gas check
+        let code = [0x37, 0x00, 0x80, 0x52];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].touches_x23(),
+            "w23 modification should be detected (clears x23 upper bits)"
+        );
+        assert!(
+            !instructions[0].is_gas_decrement(),
+            "mov w23 should not be a valid gas decrement"
+        );
+    }
+
+    #[test]
+    fn test_detect_w23_add() {
+        // add w23, w23, #1 -> 0x110006f7
+        // Malicious: 32-bit add on gas register alias
+        let code = [0xf7, 0x06, 0x00, 0x11];
+        let instructions = crate::decode_instructions(&code).unwrap();
+
+        assert_eq!(instructions.len(), 1);
+        assert!(
+            instructions[0].touches_x23(),
+            "w23 usage in add should be detected"
+        );
+        assert!(
+            !instructions[0].is_gas_decrement(),
+            "add w23, w23, #1 should not be a valid gas decrement"
         );
     }
 }
