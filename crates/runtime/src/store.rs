@@ -5,10 +5,9 @@
 //! - In-memory (unit testing with mocks)
 //! - Database (future: RocksDB for blockchain state)
 
-use std::sync::Arc;
+use std::{hash::Hash, path::PathBuf, sync::Arc};
 
 use crate::{
-    ModuleId,
     NativeModule,
     error::{RuntimeError, RuntimeResult},
 };
@@ -18,14 +17,20 @@ use crate::{
 /// Implementations provide module bytes from various sources.
 /// The cache uses this trait to fetch bytes, then delegates to
 /// `NativeModule::load_from_bytes()` for actual loading.
+///
+/// The associated `Id` type allows different stores to use different
+/// identification schemes (filesystem paths, Move ModuleId, database keys, etc.).
 pub trait ModuleStore: Send + Sync {
+    /// The type used to identify modules in this store
+    type Id: Clone + Eq + Hash + Send + Sync + 'static;
+
     /// Load module bytes by ID
     ///
     /// Returns the raw bytes of the compiled native module.
-    fn load_bytes(&self, id: &ModuleId) -> RuntimeResult<Vec<u8>>;
+    fn load_bytes(&self, id: &Self::Id) -> RuntimeResult<Vec<u8>>;
 
     /// Load a module by ID (default: load_bytes + load_from_bytes)
-    fn load_module(&self, id: &ModuleId) -> RuntimeResult<Arc<NativeModule>> {
+    fn load_module(&self, id: &Self::Id) -> RuntimeResult<Arc<NativeModule>> {
         let bytes = self.load_bytes(id)?;
         NativeModule::load_from_bytes(&bytes)
     }
@@ -46,16 +51,17 @@ impl FileSystemStore {
 }
 
 impl ModuleStore for FileSystemStore {
-    fn load_bytes(&self, id: &ModuleId) -> RuntimeResult<Vec<u8>> {
-        let path = id.path();
-        std::fs::read(path).map_err(|e| RuntimeError::LoadError {
-            path: path.to_path_buf(),
+    type Id = PathBuf;
+
+    fn load_bytes(&self, id: &PathBuf) -> RuntimeResult<Vec<u8>> {
+        std::fs::read(id).map_err(|e| RuntimeError::LoadError {
+            path: id.clone(),
             reason: e.to_string(),
         })
     }
 
-    fn load_module(&self, id: &ModuleId) -> RuntimeResult<Arc<NativeModule>> {
-        NativeModule::load_from_file(id.path())
+    fn load_module(&self, id: &PathBuf) -> RuntimeResult<Arc<NativeModule>> {
+        NativeModule::load_from_file(id)
     }
 }
 
@@ -83,11 +89,11 @@ pub mod mock {
         time::Duration,
     };
 
-    use crate::{ModuleId, ModuleStore, RuntimeError, RuntimeResult};
+    use crate::{ModuleStore, RuntimeError, RuntimeResult};
 
     pub struct MockStore {
         /// Pre-loaded module bytes by ID
-        modules: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        modules: Mutex<HashMap<usize, Vec<u8>>>,
         /// Total load_bytes calls
         load_count: AtomicU64,
         /// Delay to inject on each load
@@ -114,11 +120,8 @@ pub mod mock {
         }
 
         /// Add a module to the store
-        pub fn add_module(&self, id: &ModuleId, bytes: Vec<u8>) {
-            self.modules
-                .lock()
-                .unwrap()
-                .insert(id.path().to_path_buf(), bytes);
+        pub fn add_module(&self, id: usize, bytes: Vec<u8>) {
+            self.modules.lock().unwrap().insert(id, bytes);
         }
 
         /// Get total load count
@@ -156,7 +159,9 @@ pub mod mock {
     }
 
     impl ModuleStore for MockStore {
-        fn load_bytes(&self, id: &ModuleId) -> RuntimeResult<Vec<u8>> {
+        type Id = usize;
+
+        fn load_bytes(&self, id: &usize) -> RuntimeResult<Vec<u8>> {
             // Increment counter first
             self.load_count.fetch_add(1, Ordering::SeqCst);
 
@@ -179,20 +184,19 @@ pub mod mock {
                     .take()
                     .unwrap_or_else(|| "injected failure".into());
                 return Err(RuntimeError::LoadError {
-                    path: PathBuf::from("<mock>"),
+                    path: PathBuf::from(format!("<mock:{id}>")),
                     reason,
                 });
             }
 
             // Return module bytes
-            let path = id.path();
             self.modules
                 .lock()
                 .unwrap()
-                .get(path)
+                .get(id)
                 .cloned()
                 .ok_or_else(|| RuntimeError::LoadError {
-                    path: path.to_path_buf(),
+                    path: PathBuf::from(format!("<mock:{id}>")),
                     reason: "module not found in mock store".into(),
                 })
         }

@@ -49,7 +49,7 @@ mod module;
 mod signal;
 mod store;
 
-pub use cache::{ModuleCache, ModuleId};
+pub use cache::ModuleCache;
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
 pub use module::{FunctionHandle, NativeModule};
