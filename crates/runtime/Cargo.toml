@@ -12,7 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 libloading = "0.9"
 libc = "0.2"
-lru = "0.16.3"
+moka = { version = "0.12", features = ["sync"] }
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -1,22 +1,19 @@
 //! Module and function cache for native Move modules
 //!
 //! Caches function pointers to avoid repeated disk I/O and dlsym calls.
-//! The function cache uses LRU eviction and holds strong references to
-//! modules, keeping them loaded as long as their functions are cached.
+//! Uses moka's concurrent cache for thread-safe access without requiring
+//! mutable references.
 //!
 //! TODO: Currently loads from filesystem. In production, this should
 //! read native module bytes from the blockchain state database (e.g., RocksDB)
 //! and load via memfd to keep state consistent with the chain.
 
 use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
-use lru::LruCache;
+use moka::sync::Cache;
 
 use crate::{
     error::RuntimeResult,
@@ -66,6 +63,9 @@ impl FunctionId {
 /// Generic over `F`, the function pointer type. All cached functions
 /// must have the same signature (uniform ABI).
 ///
+/// This cache is thread-safe and can be shared across threads via `Arc<ModuleCache>`.
+/// All methods take `&self` rather than `&mut self`.
+///
 /// # Type Parameters
 ///
 /// * `F` - The function pointer type (e.g., `unsafe extern "C" fn(*mut Context)`)
@@ -73,15 +73,13 @@ impl FunctionId {
 /// # Example
 ///
 /// ```no_run
-/// use std::num::NonZeroUsize;
 /// use runtime::ModuleCache;
 ///
 /// // Define your function type (typically in the compiler crate)
 /// type MoveFn = unsafe extern "C" fn();
 ///
-/// // Create a typed cache with capacity for 128 functions
-/// let capacity = NonZeroUsize::new(128).unwrap();
-/// let mut cache: ModuleCache<MoveFn> = ModuleCache::new(capacity);
+/// // Create a typed cache with capacity for 128 modules and 1024 functions
+/// let cache: ModuleCache<MoveFn> = ModuleCache::new(128, 1024);
 ///
 /// // Get a function (loads module on first access, caches both)
 /// let function_handler = unsafe { cache.get_or_load("module.dylib", "my_func")? };
@@ -92,40 +90,32 @@ impl FunctionId {
 ///
 /// # Lifetime Management
 ///
-/// The function cache holds `Arc<NativeModule>` references, keeping modules
-/// loaded as long as any of their functions are cached. When a function is
-/// evicted from the LRU cache, its `Arc` reference is dropped. When the last
-/// function from a module is evicted, the module is unloaded.
+/// Both the module cache and function cache use moka's LRU eviction.
+/// Modules are cached independently from functions, allowing the same
+/// module to serve multiple function lookups efficiently.
 ///
 /// TODO: In production, the backing storage should be the blockchain
 /// state database rather than the filesystem. Native module bytes would
 /// be stored in RocksDB keyed by module ID, and loaded via memfd_create
 /// to maintain consistency with on-chain state.
-pub struct ModuleCache<F: Copy + 'static> {
-    /// Weak refs to modules - avoids reloading from disk when module still alive
-    modules: HashMap<ModuleId, Weak<NativeModule>>,
-    /// LRU cache of functions - holds strong refs that keep modules alive
-    functions: LruCache<FunctionId, FunctionHandle<F>>,
-    /// Marker for the function type
-    _marker: PhantomData<F>,
+pub struct ModuleCache<F: Copy + Send + Sync + 'static> {
+    /// Cache of loaded modules - keyed by ModuleId
+    modules: Cache<ModuleId, Arc<NativeModule>>,
+    /// Cache of function handles - keyed by FunctionId
+    functions: Cache<FunctionId, FunctionHandle<F>>,
 }
 
-impl<F: Copy + 'static> ModuleCache<F> {
-    /// Create a new cache with the specified function capacity limit
-    ///
-    /// The capacity determines how many functions can be cached before
-    /// LRU eviction kicks in. Modules are kept alive as long as any of
-    /// their functions remain in the cache.
+impl<F: Copy + Send + Sync + 'static> ModuleCache<F> {
+    /// Create a new cache with the specified capacity limits
     ///
     /// # Arguments
     ///
+    /// * `module_capacity` - Maximum number of modules to cache
     /// * `function_capacity` - Maximum number of functions to cache
-    pub fn new(function_capacity: NonZeroUsize) -> Self {
+    pub fn new(module_capacity: u64, function_capacity: u64) -> Self {
         Self {
-            // Worst case: each function from a different module
-            modules: HashMap::with_capacity(function_capacity.get()),
-            functions: LruCache::new(function_capacity),
-            _marker: PhantomData,
+            modules: Cache::builder().max_capacity(module_capacity).build(),
+            functions: Cache::builder().max_capacity(function_capacity).build(),
         }
     }
 
@@ -134,6 +124,9 @@ impl<F: Copy + 'static> ModuleCache<F> {
     /// Returns a `FunctionHandle` that holds both the function pointer and
     /// a reference to the module. The module stays loaded as long as the
     /// returned `FunctionHandle` (or any clone of it) is alive.
+    ///
+    /// This method is thread-safe and uses `&self` rather than `&mut self`.
+    /// Concurrent calls for the same module/function will be deduplicated.
     ///
     /// # Safety
     ///
@@ -145,65 +138,53 @@ impl<F: Copy + 'static> ModuleCache<F> {
     /// Returns `RuntimeError::LoadError` if the module cannot be loaded,
     /// or `RuntimeError::SymbolNotFound` if the function doesn't exist.
     pub unsafe fn get_or_load(
-        &mut self,
+        &self,
         module_path: impl AsRef<Path>,
         function_name: &str,
     ) -> RuntimeResult<FunctionHandle<F>> {
-        let module_id = ModuleId::new(module_path.as_ref());
+        let path = module_path.as_ref();
+        let module_id = ModuleId::new(path);
         let function_id = FunctionId::new(module_id.clone(), function_name);
 
-        // Check function cache first (updates LRU order)
-        if let Some(cached) = self.functions.get(&function_id) {
-            return Ok(cached.clone());
+        // Fast path: function already cached
+        if let Some(handle) = self.functions.get(&function_id) {
+            return Ok(handle);
         }
 
-        // Try to get module from weak ref, or load from disk
-        let module = match self.modules.get(&module_id).and_then(Weak::upgrade) {
-            Some(m) => m,
-            None => {
-                let m = NativeModule::load(module_path)?;
-                self.modules.insert(module_id.clone(), Arc::downgrade(&m));
-                m
-            }
+        // Load module (fast path avoids try_get_with coordination overhead)
+        let module = if let Some(m) = self.modules.get(&module_id) {
+            m
+        } else {
+            self.modules
+                .try_get_with(module_id, || NativeModule::load(path))
+                .map_err(Arc::unwrap_or_clone)?
         };
 
-        // Look up function - returns FunctionHandle with module reference baked in
-        let cached = module.get_function::<F>(function_name)?;
-
-        // Insert into cache; if an entry was evicted, check if its module can be cleaned up
-        if let Some((evicted_id, evicted_fn)) = self.functions.push(function_id, cached.clone()) {
-            // If this was the last strong ref to the module, remove the stale weak ref
-            if Arc::strong_count(evicted_fn.module()) == 1 {
-                self.modules.remove(&evicted_id.module);
-            }
-        }
-
-        Ok(cached)
+        // Cache function (deduplicated by FunctionId)
+        self.functions
+            .try_get_with(function_id, || module.get_function::<F>(function_name))
+            .map_err(Arc::unwrap_or_clone)
     }
 
     /// Check if the cache is empty
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.functions.is_empty()
+        self.functions.entry_count() == 0
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroUsize, path::Path};
+    use std::path::Path;
 
     use crate::{ModuleCache, ModuleId};
 
     // Test function type for unit tests
     type TestFn = unsafe extern "C" fn();
 
-    fn test_capacity() -> NonZeroUsize {
-        NonZeroUsize::new(128).unwrap()
-    }
-
     #[test]
     fn test_new_cache_is_empty() {
-        let cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+        let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
         assert!(cache.is_empty());
     }
 
@@ -225,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_get_or_load_nonexistent_module_returns_error() {
-        let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+        let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
         let result = unsafe { cache.get_or_load("/nonexistent/module.dylib", "func") };
         assert!(result.is_err());
         assert!(cache.is_empty());

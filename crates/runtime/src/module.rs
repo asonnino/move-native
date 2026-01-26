@@ -31,11 +31,6 @@ impl<F: Copy> FunctionHandle<F> {
     pub fn ptr(&self) -> F {
         self.ptr
     }
-
-    /// Get a reference to the module's Arc (for cache management)
-    pub(crate) fn module(&self) -> &Arc<NativeModule> {
-        &self.module
-    }
 }
 
 impl<F: Copy> Clone for FunctionHandle<F> {

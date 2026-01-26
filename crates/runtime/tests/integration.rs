@@ -2,16 +2,11 @@
 //!
 //! Tests the full pipeline: instrument → assemble → link → load → execute.
 
-use std::{num::NonZeroUsize, path::Path, process::Command};
+use std::{path::Path, process::Command};
 
 use gas_instrument::{instrument, parser};
 use runtime::{Executor, ModuleCache};
 use tempfile::TempDir;
-
-/// Standard capacity for test caches
-fn test_capacity() -> NonZeroUsize {
-    NonZeroUsize::new(128).unwrap()
-}
 
 /// The function type for all test functions
 type TestFn = unsafe extern "C" fn();
@@ -128,7 +123,7 @@ fn test_execute_with_sufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let cached_fn = unsafe {
         cache
             .get_or_load(&lib_path, "simple_loop")
@@ -167,7 +162,7 @@ fn test_execute_with_insufficient_gas() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let cached_fn = unsafe {
         cache
             .get_or_load(&lib_path, "simple_loop")
@@ -192,7 +187,7 @@ fn test_execute_with_insufficient_gas() {
 fn test_symbol_not_found() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let result = unsafe { cache.get_or_load(&lib_path, "nonexistent_symbol") };
 
     assert!(result.is_err());
@@ -206,7 +201,7 @@ fn test_symbol_not_found() {
 
 #[test]
 fn test_load_nonexistent_library() {
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let result = unsafe { cache.get_or_load("/nonexistent/path/to/library.dylib", "func") };
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -221,7 +216,7 @@ fn test_multiple_executions() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let cached_fn = unsafe {
         cache
             .get_or_load(&lib_path, "simple_loop")
@@ -246,7 +241,7 @@ fn test_out_of_gas_then_successful() {
     let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
 
     let executor = Executor::init().expect("failed to create executor");
-    let mut cache: ModuleCache<TestFn> = ModuleCache::new(test_capacity());
+    let cache: ModuleCache<TestFn> = ModuleCache::new(128, 128);
     let cached_fn = unsafe {
         cache
             .get_or_load(&lib_path, "simple_loop")
