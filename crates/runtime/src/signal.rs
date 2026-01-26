@@ -212,8 +212,10 @@ impl SignalHandler {
 #[cfg(test)]
 mod tests {
     use crate::{error::RuntimeError, signal::SignalHandler};
+    use serial_test::{parallel, serial};
 
     #[test]
+    #[parallel(signal_handler)]
     fn test_install_handler() {
         // Installing the handler should succeed
         let _handler = SignalHandler::install().expect("failed to install handler");
@@ -222,6 +224,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel(signal_handler)]
     fn test_verify_installed_succeeds_after_install() {
         let handler = SignalHandler::install().expect("failed to install handler");
         // Verification should succeed immediately after install
@@ -231,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel(signal_handler)]
     fn test_verify_installed_succeeds_on_cloned_handler() {
         let handler = SignalHandler::install().expect("failed to install handler");
         let cloned = handler.clone();
@@ -241,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel(signal_handler)]
     fn test_handler_address_is_recorded() {
         // After install, OUR_HANDLER should be set
         let _handler = SignalHandler::install().expect("failed to install handler");
@@ -252,7 +257,10 @@ mod tests {
         assert_ne!(*recorded.unwrap(), 0, "handler address should not be zero");
     }
 
+    // This test temporarily replaces the signal handler, which would cause other
+    // tests to fail if they run concurrently. Must run serially within the group.
     #[test]
+    #[serial(signal_handler)]
     fn test_verify_detects_handler_replacement() {
         let handler = SignalHandler::install().expect("failed to install handler");
 

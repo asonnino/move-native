@@ -18,3 +18,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 gas-instrument.workspace = true
+serial_test = "3"
