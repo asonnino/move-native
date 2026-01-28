@@ -17,7 +17,7 @@
 
 use std::{env, fs, process};
 
-use native_verifier::{decode_instructions, Verifier};
+use native_verifier::{Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 
 fn main() {

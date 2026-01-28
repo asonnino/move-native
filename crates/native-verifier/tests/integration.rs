@@ -9,7 +9,7 @@
 use std::process::Command;
 
 use gas_instrument::{instrument, parser};
-use native_verifier::{decode_instructions, VerificationError, Verifier};
+use native_verifier::{VerificationError, Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
 
@@ -65,14 +65,18 @@ fn test_raw_simple_loop_fails_verification() {
     );
 
     // Should have errors for: indirect branch (ret) and malformed gas check
-    assert!(result
-        .errors()
-        .iter()
-        .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
-    assert!(result
-        .errors()
-        .iter()
-        .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })));
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+    );
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. }))
+    );
 }
 
 #[test]
@@ -119,10 +123,12 @@ fn test_instrumented_simple_loop_gas_checks_present() {
 
     // Note: Still fails due to `ret` (indirect branch) - this is expected
     // until we handle function returns properly
-    assert!(result
-        .errors()
-        .iter()
-        .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+    );
 }
 
 #[test]

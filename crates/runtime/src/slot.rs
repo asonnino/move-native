@@ -333,6 +333,33 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn test_slot_reuse() {
+        let pool = SlotPool::new(1).expect("pool creation should succeed");
+
+        // First use: mov x0, #1; ret
+        let mut handle = pool.acquire();
+        unsafe {
+            handle
+                .load_code(&[0x20, 0x00, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6])
+                .unwrap();
+            let f: extern "C" fn() -> u64 = handle.get_function(0);
+            assert_eq!(f(), 1);
+        }
+        drop(handle);
+
+        // Reuse same slot: mov x0, #2; ret
+        let mut handle = pool.acquire();
+        unsafe {
+            handle
+                .load_code(&[0x40, 0x00, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6])
+                .unwrap();
+            let f: extern "C" fn() -> u64 = handle.get_function(0);
+            assert_eq!(f(), 2);
+        }
+    }
+
+    #[test]
     fn test_pool_concurrent_access() {
         let pool = SlotPool::with_capacity(8, 4096).expect("pool creation should succeed");
         let completed = Arc::new(AtomicUsize::new(0));

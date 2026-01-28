@@ -4,7 +4,7 @@
 //! - In-memory (testing, embedded modules)
 //! - Database (future: RocksDB for blockchain state)
 
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use crate::{
     CompiledModule,
@@ -56,8 +56,9 @@ impl<Id: Clone + Eq + Hash> MemoryStore<Id> {
     }
 }
 
-impl<Id: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> ModuleStore
-    for MemoryStore<Id>
+impl<Id> ModuleStore for MemoryStore<Id>
+where
+    Id: Clone + Eq + Hash + Send + Sync + Debug + 'static,
 {
     type Id = Id;
 
@@ -66,21 +67,22 @@ impl<Id: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> ModuleStor
             .get(id)
             .cloned()
             .ok_or_else(|| RuntimeError::ModuleNotFound {
-                id: format!("{:?}", id as &dyn std::fmt::Debug),
+                id: format!("{:?}", id as &dyn Debug),
             })
     }
 }
 
 #[cfg(test)]
 pub mod mock {
-    //! Mock store for testing concurrent cache behaviors
+    //! Mock store for testing cache behaviors
     //!
     //! Provides:
     //! - Pre-loaded modules (no filesystem access)
     //! - Load counters for deduplication verification
-    //! - Configurable delays for race condition testing
     //! - Barriers for precise thread synchronization
     //! - Failure injection for error handling tests
+    //!
+    //! MockStore is cheaply cloneable - clones share state.
 
     use std::{
         collections::HashMap,
@@ -90,77 +92,71 @@ pub mod mock {
             Mutex,
             atomic::{AtomicBool, AtomicU64, Ordering},
         },
-        thread,
-        time::Duration,
     };
 
     use crate::{CompiledModule, ModuleStore, RuntimeError, RuntimeResult};
 
-    pub struct MockStore {
-        /// Pre-loaded modules by ID
+    /// Shared state for MockStore
+    struct Inner {
         modules: Mutex<HashMap<usize, CompiledModule>>,
-        /// Total load_module calls
         load_count: AtomicU64,
-        /// Delay to inject on each load
-        load_delay: Mutex<Option<Duration>>,
-        /// Barrier to synchronize threads before load completes
         barrier: Mutex<Option<Arc<Barrier>>>,
-        /// Whether next load should fail
         should_fail: AtomicBool,
-        /// Custom failure message
         failure_reason: Mutex<Option<String>>,
     }
 
-    impl MockStore {
-        /// Create a new empty mock store
-        pub fn new() -> Self {
+    /// Mock module store for testing
+    ///
+    /// Cloning shares state - useful for concurrent tests where you need
+    /// to check `load_count()` after the cache has taken ownership.
+    #[derive(Clone, Default)]
+    pub struct MockStore {
+        inner: Arc<Inner>,
+    }
+
+    impl Default for Inner {
+        fn default() -> Self {
             Self {
                 modules: Mutex::new(HashMap::new()),
                 load_count: AtomicU64::new(0),
-                load_delay: Mutex::new(None),
                 barrier: Mutex::new(None),
                 should_fail: AtomicBool::new(false),
                 failure_reason: Mutex::new(None),
             }
         }
+    }
+
+    impl MockStore {
+        /// Create a new empty mock store
+        pub fn new() -> Self {
+            Self::default()
+        }
 
         /// Add a module to the store
         pub fn add_module(&self, id: usize, module: CompiledModule) {
-            self.modules.lock().unwrap().insert(id, module);
+            self.inner.modules.lock().unwrap().insert(id, module);
         }
 
         /// Get total load count
         pub fn load_count(&self) -> u64 {
-            self.load_count.load(Ordering::SeqCst)
-        }
-
-        /// Set delay for load operations
-        pub fn set_delay(&self, delay: Duration) {
-            *self.load_delay.lock().unwrap() = Some(delay);
+            self.inner.load_count.load(Ordering::SeqCst)
         }
 
         /// Set barrier for thread synchronization
+        ///
+        /// When set, `load_module` will wait at the barrier before returning.
+        /// Useful for testing concurrent cache access.
         pub fn set_barrier(&self, barrier: Arc<Barrier>) {
-            *self.barrier.lock().unwrap() = Some(barrier);
+            *self.inner.barrier.lock().unwrap() = Some(barrier);
         }
 
         /// Configure next load to fail
+        ///
+        /// The next call to `load_module` will return an error.
+        /// The failure is automatically cleared after triggering.
         pub fn fail_next(&self, reason: impl Into<String>) {
-            self.should_fail.store(true, Ordering::SeqCst);
-            *self.failure_reason.lock().unwrap() = Some(reason.into());
-        }
-
-        /// Reset failure state
-        #[allow(dead_code)]
-        pub fn reset_failure(&self) {
-            self.should_fail.store(false, Ordering::SeqCst);
-            *self.failure_reason.lock().unwrap() = None;
-        }
-    }
-
-    impl Default for MockStore {
-        fn default() -> Self {
-            Self::new()
+            self.inner.should_fail.store(true, Ordering::SeqCst);
+            *self.inner.failure_reason.lock().unwrap() = Some(reason.into());
         }
     }
 
@@ -169,21 +165,17 @@ pub mod mock {
 
         fn load_module(&self, id: &usize) -> RuntimeResult<CompiledModule> {
             // Increment counter first
-            self.load_count.fetch_add(1, Ordering::SeqCst);
-
-            // Apply delay if configured
-            if let Some(delay) = *self.load_delay.lock().unwrap() {
-                thread::sleep(delay);
-            }
+            self.inner.load_count.fetch_add(1, Ordering::SeqCst);
 
             // Wait at barrier if set
-            if let Some(barrier) = self.barrier.lock().unwrap().as_ref() {
+            if let Some(barrier) = self.inner.barrier.lock().unwrap().as_ref() {
                 barrier.wait();
             }
 
             // Check for injected failure
-            if self.should_fail.swap(false, Ordering::SeqCst) {
+            if self.inner.should_fail.swap(false, Ordering::SeqCst) {
                 let reason = self
+                    .inner
                     .failure_reason
                     .lock()
                     .unwrap()
@@ -193,7 +185,8 @@ pub mod mock {
             }
 
             // Return module
-            self.modules
+            self.inner
+                .modules
                 .lock()
                 .unwrap()
                 .get(id)

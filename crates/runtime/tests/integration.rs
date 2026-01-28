@@ -45,7 +45,10 @@ fn extract_text_section(obj_path: &Path) -> Vec<u8> {
     for section in file.sections() {
         let name = section.name().unwrap_or("");
         if name == "__text" || name == ".text" {
-            return section.data().expect("failed to read text section").to_vec();
+            return section
+                .data()
+                .expect("failed to read text section")
+                .to_vec();
         }
     }
 

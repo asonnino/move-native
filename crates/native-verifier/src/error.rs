@@ -29,7 +29,9 @@ pub enum VerificationError {
     #[error("malformed gas check at {offset:#x}: {reason}")]
     MalformedGasCheck { offset: usize, reason: String },
 
-    #[error("invalid branch target at {branch_offset:#x}: target {target:#x} is not an instruction boundary")]
+    #[error(
+        "invalid branch target at {branch_offset:#x}: target {target:#x} is not an instruction boundary"
+    )]
     InvalidBranchTarget { branch_offset: usize, target: usize },
 
     #[error("unreachable code at {offset:#x}")]

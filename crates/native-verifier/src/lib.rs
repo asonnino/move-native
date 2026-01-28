@@ -51,6 +51,6 @@ mod error;
 mod verify;
 
 pub use cfg::{CheckResult, RejectionReason};
-pub use decode::{decode_instructions, DecodeError, DecodedInstruction};
+pub use decode::{DecodeError, DecodedInstruction, decode_instructions};
 pub use error::{VerificationError, VerificationResult};
 pub use verify::Verifier;

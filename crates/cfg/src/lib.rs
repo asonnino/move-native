@@ -29,7 +29,7 @@ pub mod builder;
 pub mod graph;
 pub mod traits;
 
-pub use arm64::{CheckResult, ClassifiedOpcode, RejectionReason, BY_MNEMONIC};
+pub use arm64::{BY_MNEMONIC, CheckResult, ClassifiedOpcode, RejectionReason};
 pub use builder::build_cfg;
 pub use graph::{BlockData, BlockIndex, Cfg};
 pub use traits::{BasicInstruction, CfgInstruction};

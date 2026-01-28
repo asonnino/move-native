@@ -5,11 +5,11 @@
 
 use std::collections::HashSet;
 
-use cfg::{build_cfg, BasicInstruction, CfgInstruction, CheckResult};
+use cfg::{BasicInstruction, CfgInstruction, CheckResult, build_cfg};
 
 use crate::{
-    error::{VerificationError, VerificationResult},
     DecodedInstruction,
+    error::{VerificationError, VerificationResult},
 };
 
 /// Verifier for ARM64 native code
@@ -215,7 +215,7 @@ impl<'a> Verifier<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{decode_instructions, DecodedInstruction, VerificationError, Verifier};
+    use crate::{DecodedInstruction, VerificationError, Verifier, decode_instructions};
 
     fn decode(bytes: &[u8]) -> Vec<DecodedInstruction> {
         decode_instructions(bytes).expect("decode failed")
@@ -242,10 +242,12 @@ mod tests {
         let result = Verifier::new(&decode(&code)).verify();
 
         assert!(!result.is_ok());
-        assert!(result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+        );
     }
 
     #[test]
@@ -255,10 +257,12 @@ mod tests {
         let result = Verifier::new(&decode(&code)).verify();
 
         assert!(!result.is_ok());
-        assert!(result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })));
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+        );
     }
 
     #[test]
@@ -268,10 +272,12 @@ mod tests {
         let result = Verifier::new(&decode(&code)).verify();
 
         assert!(!result.is_ok());
-        assert!(result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })));
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. }))
+        );
     }
 
     #[test]
@@ -280,10 +286,12 @@ mod tests {
         let code = [0xf7, 0x16, 0x00, 0xd1];
         let result = Verifier::new(&decode(&code)).verify();
 
-        assert!(!result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. })));
+        assert!(
+            !result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidGasRegisterUsage { .. }))
+        );
     }
 
     #[test]
@@ -295,10 +303,12 @@ mod tests {
         ];
         let result = Verifier::new(&decode(&code)).verify();
 
-        assert!(!result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::InvalidBranchTarget { .. })));
+        assert!(
+            !result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidBranchTarget { .. }))
+        );
     }
 
     #[test]
@@ -311,10 +321,12 @@ mod tests {
         let result = Verifier::new(&decode(&code)).verify();
 
         assert!(!result.is_ok());
-        assert!(result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::MissingGasCheck { .. })));
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::MissingGasCheck { .. }))
+        );
     }
 
     #[test]
@@ -338,10 +350,12 @@ mod tests {
             "should detect unreachable code"
         );
         // The unreachable instruction is at offset 4
-        assert!(result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::UnreachableCode { offset: 4 })));
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::UnreachableCode { offset: 4 }))
+        );
     }
 
     #[test]
@@ -353,10 +367,12 @@ mod tests {
         ];
         let result = Verifier::new(&decode(&code)).verify();
 
-        assert!(!result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::UnreachableCode { .. })));
+        assert!(
+            !result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::UnreachableCode { .. }))
+        );
     }
 
     // Security tests for vulnerability fixes

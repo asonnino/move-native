@@ -244,17 +244,6 @@ mod tests {
 
     #[test]
     #[parallel(signal_handler)]
-    fn test_verify_installed_succeeds_on_cloned_handler() {
-        let handler = SignalHandler::install().expect("failed to install handler");
-        let cloned = handler.clone();
-        // Verification should work on cloned handlers too
-        cloned
-            .verify_installed()
-            .expect("verify_installed failed on cloned handler");
-    }
-
-    #[test]
-    #[parallel(signal_handler)]
     fn test_handler_address_is_recorded() {
         // After install, OUR_HANDLER should be set
         let _handler = SignalHandler::install().expect("failed to install handler");

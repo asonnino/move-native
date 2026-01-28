@@ -6,8 +6,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    graph::{BlockData, BlockIndex, Cfg, Graph},
     CfgInstruction,
+    graph::{BlockData, BlockIndex, Cfg, Graph},
 };
 
 /// Build a CFG from a sequence of instructions.

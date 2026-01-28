@@ -28,10 +28,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    BlockIndex, CfgResult,
     error::InstrumentError,
     parser::{ParsedLine, ResolvedInstruction, Statement},
-    BlockIndex,
-    CfgResult,
 };
 
 /// Gas counter register (per DeCl paper, x23 is callee-saved)
@@ -224,7 +223,7 @@ mod tests {
     use indoc::indoc;
 
     use super::InstrumentError;
-    use crate::{build_cfg, instrument::Instrumenter, CfgResult, ParsedAssembly};
+    use crate::{CfgResult, ParsedAssembly, build_cfg, instrument::Instrumenter};
 
     /// Helper to reduce test boilerplate: parses assembly and builds CFG
     fn parse_and_build(input: &str) -> (CfgResult, ParsedAssembly<'_>) {

@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use gas_instrument::{build_cfg, instrument, ParsedAssembly};
+use gas_instrument::{ParsedAssembly, build_cfg, instrument};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

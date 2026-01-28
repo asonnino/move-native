@@ -141,6 +141,8 @@ impl<S: ModuleStore> ModuleCache<S> {
     /// Get the number of modules currently in the cache
     #[cfg(test)]
     pub fn len(&self) -> usize {
+        // Moka's entry_count is eventually consistent; sync first
+        self.modules.run_pending_tasks();
         self.modules.entry_count() as usize
     }
 
@@ -159,107 +161,239 @@ impl<S: ModuleStore> ModuleCache<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{CompiledModule, ModuleCache, RuntimeError, store::MemoryStore};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Barrier},
+    };
+
+    use crate::{CompiledModule, ModuleCache, RuntimeError, store::mock::MockStore};
 
     #[test]
     fn test_cache_creation() {
-        let store = MemoryStore::<String>::new();
+        let store = MockStore::new();
         let cache = ModuleCache::new(store, 4).unwrap();
         assert_eq!(cache.available_slots(), 4);
         assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_with_capacity() {
+        let store = MockStore::new();
+        let cache = ModuleCache::with_capacity(store, 2, 4096).unwrap();
+        assert_eq!(cache.available_slots(), 2);
     }
 
     #[test]
     fn test_module_not_found() {
-        let store = MemoryStore::<String>::new();
+        let store = MockStore::new();
         let cache = ModuleCache::new(store, 4).unwrap();
 
-        let result = unsafe { cache.get_function::<fn()>(&"missing".to_string(), "main") };
+        let result = unsafe { cache.get_function::<fn()>(&999, "main") };
         assert!(matches!(result, Err(RuntimeError::ModuleNotFound { .. })));
     }
 
     #[test]
-    fn test_symbol_not_found() {
-        // mov x0, #42; ret
-        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
-        let module = CompiledModule::with_single_entry(code, "main");
-
-        let store = MemoryStore::with_module("test".to_string(), module);
+    fn test_function_not_found() {
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(42, "main"));
         let cache = ModuleCache::new(store, 4).unwrap();
 
-        let result = unsafe { cache.get_function::<fn()>(&"test".to_string(), "missing") };
+        let result = unsafe { cache.get_function::<fn()>(&0, "missing") };
         assert!(matches!(result, Err(RuntimeError::FunctionNotFound { .. })));
+    }
+
+    #[test]
+    fn test_len_tracking() {
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(1, "main"));
+        store.add_module(1, CompiledModule::new_for_test(2, "main"));
+        let cache = ModuleCache::new(store, 4).unwrap();
+
+        assert_eq!(cache.len(), 0);
+
+        unsafe { cache.get_function::<fn()>(&0, "main").unwrap() };
+        assert_eq!(cache.len(), 1);
+
+        unsafe { cache.get_function::<fn()>(&1, "main").unwrap() };
+        assert_eq!(cache.len(), 2);
+
+        // Cache hit doesn't change len
+        unsafe { cache.get_function::<fn()>(&0, "main").unwrap() };
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_cache_hit_no_extra_slot() {
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(42, "main"));
+        let cache = ModuleCache::new(store, 4).unwrap();
+
+        // First call loads the module
+        let _h1 = unsafe { cache.get_function::<fn()>(&0, "main").unwrap() };
+        assert_eq!(cache.available_slots(), 3);
+
+        // Second call hits cache - no new slot consumed
+        let _h2 = unsafe { cache.get_function::<fn()>(&0, "main").unwrap() };
+        assert_eq!(cache.available_slots(), 3);
+    }
+
+    #[test]
+    fn test_multiple_entry_points() {
+        // foo: mov x0, #1; ret
+        // bar: mov x0, #2; ret
+        let code: Vec<u8> = [
+            0x20, 0x00, 0x80, 0xd2, // mov x0, #1
+            0xc0, 0x03, 0x5f, 0xd6, // ret
+            0x40, 0x00, 0x80, 0xd2, // mov x0, #2
+            0xc0, 0x03, 0x5f, 0xd6, // ret
+        ]
+        .to_vec();
+        let entry_points = HashMap::from([("foo".to_string(), 0u32), ("bar".to_string(), 8u32)]);
+        let module = CompiledModule::new(code, entry_points);
+
+        let store = MockStore::new();
+        store.add_module(0, module);
+        let cache = ModuleCache::new(store, 4).unwrap();
+
+        // Get both functions from same module - only one slot used
+        let _foo = unsafe { cache.get_function::<fn()>(&0, "foo").unwrap() };
+        assert_eq!(cache.available_slots(), 3);
+
+        let _bar = unsafe { cache.get_function::<fn()>(&0, "bar").unwrap() };
+        assert_eq!(cache.available_slots(), 3); // Still 3 - same module
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_code_exceeds_slot_capacity() {
+        let large_code = vec![0u8; 1024];
+        let module = CompiledModule::with_single_entry(large_code, "main");
+
+        let store = MockStore::new();
+        store.add_module(0, module);
+        let cache = ModuleCache::with_capacity(store, 4, 512).unwrap();
+
+        let result = unsafe { cache.get_function::<fn()>(&0, "main") };
+        assert!(matches!(result, Err(RuntimeError::LoadError { .. })));
     }
 
     #[test]
     #[cfg(target_arch = "aarch64")]
     fn test_load_and_execute() {
-        // mov x0, #42; ret
-        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
-        let module = CompiledModule::with_single_entry(code, "main");
-
-        let store = MemoryStore::with_module("test".to_string(), module);
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(42, "main"));
         let cache = ModuleCache::new(store, 4).unwrap();
 
         let handle = unsafe {
             cache
-                .get_function::<extern "C" fn() -> u64>(&"test".to_string(), "main")
+                .get_function::<extern "C" fn() -> u64>(&0, "main")
                 .unwrap()
         };
-
-        let func = handle.as_ptr();
-        assert_eq!(func(), 42);
+        assert_eq!(handle.as_ptr()(), 42);
     }
 
     #[test]
     #[cfg(target_arch = "aarch64")]
-    fn test_cache_hit() {
-        // mov x0, #42; ret
-        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
-        let module = CompiledModule::with_single_entry(code, "main");
+    fn test_multiple_entry_points_execution() {
+        // foo: mov x0, #1; ret
+        // bar: mov x0, #2; ret
+        let code: Vec<u8> = [
+            0x20, 0x00, 0x80, 0xd2, // mov x0, #1
+            0xc0, 0x03, 0x5f, 0xd6, // ret
+            0x40, 0x00, 0x80, 0xd2, // mov x0, #2
+            0xc0, 0x03, 0x5f, 0xd6, // ret
+        ]
+        .to_vec();
+        let entry_points = HashMap::from([("foo".to_string(), 0u32), ("bar".to_string(), 8u32)]);
+        let module = CompiledModule::new(code, entry_points);
 
-        let store = MemoryStore::with_module("test".to_string(), module);
+        let store = MockStore::new();
+        store.add_module(0, module);
         let cache = ModuleCache::new(store, 4).unwrap();
 
-        // First call loads the module - consumes one slot
-        let _h1 = unsafe {
+        let foo = unsafe {
             cache
-                .get_function::<fn()>(&"test".to_string(), "main")
+                .get_function::<extern "C" fn() -> u64>(&0, "foo")
                 .unwrap()
         };
-        assert_eq!(cache.available_slots(), 3);
+        let bar = unsafe {
+            cache
+                .get_function::<extern "C" fn() -> u64>(&0, "bar")
+                .unwrap()
+        };
 
-        // Second call hits the cache - no new slot consumed
-        let _h2 = unsafe {
-            cache
-                .get_function::<fn()>(&"test".to_string(), "main")
-                .unwrap()
-        };
-        assert_eq!(cache.available_slots(), 3);
+        assert_eq!(foo.as_ptr()(), 1);
+        assert_eq!(bar.as_ptr()(), 2);
     }
 
     #[test]
-    fn test_function_handle_keeps_slot_alive() {
-        // mov x0, #42; ret
-        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
-        let module = CompiledModule::with_single_entry(code, "main");
+    fn test_concurrent_different_modules() {
+        let store = MockStore::new();
+        for i in 0..8 {
+            store.add_module(i, CompiledModule::new_for_test(i as u16, "main"));
+        }
 
-        let store = MemoryStore::with_module("test".to_string(), module);
+        let cache = Arc::new(ModuleCache::new(store.clone(), 8).unwrap());
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let cache = Arc::clone(&cache);
+                std::thread::spawn(move || unsafe {
+                    cache.get_function::<fn()>(&i, "main").unwrap();
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(cache.len(), 8);
+        assert_eq!(store.load_count(), 8);
+    }
+
+    #[test]
+    fn test_concurrent_same_module() {
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(42, "main"));
+
+        // Barrier ensures all threads hit load_module simultaneously
+        let barrier = Arc::new(Barrier::new(8));
+        store.set_barrier(barrier);
+
+        let cache = Arc::new(ModuleCache::new(store.clone(), 4).unwrap());
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                std::thread::spawn(move || unsafe {
+                    cache.get_function::<fn()>(&0, "main").unwrap();
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Only one slot used (moka deduplicates by key)
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.available_slots(), 3);
+        // Note: moka doesn't deduplicate concurrent loads, so multiple
+        // threads may call load_module. This is acceptable for our use case.
+    }
+
+    #[test]
+    fn test_store_load_failure() {
+        let store = MockStore::new();
+        store.add_module(0, CompiledModule::new_for_test(42, "main"));
+        store.fail_next("simulated failure");
+
         let cache = ModuleCache::new(store, 4).unwrap();
 
-        // Get a function handle
-        let handle = unsafe {
-            cache
-                .get_function::<fn()>(&"test".to_string(), "main")
-                .unwrap()
-        };
-        assert_eq!(cache.available_slots(), 3);
-
-        // Even after eviction from cache, handle keeps slot alive
-        // (Note: moka doesn't have explicit eviction, but we can verify the handle is valid)
-        drop(cache);
-
-        // Handle should still be valid (though we can't execute without aarch64)
-        drop(handle);
+        // First call fails due to injected failure
+        let result = unsafe { cache.get_function::<fn()>(&0, "main") };
+        assert!(matches!(result, Err(RuntimeError::ModuleNotFound { .. })));
     }
 }

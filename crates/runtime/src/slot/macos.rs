@@ -3,16 +3,8 @@
 use std::ptr::NonNull;
 
 use libc::{
-    MAP_ANONYMOUS,
-    MAP_FAILED,
-    MAP_JIT,
-    MAP_PRIVATE,
-    PROT_EXEC,
-    PROT_READ,
-    PROT_WRITE,
-    c_int,
-    c_void,
-    size_t,
+    MAP_ANONYMOUS, MAP_FAILED, MAP_JIT, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, c_int,
+    c_void, size_t,
 };
 
 use crate::error::{RuntimeError, RuntimeResult};

@@ -31,6 +31,22 @@ impl CompiledModule {
     pub fn with_single_entry(code: Vec<u8>, name: impl Into<String>) -> Self {
         Self::new(code, HashMap::from([(name.into(), 0)]))
     }
+
+    /// Create a minimal test module that returns a constant value
+    ///
+    /// Generates: `mov x0, #return_val; ret`
+    #[cfg(test)]
+    pub fn new_for_test(return_val: u16, name: &str) -> Self {
+        // mov x0, #N (immediate in bits 20:5)
+        let mov = 0xd2800000u32 | ((return_val as u32) << 5);
+        let ret = 0xd65f03c0u32;
+        let code: Vec<u8> = mov
+            .to_le_bytes()
+            .into_iter()
+            .chain(ret.to_le_bytes())
+            .collect();
+        Self::with_single_entry(code, name)
+    }
 }
 
 /// A module loaded into a slot
