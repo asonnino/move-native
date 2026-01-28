@@ -39,7 +39,10 @@ pub struct Slot {
     code_capacity: usize,
 }
 
-// Safety: Slot owns its memory mappings and doesn't share them
+// Safety: Slot owns its memory mappings and doesn't share them.
+// Sync is safe because:
+// - load_code takes &mut self (exclusive access enforced by borrow checker)
+// - get_function takes &self and is read-only
 unsafe impl Send for Slot {}
 unsafe impl Sync for Slot {}
 
@@ -111,17 +114,10 @@ impl Slot {
             });
         }
 
-        let code_rw_ptr =
-            NonNull::new(code_rw as *mut u8).ok_or_else(|| RuntimeError::LoadError {
-                path: "<code-pool>".into(),
-                reason: "mmap RW returned null".into(),
-            })?;
-
-        let code_rx_ptr =
-            NonNull::new(code_rx as *mut u8).ok_or_else(|| RuntimeError::LoadError {
-                path: "<code-pool>".into(),
-                reason: "mmap RX returned null".into(),
-            })?;
+        // Safety: mmap returns MAP_FAILED (-1) on error, never null.
+        // We already checked for MAP_FAILED above, so this is a valid non-null pointer.
+        let code_rw_ptr = unsafe { NonNull::new_unchecked(code_rw as *mut u8) };
+        let code_rx_ptr = unsafe { NonNull::new_unchecked(code_rx as *mut u8) };
 
         Ok(Self {
             code_rw: code_rw_ptr,

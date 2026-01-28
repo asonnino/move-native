@@ -37,6 +37,11 @@ pub const DEFAULT_CODE_SIZE: usize = 1 << 20;
 /// Provides slot allocation with back-pressure for concurrent use.
 /// When all slots are in use, `acquire()` blocks until a slot becomes available.
 /// Slots are returned to the pool when their `SlotHandle` is dropped.
+///
+/// # Cloning
+///
+/// `SlotPool` is cheaply cloneable. Cloning creates another handle to the
+/// **same** underlying pool, not a new pool. All clones share the same slots.
 #[derive(Clone)]
 pub struct SlotPool {
     tx: Sender<Slot>,

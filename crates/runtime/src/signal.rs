@@ -7,6 +7,15 @@
 //! Out-of-gas is detected by checking the gas counter (x23) after execution:
 //! - `gas_remaining >= 0` → completed normally
 //! - `gas_remaining < 0` → ran out of gas (trap was triggered)
+//!
+//! # Warning: Debugger Interaction
+//!
+//! Do not attach a debugger with breakpoints during native code execution.
+//! Breakpoints generate SIGTRAP signals that conflict with our gas exhaustion
+//! handling. Our handler only advances PC for `brk` traps (si_code == 0 on macOS,
+//! TRAP_BRKPT on Linux); for other SIGTRAP sources like debugger breakpoints,
+//! we return without advancing PC, which causes the signal to be re-delivered
+//! infinitely.
 
 use std::{mem::MaybeUninit, sync::OnceLock};
 

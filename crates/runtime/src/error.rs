@@ -28,7 +28,7 @@ pub enum RuntimeError {
     #[error("failed to set up signal handler: {reason}")]
     SignalSetupError { reason: String },
 
-    #[error("gas limit {limit} exceeds maximum supported value (i64::MAX)")]
+    #[error("gas limit {limit} exceeds maximum practical value ({})", crate::execute::MAX_GAS_LIMIT)]
     GasLimitTooLarge { limit: u64 },
 }
 

@@ -2,6 +2,12 @@
 //!
 //! The Executor handles signal handler installation and provides the
 //! execution API for running gas-instrumented Arm64 code.
+//!
+//! # Warning: Debugger Interaction
+//!
+//! Do not attach a debugger with breakpoints during native code execution.
+//! Breakpoints generate SIGTRAP signals that conflict with gas exhaustion
+//! handling. See [`crate::signal`] module docs for details.
 
 use std::arch::asm;
 
@@ -10,6 +16,13 @@ use crate::{
     module::FunctionHandle,
     signal::SignalHandler,
 };
+
+/// Maximum practical gas limit (10^15)
+///
+/// While the gas counter can technically hold up to i64::MAX, this limit
+/// catches likely bugs (e.g., passing uninitialized or corrupted values).
+/// 10^15 gas would allow ~11 days of computation at 1 instruction/ns.
+pub const MAX_GAS_LIMIT: u64 = 1_000_000_000_000_000; // 10^15
 
 /// Result of executing native code
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,8 +160,8 @@ impl Executor {
     /// - `F` is a function pointer type
     /// - `entry` points to valid, gas-instrumented Arm64 code
     unsafe fn execute_inner<F: Copy>(&self, entry: F, gas_limit: u64) -> RuntimeResult<GasResult> {
-        // Validate gas limit fits in i64 (we use sign bit for exhaustion check)
-        if gas_limit > i64::MAX as u64 {
+        // Validate gas limit is within practical bounds
+        if gas_limit > MAX_GAS_LIMIT {
             return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
         }
 
