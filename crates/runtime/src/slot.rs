@@ -23,82 +23,88 @@ pub use linux::Slot;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("Slot only supported on macOS and Linux");
 
-use std::{collections::HashMap, sync::Arc};
+use std::time::Duration;
 
-use crossbeam_queue::ArrayQueue;
+use crossbeam_channel::{Receiver, Sender, bounded};
 
-use crate::error::{RuntimeError, RuntimeResult};
+use crate::error::RuntimeResult;
 
 /// Default code region size: 1 MB per slot
 pub const DEFAULT_CODE_SIZE: usize = 1 << 20;
 
-/// Inner state of the code pool
-struct PoolInner {
-    /// Lock-free queue of available slots
-    free_slots: ArrayQueue<Slot>,
-}
-
 /// Pool of pre-allocated code slots
 ///
-/// Provides lock-free slot allocation for concurrent use.
-/// Slots are returned to the pool when their `Handle` is dropped.
+/// Provides slot allocation with back-pressure for concurrent use.
+/// When all slots are in use, `acquire()` blocks until a slot becomes available.
+/// Slots are returned to the pool when their `SlotHandle` is dropped.
 #[derive(Clone)]
-pub struct Pool(Arc<PoolInner>);
+pub struct SlotPool {
+    tx: Sender<Slot>,
+    rx: Receiver<Slot>,
+}
 
-impl Pool {
+impl SlotPool {
     /// Create a new code pool with the given number of slots
     ///
     /// Each slot has the default code capacity (1 MB).
-    pub fn new(num_slots: usize) -> RuntimeResult<Self> {
-        Self::with_capacity(num_slots, DEFAULT_CODE_SIZE)
+    pub fn new(slot_count: usize) -> RuntimeResult<Self> {
+        Self::with_capacity(slot_count, DEFAULT_CODE_SIZE)
     }
 
     /// Create a new code pool with custom slot capacity
-    pub fn with_capacity(num_slots: usize, code_capacity: usize) -> RuntimeResult<Self> {
-        let free_slots = ArrayQueue::new(num_slots);
+    pub fn with_capacity(slot_count: usize, slot_capacity: usize) -> RuntimeResult<Self> {
+        let (tx, rx) = bounded(slot_count);
 
-        for _ in 0..num_slots {
-            let slot = Slot::allocate(code_capacity)?;
-            free_slots
-                .push(slot)
-                .ok()
-                .expect("free_slots should have capacity");
+        for _ in 0..slot_count {
+            let slot = Slot::allocate(slot_capacity)?;
+            tx.send(slot).expect("channel should have capacity");
         }
 
-        Ok(Self(Arc::new(PoolInner { free_slots })))
+        Ok(Self { tx, rx })
     }
 
-    /// Acquire a slot from the pool
+    /// Acquire a slot from the pool, blocking if none available
+    ///
+    /// Blocks until a slot becomes available. This provides natural
+    /// back-pressure when all slots are in use.
+    pub fn acquire(&self) -> SlotHandle {
+        let slot = self.rx.recv().expect("channel should not be disconnected");
+        SlotHandle {
+            tx: self.tx.clone(),
+            slot: Some(slot),
+        }
+    }
+
+    /// Try to acquire a slot from the pool without blocking
     ///
     /// Returns `None` if all slots are in use.
-    pub fn try_acquire(&self) -> Option<Handle> {
-        let slot = self.0.free_slots.pop()?;
-        Some(Handle {
-            pool: Arc::clone(&self.0),
+    pub fn try_acquire(&self) -> Option<SlotHandle> {
+        self.rx.try_recv().ok().map(|slot| SlotHandle {
+            tx: self.tx.clone(),
             slot: Some(slot),
         })
     }
 
-    /// Acquire a slot from the pool
+    /// Acquire a slot from the pool with a timeout
     ///
-    /// Returns an error if all slots are currently in use.
-    pub fn acquire(&self) -> RuntimeResult<Handle> {
-        self.try_acquire().ok_or_else(|| RuntimeError::LoadError {
-            path: "<code-pool>".into(),
-            reason: "code pool exhausted".into(),
+    /// Returns `None` if no slot becomes available within the timeout.
+    pub fn acquire_timeout(&self, timeout: Duration) -> Option<SlotHandle> {
+        self.rx.recv_timeout(timeout).ok().map(|slot| SlotHandle {
+            tx: self.tx.clone(),
+            slot: Some(slot),
         })
     }
 
     /// Get the total number of slots in the pool
     #[cfg(test)]
     pub fn capacity(&self) -> usize {
-        self.0.free_slots.capacity()
+        self.tx.capacity().unwrap()
     }
 
     /// Get the number of available slots
     #[cfg(test)]
     pub fn available(&self) -> usize {
-        self.0.free_slots.len()
+        self.rx.len()
     }
 }
 
@@ -110,12 +116,12 @@ impl Pool {
 /// # Slot Reuse
 ///
 /// When a slot is reused, the previous code is simply overwritten.
-pub struct Handle {
-    pool: Arc<PoolInner>,
+pub struct SlotHandle {
+    tx: Sender<Slot>,
     slot: Option<Slot>,
 }
 
-impl Handle {
+impl SlotHandle {
     /// Load code into this slot
     ///
     /// Overwrites any previously loaded code.
@@ -145,49 +151,26 @@ impl Handle {
     }
 }
 
-impl Drop for Handle {
+impl Drop for SlotHandle {
     fn drop(&mut self) {
         let slot = self.slot.take().expect("slot already taken");
-        self.pool
-            .free_slots
-            .push(slot)
-            .ok()
-            .expect("free_slots should have space for returned slot");
-    }
-}
-
-/// Compiled module output from the compiler
-///
-/// Contains raw executable bytes and entry point offsets.
-/// This is what gets stored in the database/cache.
-#[derive(Clone, Debug)]
-pub struct CompiledModule {
-    /// Raw executable bytes (flat binary, no ELF wrapper)
-    pub code: Vec<u8>,
-    /// Function name -> offset in code
-    pub entry_points: HashMap<String, u32>,
-}
-
-impl CompiledModule {
-    /// Create a new compiled module
-    pub fn new(code: Vec<u8>, entry_points: HashMap<String, u32>) -> Self {
-        Self { code, entry_points }
-    }
-
-    /// Create a compiled module with a single entry point at offset 0
-    pub fn with_single_entry(code: Vec<u8>, name: impl Into<String>) -> Self {
-        Self::new(code, HashMap::from([(name.into(), 0)]))
+        // Return slot to pool - this unblocks any waiting acquire()
+        // If the channel is disconnected (pool dropped), the slot is simply dropped
+        let _ = self.tx.send(slot);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
 
-    use crate::{CompiledModule, Pool, Slot};
+    use super::{Slot, SlotPool};
 
     #[test]
     fn test_slot_allocation() {
@@ -197,23 +180,23 @@ mod tests {
 
     #[test]
     fn test_pool_creation() {
-        let pool = Pool::new(4).expect("pool creation should succeed");
+        let pool = SlotPool::new(4).expect("pool creation should succeed");
         assert_eq!(pool.capacity(), 4);
         assert_eq!(pool.available(), 4);
     }
 
     #[test]
     fn test_slot_acquire_release() {
-        let pool = Pool::new(2).expect("pool creation should succeed");
+        let pool = SlotPool::new(2).expect("pool creation should succeed");
         assert_eq!(pool.available(), 2);
 
-        let handle1 = pool.acquire().expect("should acquire slot");
+        let handle1 = pool.acquire();
         assert_eq!(pool.available(), 1);
 
-        let handle2 = pool.acquire().expect("should acquire slot");
+        let handle2 = pool.acquire();
         assert_eq!(pool.available(), 0);
 
-        // Pool exhausted
+        // Pool exhausted (try_acquire returns None)
         assert!(pool.try_acquire().is_none());
 
         // Release one
@@ -221,7 +204,7 @@ mod tests {
         assert_eq!(pool.available(), 1);
 
         // Can acquire again
-        let _handle3 = pool.acquire().expect("should acquire slot");
+        let _handle3 = pool.acquire();
         assert_eq!(pool.available(), 0);
 
         drop(handle2);
@@ -229,10 +212,73 @@ mod tests {
     }
 
     #[test]
+    fn test_acquire_blocks_until_slot_available() {
+        let pool = SlotPool::new(1).expect("pool creation should succeed");
+
+        // Acquire the only slot
+        let handle = pool.acquire();
+        assert_eq!(pool.available(), 0);
+
+        let pool_clone = pool.clone();
+        let acquired = Arc::new(AtomicBool::new(false));
+        let acquired_clone = Arc::clone(&acquired);
+
+        // Spawn a thread that will block on acquire
+        let thread = std::thread::spawn(move || {
+            let _handle = pool_clone.acquire();
+            acquired_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Give the thread time to start and block
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!acquired.load(Ordering::SeqCst), "should be blocked");
+
+        // Release the slot
+        drop(handle);
+
+        // Thread should now complete
+        thread.join().expect("thread should not panic");
+        assert!(acquired.load(Ordering::SeqCst), "should have acquired");
+    }
+
+    #[test]
+    fn test_acquire_timeout() {
+        let pool = SlotPool::new(1).expect("pool creation should succeed");
+
+        // Acquire the only slot
+        let _handle = pool.acquire();
+
+        // Timeout should return None
+        let result = pool.acquire_timeout(Duration::from_millis(10));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_acquire_timeout_success() {
+        let pool = SlotPool::new(1).expect("pool creation should succeed");
+
+        // Acquire the only slot
+        let handle = pool.acquire();
+
+        let pool_clone = pool.clone();
+        let thread = std::thread::spawn(move || {
+            // Release after a short delay
+            std::thread::sleep(Duration::from_millis(20));
+            drop(handle);
+        });
+
+        // Should succeed within timeout
+        let result = pool_clone.acquire_timeout(Duration::from_millis(100));
+        assert!(result.is_some());
+
+        thread.join().expect("thread should not panic");
+    }
+
+    #[test]
     #[cfg(target_arch = "aarch64")]
     fn test_code_execution() {
-        let pool = Pool::new(4).expect("pool creation should succeed");
-        let mut handle = pool.acquire().expect("should acquire slot");
+        let pool = SlotPool::new(4).expect("pool creation should succeed");
+        let mut handle = pool.acquire();
 
         // Minimal Arm64: mov x0, #42; ret
         // 0xd2800540 = mov x0, #42
@@ -249,8 +295,8 @@ mod tests {
     #[test]
     #[cfg(target_arch = "aarch64")]
     fn test_code_execution_with_arguments() {
-        let pool = Pool::new(4).expect("pool creation should succeed");
-        let mut handle = pool.acquire().expect("should acquire slot");
+        let pool = SlotPool::new(4).expect("pool creation should succeed");
+        let mut handle = pool.acquire();
 
         // add x0, x0, x1; ret
         // 0x8b010000 = add x0, x0, x1
@@ -266,8 +312,8 @@ mod tests {
 
     #[test]
     fn test_code_too_large() {
-        let pool = Pool::with_capacity(1, 16).expect("pool creation should succeed");
-        let mut handle = pool.acquire().expect("should acquire slot");
+        let pool = SlotPool::with_capacity(1, 16).expect("pool creation should succeed");
+        let mut handle = pool.acquire();
 
         let large_code = vec![0u8; 32]; // Larger than 16 byte capacity
 
@@ -278,17 +324,8 @@ mod tests {
     }
 
     #[test]
-    fn test_compiled_module() {
-        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
-        let module = CompiledModule::with_single_entry(code.clone(), "main");
-
-        assert_eq!(module.code, code);
-        assert_eq!(module.entry_points.get("main"), Some(&0));
-    }
-
-    #[test]
     fn test_pool_concurrent_access() {
-        let pool = Pool::with_capacity(8, 4096).expect("pool creation should succeed");
+        let pool = SlotPool::with_capacity(8, 4096).expect("pool creation should succeed");
         let completed = Arc::new(AtomicUsize::new(0));
 
         let handles: Vec<_> = (0..8)
@@ -297,7 +334,37 @@ mod tests {
                 let completed = Arc::clone(&completed);
                 std::thread::spawn(move || {
                     for _ in 0..10 {
-                        let handle = pool.acquire().expect("should acquire slot");
+                        let handle = pool.acquire();
+                        assert!(handle.capacity() > 0);
+                        drop(handle);
+                        completed.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        assert_eq!(completed.load(Ordering::Relaxed), 80);
+    }
+
+    #[test]
+    fn test_concurrent_blocking_stress() {
+        // More threads than slots to test back-pressure
+        let pool = SlotPool::with_capacity(4, 4096).expect("pool creation should succeed");
+        let completed = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let pool = pool.clone();
+                let completed = Arc::clone(&completed);
+                std::thread::spawn(move || {
+                    for _ in 0..5 {
+                        let handle = pool.acquire();
+                        // Simulate some work
+                        std::thread::sleep(Duration::from_micros(100));
                         assert!(handle.capacity() > 0);
                         drop(handle);
                         completed.fetch_add(1, Ordering::Relaxed);

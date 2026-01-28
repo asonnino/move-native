@@ -1,160 +1,104 @@
-//! Dynamic library loading for native Move modules
+//! Module abstractions for compiled native code
 //!
-//! Provides a safe wrapper around libloading for loading compiled
-//! Move modules and resolving function symbols.
+//! This module contains the types that represent compiled modules and their functions:
+//! - `CompiledModule`: Raw bytes + entry points (what gets stored/transferred)
+//! - `LoadedModule`: A module loaded into a slot (internal)
+//! - `FunctionHandle`: A reference to a function that keeps its slot alive
 
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
 
-use libloading::{Library, Symbol as LibSymbol};
-use tempfile::NamedTempFile;
+use crate::slot::SlotHandle;
 
-use crate::error::{RuntimeError, RuntimeResult};
-
-/// A function pointer with its module reference
+/// Compiled module output from the compiler
 ///
-/// This wrapper ensures the module stays loaded as long as the function
-/// pointer is held. When this struct is dropped, the module reference
-/// is released (though the module may remain loaded if other references
-/// exist elsewhere).
-///
-/// # Type Parameters
-///
-/// * `F` - The function pointer type (e.g., `unsafe extern "C" fn()`)
-#[derive(Clone)]
-pub struct FunctionHandle<F: Copy> {
-    ptr: F,
-    _module: Arc<NativeModule>,
+/// Contains raw executable bytes and entry point offsets.
+/// This is what gets stored in the database/cache.
+#[derive(Clone, Debug)]
+pub struct CompiledModule {
+    /// Raw executable bytes (flat binary, no ELF wrapper)
+    pub code: Vec<u8>,
+    /// Function name -> offset in code
+    pub entry_points: HashMap<String, u32>,
 }
 
-impl<F: Copy> FunctionHandle<F> {
-    /// Get the raw function pointer
-    ///
-    /// The pointer remains valid as long as this `FunctionHandle` is alive.
-    pub fn ptr(&self) -> F {
-        self.ptr
+impl CompiledModule {
+    /// Create a new compiled module
+    pub fn new(code: Vec<u8>, entry_points: HashMap<String, u32>) -> Self {
+        Self { code, entry_points }
+    }
+
+    /// Create a compiled module with a single entry point at offset 0
+    pub fn with_single_entry(code: Vec<u8>, name: impl Into<String>) -> Self {
+        Self::new(code, HashMap::from([(name.into(), 0)]))
     }
 }
 
-impl<F: Copy + std::fmt::Debug> std::fmt::Debug for FunctionHandle<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+/// A module loaded into a slot
+///
+/// Contains the slot handle and entry point offsets. Shared via Arc
+/// to allow multiple FunctionHandles to reference the same loaded code.
+pub(crate) struct LoadedModule {
+    /// The slot containing the executable code
+    pub(crate) handle: SlotHandle,
+    /// Function name -> offset in code
+    pub(crate) entry_points: HashMap<String, u32>,
+}
+
+/// Handle to a function in a loaded module
+///
+/// Keeps the underlying slot alive while the handle exists.
+/// The slot is only returned to the pool when all FunctionHandles
+/// (and the cache entry) are dropped.
+pub struct FunctionHandle<F> {
+    /// Reference to the loaded module (keeps slot alive)
+    module: Arc<LoadedModule>,
+    /// Offset of the function within the code
+    offset: u32,
+    /// Marker for the function type
+    _marker: PhantomData<F>,
+}
+
+impl<F> fmt::Debug for FunctionHandle<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FunctionHandle")
-            .field("ptr", &self.ptr)
+            .field("offset", &self.offset)
             .finish_non_exhaustive()
     }
 }
 
-/// A loaded native module (internal use only)
-///
-/// Wraps a dynamically loaded library (.dylib on macOS, .so on Linux).
-/// This module is dangerous, use `ModuleCache` for the public API.
-pub struct NativeModule {
-    library: Library,
-}
-
-impl std::fmt::Debug for NativeModule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NativeModule").finish_non_exhaustive()
-    }
-}
-
-impl NativeModule {
-    /// Load a native module from the specified path
-    ///
-    /// Returns an `Arc<NativeModule>` to ensure the module can be shared
-    /// with `FunctionHandle`s that reference functions within it.
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> RuntimeResult<Arc<Self>> {
-        let path = path.as_ref();
-        // Safety: The library is loaded with default flags.
-        // The caller must ensure the library is safe to load.
-        let library = unsafe { Library::new(path) }.map_err(|e| RuntimeError::LoadError {
-            path: path.to_path_buf(),
-            reason: e.to_string(),
-        })?;
-
-        Ok(Arc::new(Self { library }))
-    }
-
-    /// Load a native module from bytes
-    ///
-    /// Writes bytes to a temporary file and loads via dlopen.
-    ///
-    /// TODO: Avoid writing to disk - use memfd on Linux or direct mmap.
-    pub fn load_from_bytes(bytes: &[u8]) -> RuntimeResult<Arc<Self>> {
-        // Platform-appropriate extension
-        #[cfg(target_os = "macos")]
-        let suffix = ".dylib";
-        #[cfg(not(target_os = "macos"))]
-        let suffix = ".so";
-
-        // Write bytes to temp file
-        let mut temp_file =
-            NamedTempFile::with_suffix(suffix).map_err(|e| RuntimeError::LoadError {
-                path: PathBuf::from("<tempfile>"),
-                reason: format!("failed to create temp file: {e}"),
-            })?;
-
-        temp_file
-            .write_all(bytes)
-            .map_err(|e| RuntimeError::LoadError {
-                path: PathBuf::from("<tempfile>"),
-                reason: format!("write to temp file failed: {e}"),
-            })?;
-
-        // Load the library (temp file deleted after this, but dlopen keeps mapping valid)
-        Self::load_from_file(temp_file.path())
-    }
-
-    /// Get a function handle from the module
+impl<F: Copy> FunctionHandle<F> {
+    /// Create a new function handle
     ///
     /// # Safety
     ///
     /// The caller must ensure:
-    /// - The type parameter `F` matches the actual function signature
-    /// - The function is safe to call (e.g., properly instrumented)
-    pub unsafe fn get_function<F: Copy + 'static>(
-        self: Arc<Self>,
-        name: &str,
-    ) -> RuntimeResult<FunctionHandle<F>> {
-        // Note: dlsym handles platform symbol conventions automatically.
-        // On macOS, dlsym("foo") finds "_foo" in Mach-O binaries.
-        // On Linux, dlsym("foo") finds "foo" in ELF binaries.
-        let symbol: LibSymbol<F> =
-            self.library
-                .get(name.as_bytes())
-                .map_err(|_| RuntimeError::SymbolNotFound {
-                    symbol: name.to_string(),
-                })?;
+    /// - `offset` points to a valid function entry point
+    /// - `F` matches the actual function signature at that offset
+    pub(crate) unsafe fn new(module: Arc<LoadedModule>, offset: u32) -> Self {
+        Self {
+            module,
+            offset,
+            _marker: PhantomData,
+        }
+    }
 
-        Ok(FunctionHandle {
-            ptr: *symbol,
-            _module: self,
-        })
+    /// Get the function pointer
+    pub fn as_ptr(&self) -> F {
+        // Safety: The caller of `new` guaranteed the offset and type are valid
+        unsafe { self.module.handle.get_function(self.offset as usize) }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::NativeModule;
-    use crate::RuntimeError;
+    use super::CompiledModule;
 
     #[test]
-    fn test_load_nonexistent() {
-        let result = NativeModule::load_from_file("/nonexistent/path/to/library.dylib");
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RuntimeError::LoadError { path, .. } => {
-                assert_eq!(
-                    path,
-                    Path::new("/nonexistent/path/to/library.dylib").to_path_buf()
-                );
-            }
-            _ => panic!("expected LoadError"),
-        }
+    fn test_compiled_module() {
+        let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6];
+        let module = CompiledModule::with_single_entry(code.clone(), "main");
+
+        assert_eq!(module.code, code);
+        assert_eq!(module.entry_points.get("main"), Some(&0));
     }
 }

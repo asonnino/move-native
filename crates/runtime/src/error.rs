@@ -16,8 +16,14 @@ pub enum RuntimeError {
     #[error("{}", display_load_error(path, reason))]
     LoadError { path: PathBuf, reason: String },
 
-    #[error("symbol not found: {symbol}")]
-    SymbolNotFound { symbol: String },
+    #[error("module not found: {id}")]
+    ModuleNotFound { id: String },
+
+    #[error("function not found: {name}")]
+    FunctionNotFound { name: String },
+
+    #[error("code pool exhausted (all slots in use)")]
+    PoolExhausted,
 
     #[error("failed to set up signal handler: {reason}")]
     SignalSetupError { reason: String },
@@ -37,5 +43,5 @@ fn display_load_error(path: &PathBuf, reason: &str) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "<unknown>".into());
 
-    format!("failed to load library '{path_display}': {reason}")
+    format!("failed to load module '{path_display}': {reason}")
 }

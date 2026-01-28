@@ -181,6 +181,7 @@ impl Slot {
     }
 
     /// Get the capacity of this slot
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.code_capacity
     }

@@ -7,10 +7,20 @@
 //! # Overview
 //!
 //! The runtime handles:
-//! - Loading native modules (.dylib on macOS, .so on Linux)
+//! - Loading native modules into pre-allocated executable memory slots
 //! - Setting up the gas counter in register x23
 //! - Installing a SIGTRAP handler to catch out-of-gas conditions
 //! - Executing functions and reporting gas consumption
+//!
+//! # Architecture
+//!
+//! ```text
+//! ModuleStore (persistent storage)
+//!      ↓ fetch on cache miss
+//! ModuleCache (LRU, backed by Pool/Slots)
+//!      ↓
+//! FunctionHandle → Executor
+//! ```
 //!
 //! # Gas Instrumentation Protocol
 //!
@@ -53,9 +63,9 @@ mod store;
 pub use cache::ModuleCache;
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
-pub use module::{FunctionHandle, NativeModule};
-pub use slot::{CompiledModule, Handle, Pool, Slot};
-pub use store::{FileSystemStore, ModuleStore};
+pub use module::{CompiledModule, FunctionHandle};
+pub use slot::SlotPool;
+pub use store::{MemoryStore, ModuleStore};
 
 #[cfg(test)]
 pub use store::mock::MockStore;

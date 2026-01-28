@@ -1,11 +1,12 @@
 //! Integration tests for the runtime crate
 //!
-//! Tests the full pipeline: instrument → assemble → link → load → execute.
+//! Tests the full pipeline: instrument → assemble → extract binary → load → execute.
 
-use std::{path::Path, path::PathBuf, process::Command};
+use std::{path::Path, process::Command};
 
 use gas_instrument::{instrument, parser};
-use runtime::{Executor, FileSystemStore, ModuleCache};
+use object::{Object, ObjectSection};
+use runtime::{CompiledModule, Executor, MemoryStore, ModuleCache};
 use tempfile::TempDir;
 
 /// The function type for all test functions
@@ -35,104 +36,56 @@ fn assemble(source: &str, obj_path: &Path) {
     assert!(status.success(), "assembler failed");
 }
 
-/// Links an object file into a shared library.
-#[cfg(target_os = "macos")]
-fn link_shared_lib(obj_path: &Path, lib_path: &Path) {
-    // Use clang to link - it handles SDK paths automatically
-    let status = Command::new("clang")
-        .args([
-            "-shared",
-            "-arch",
-            "arm64",
-            "-o",
-            lib_path.to_str().unwrap(),
-            obj_path.to_str().unwrap(),
-        ])
-        .status()
-        .expect("failed to run linker");
+/// Extracts the text section from an object file using the `object` crate.
+fn extract_text_section(obj_path: &Path) -> Vec<u8> {
+    let data = std::fs::read(obj_path).expect("failed to read object file");
+    let file = object::File::parse(&*data).expect("failed to parse object file");
 
-    assert!(status.success(), "linker failed: clang -shared");
+    // Find the text section (named "__text" on macOS, ".text" on Linux)
+    for section in file.sections() {
+        let name = section.name().unwrap_or("");
+        if name == "__text" || name == ".text" {
+            return section.data().expect("failed to read text section").to_vec();
+        }
+    }
+
+    panic!("text section not found in object file");
 }
 
-/// Links an object file into a shared library.
-#[cfg(target_os = "linux")]
-fn link_shared_lib(obj_path: &Path, lib_path: &Path) {
-    let status = Command::new("ld")
-        .args([
-            "-shared",
-            "-o",
-            lib_path.to_str().unwrap(),
-            obj_path.to_str().unwrap(),
-        ])
-        .status()
-        .expect("failed to run linker");
-
-    assert!(status.success(), "linker failed: ld -shared");
-}
-
-/// Creates an instrumented shared library from assembly source.
-/// Returns the temp directory (to keep files alive) and path to the library.
-///
-/// `symbol_name` is the dlsym-style symbol name (without leading underscore on macOS).
-/// The function automatically adds the underscore prefix when checking nm output on macOS.
-fn build_instrumented_lib(source: &str, symbol_name: &str) -> (TempDir, std::path::PathBuf) {
+/// Creates an instrumented binary from assembly source.
+/// Returns the raw bytes of the instrumented code.
+fn build_instrumented_binary(source: &str) -> Vec<u8> {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     let obj_path = temp_dir.path().join("test.o");
-
-    #[cfg(target_os = "macos")]
-    let lib_path = temp_dir.path().join("test.dylib");
-    #[cfg(target_os = "linux")]
-    let lib_path = temp_dir.path().join("test.so");
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let lib_path = temp_dir.path().join("test.so");
 
     // Instrument the assembly
     let instrumented = instrument_asm(source);
 
-    // Assemble
+    // Assemble to object file
     assemble(&instrumented, &obj_path);
 
-    // Link into shared library
-    link_shared_lib(&obj_path, &lib_path);
-
-    // Verify the symbol exists in nm output
-    // On macOS, nm shows symbols with leading underscore, but dlsym expects without
-    #[cfg(target_os = "macos")]
-    let nm_symbol_name = format!("_{}", symbol_name);
-    #[cfg(not(target_os = "macos"))]
-    let nm_symbol_name = symbol_name.to_string();
-
-    let output = Command::new("nm")
-        .arg(&lib_path)
-        .output()
-        .expect("failed to run nm");
-    let nm_output = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        nm_output.contains(&nm_symbol_name),
-        "symbol {} not found in library. nm output:\n{}",
-        nm_symbol_name,
-        nm_output
-    );
-
-    (temp_dir, lib_path)
+    // Extract text section using the object crate
+    extract_text_section(&obj_path)
 }
 
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_execute_with_sufficient_gas() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
 
-    let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
             .expect("failed to get function")
     };
 
+    let executor = Executor::init().expect("failed to create executor");
+
     // Execute with plenty of gas (loop runs 1000 times, each iteration ~3 gas)
-    // cached_fn keeps the module loaded during execution
     let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
 
     assert!(
@@ -160,16 +113,19 @@ fn test_execute_with_sufficient_gas() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_execute_with_insufficient_gas() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
 
-    let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
             .expect("failed to get function")
     };
+
+    let executor = Executor::init().expect("failed to create executor");
 
     // Execute with very little gas (not enough to complete the loop)
     let result = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
@@ -178,59 +134,63 @@ fn test_execute_with_insufficient_gas() {
         !result.completed,
         "should run out of gas with only 10 gas units"
     );
-    // Gas remaining may be negative when out of gas
-    assert!(
-        result.gas_remaining <= 0,
-        "gas_remaining should be zero or negative after out-of-gas"
+    assert_eq!(
+        result.gas_remaining, 0,
+        "gas_remaining should be zero after out-of-gas"
     );
 }
 
 #[test]
 fn test_symbol_not_found() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
+    let code = vec![0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6]; // mov x0, #42; ret
+    let module = CompiledModule::with_single_entry(code, "main");
 
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
-    let result = unsafe { cache.get_or_load(&lib_path, "nonexistent_symbol") };
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let result = unsafe { cache.get_function::<TestFn>(&"test".to_string(), "nonexistent_symbol") };
 
     assert!(result.is_err());
     match result.unwrap_err() {
-        runtime::RuntimeError::SymbolNotFound { symbol } => {
-            assert_eq!(symbol, "nonexistent_symbol");
+        runtime::RuntimeError::FunctionNotFound { name } => {
+            assert_eq!(name, "nonexistent_symbol");
         }
-        e => panic!("expected SymbolNotFound error, got: {:?}", e),
+        e => panic!("expected FunctionNotFound error, got: {:?}", e),
     }
 }
 
 #[test]
 fn test_load_nonexistent_library() {
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
-    let module_id = PathBuf::from("/nonexistent/path/to/library.dylib");
-    let result = unsafe { cache.get_or_load(&module_id, "func") };
+    let store = MemoryStore::<String>::new();
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let result = unsafe { cache.get_function::<TestFn>(&"nonexistent".to_string(), "func") };
+
     assert!(result.is_err());
     match result.unwrap_err() {
-        runtime::RuntimeError::LoadError { .. } => {}
-        e => panic!("expected LoadError, got: {:?}", e),
+        runtime::RuntimeError::ModuleNotFound { .. } => {}
+        e => panic!("expected ModuleNotFound, got: {:?}", e),
     }
 }
 
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_multiple_executions() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
 
-    let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
             .expect("failed to get function")
     };
 
+    let executor = Executor::init().expect("failed to create executor");
+
     // Execute multiple times to ensure state is properly reset between executions
-    // cached_fn keeps the module loaded across all executions
     for i in 0..3 {
         let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
         assert!(
@@ -244,16 +204,19 @@ fn test_multiple_executions() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_out_of_gas_then_successful() {
-    let (_temp_dir, lib_path) = build_instrumented_lib(SIMPLE_LOOP_ASM, "simple_loop");
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
 
-    let executor = Executor::init().expect("failed to create executor");
-    let cache: ModuleCache<FileSystemStore, TestFn> =
-        ModuleCache::new(FileSystemStore::new(), 128);
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
     let cached_fn = unsafe {
         cache
-            .get_or_load(&lib_path, "simple_loop")
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
             .expect("failed to get function")
     };
+
+    let executor = Executor::init().expect("failed to create executor");
 
     // First execution: out of gas
     let result1 = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");

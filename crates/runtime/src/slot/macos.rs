@@ -124,12 +124,17 @@ impl Slot {
     /// - The type `F` matches the actual function signature at that offset
     /// - The code at that offset is a valid function entry point
     pub unsafe fn get_function<F: Copy>(&self, offset: usize) -> F {
-        debug_assert!(offset < self.code_capacity, "offset {offset} >= capacity {}", self.code_capacity);
+        debug_assert!(
+            offset < self.code_capacity,
+            "offset {offset} >= capacity {}",
+            self.code_capacity
+        );
         let ptr = self.code_rx.as_ptr().add(offset);
         std::mem::transmute_copy(&ptr)
     }
 
     /// Get the capacity of this slot
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.code_capacity
     }

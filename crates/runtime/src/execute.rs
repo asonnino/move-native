@@ -34,13 +34,19 @@ pub struct GasResult {
 /// # Example
 ///
 /// ```no_run
-/// use runtime::{Executor, NativeModule};
+/// use runtime::{Executor, ModuleCache, MemoryStore, CompiledModule};
 ///
 /// type MoveFn = unsafe extern "C" fn();
 ///
+/// // Create a cache with a memory store
+/// let store = MemoryStore::with_module("my_module".into(), CompiledModule::with_single_entry(vec![], "main"));
+/// let cache = ModuleCache::new(store, 4)?;
+///
+/// // Get a function handle from the cache
+/// let func = unsafe { cache.get_function::<MoveFn>(&"my_module".to_string(), "main")? };
+///
+/// // Execute with gas metering
 /// let executor = Executor::init()?;
-/// let module = NativeModule::load_from_file("my_module.dylib")?;
-/// let func = unsafe { module.get_function::<MoveFn>("my_function")? };
 /// let result = unsafe { executor.execute(&func, 1_000_000) }?;
 /// if result.completed {
 ///     println!("Completed, used {} gas", result.gas_consumed);
@@ -101,7 +107,7 @@ impl Executor {
         #[cfg(debug_assertions)]
         self.handler.verify_installed()?;
 
-        self.execute_inner(entry.ptr(), gas_limit)
+        self.execute_inner(entry.as_ptr(), gas_limit)
     }
 
     /// Execute with explicit signal handler verification
@@ -130,7 +136,7 @@ impl Executor {
         gas_limit: u64,
     ) -> RuntimeResult<GasResult> {
         self.handler.verify_installed()?;
-        self.execute_inner(entry.ptr(), gas_limit)
+        self.execute_inner(entry.as_ptr(), gas_limit)
     }
 
     /// Inner execution logic (shared by both execute methods)
