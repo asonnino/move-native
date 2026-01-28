@@ -69,30 +69,27 @@ impl SlotPool {
     /// back-pressure when all slots are in use.
     pub fn acquire(&self) -> SlotHandle {
         let slot = self.rx.recv().expect("channel should not be disconnected");
-        SlotHandle {
-            tx: self.tx.clone(),
-            slot: Some(slot),
-        }
+        SlotHandle::new(self.tx.clone(), slot)
     }
 
     /// Try to acquire a slot from the pool without blocking
     ///
     /// Returns `None` if all slots are in use.
     pub fn try_acquire(&self) -> Option<SlotHandle> {
-        self.rx.try_recv().ok().map(|slot| SlotHandle {
-            tx: self.tx.clone(),
-            slot: Some(slot),
-        })
+        self.rx
+            .try_recv()
+            .ok()
+            .map(|slot| SlotHandle::new(self.tx.clone(), slot))
     }
 
     /// Acquire a slot from the pool with a timeout
     ///
     /// Returns `None` if no slot becomes available within the timeout.
     pub fn acquire_timeout(&self, timeout: Duration) -> Option<SlotHandle> {
-        self.rx.recv_timeout(timeout).ok().map(|slot| SlotHandle {
-            tx: self.tx.clone(),
-            slot: Some(slot),
-        })
+        self.rx
+            .recv_timeout(timeout)
+            .ok()
+            .map(|slot| SlotHandle::new(self.tx.clone(), slot))
     }
 
     /// Get the total number of slots in the pool
@@ -122,6 +119,13 @@ pub struct SlotHandle {
 }
 
 impl SlotHandle {
+    fn new(tx: Sender<Slot>, slot: Slot) -> Self {
+        Self {
+            tx,
+            slot: Some(slot),
+        }
+    }
+
     /// Load code into this slot
     ///
     /// Overwrites any previously loaded code.

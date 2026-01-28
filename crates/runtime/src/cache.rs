@@ -102,6 +102,7 @@ impl<S: ModuleStore> ModuleCache<S> {
         } else {
             // Cache miss - load from store
             let loaded = self.load_module(module_id)?;
+            // TODO: Explore pre-allocating Arc storage to avoid heap allocation
             let loaded = Arc::new(loaded);
             self.modules.insert(module_id.clone(), Arc::clone(&loaded));
             loaded
