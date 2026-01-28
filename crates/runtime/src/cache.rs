@@ -161,10 +161,7 @@ impl<S: ModuleStore> ModuleCache<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Barrier},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use crate::{CompiledModule, ModuleCache, RuntimeError, store::mock::MockStore};
 
@@ -358,10 +355,6 @@ mod tests {
         let store = MockStore::new();
         store.add_module(0, CompiledModule::new_for_test(42, "main"));
 
-        // Barrier ensures all threads hit load_module simultaneously
-        let barrier = Arc::new(Barrier::new(8));
-        store.set_barrier(barrier);
-
         let cache = Arc::new(ModuleCache::new(store.clone(), 4).unwrap());
 
         let handles: Vec<_> = (0..8)
@@ -380,8 +373,6 @@ mod tests {
         // Only one slot used (moka deduplicates by key)
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.available_slots(), 3);
-        // Note: moka doesn't deduplicate concurrent loads, so multiple
-        // threads may call load_module. This is acceptable for our use case.
     }
 
     #[test]

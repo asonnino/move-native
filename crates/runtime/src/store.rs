@@ -79,7 +79,6 @@ pub mod mock {
     //! Provides:
     //! - Pre-loaded modules (no filesystem access)
     //! - Load counters for deduplication verification
-    //! - Barriers for precise thread synchronization
     //! - Failure injection for error handling tests
     //!
     //! MockStore is cheaply cloneable - clones share state.
@@ -87,9 +86,7 @@ pub mod mock {
     use std::{
         collections::HashMap,
         sync::{
-            Arc,
-            Barrier,
-            Mutex,
+            Arc, Mutex,
             atomic::{AtomicBool, AtomicU64, Ordering},
         },
     };
@@ -100,7 +97,6 @@ pub mod mock {
     struct Inner {
         modules: Mutex<HashMap<usize, CompiledModule>>,
         load_count: AtomicU64,
-        barrier: Mutex<Option<Arc<Barrier>>>,
         should_fail: AtomicBool,
         failure_reason: Mutex<Option<String>>,
     }
@@ -119,7 +115,6 @@ pub mod mock {
             Self {
                 modules: Mutex::new(HashMap::new()),
                 load_count: AtomicU64::new(0),
-                barrier: Mutex::new(None),
                 should_fail: AtomicBool::new(false),
                 failure_reason: Mutex::new(None),
             }
@@ -142,14 +137,6 @@ pub mod mock {
             self.inner.load_count.load(Ordering::SeqCst)
         }
 
-        /// Set barrier for thread synchronization
-        ///
-        /// When set, `load_module` will wait at the barrier before returning.
-        /// Useful for testing concurrent cache access.
-        pub fn set_barrier(&self, barrier: Arc<Barrier>) {
-            *self.inner.barrier.lock().unwrap() = Some(barrier);
-        }
-
         /// Configure next load to fail
         ///
         /// The next call to `load_module` will return an error.
@@ -166,11 +153,6 @@ pub mod mock {
         fn load_module(&self, id: &usize) -> RuntimeResult<CompiledModule> {
             // Increment counter first
             self.inner.load_count.fetch_add(1, Ordering::SeqCst);
-
-            // Wait at barrier if set
-            if let Some(barrier) = self.inner.barrier.lock().unwrap().as_ref() {
-                barrier.wait();
-            }
 
             // Check for injected failure
             if self.inner.should_fail.swap(false, Ordering::SeqCst) {
