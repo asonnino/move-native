@@ -47,12 +47,14 @@ mod error;
 mod execute;
 mod module;
 mod signal;
+mod slot;
 mod store;
 
 pub use cache::ModuleCache;
 pub use error::{RuntimeError, RuntimeResult};
 pub use execute::{Executor, GasResult};
 pub use module::{FunctionHandle, NativeModule};
+pub use slot::{CompiledModule, Handle, Pool, Slot};
 pub use store::{FileSystemStore, ModuleStore};
 
 #[cfg(test)]

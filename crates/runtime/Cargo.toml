@@ -10,6 +10,7 @@ description = "Execution runtime for gas-instrumented native Move code"
 path = "src/lib.rs"
 
 [dependencies]
+crossbeam-queue = "0.3"
 libloading = "0.9"
 libc = "0.2"
 moka = { version = "0.12", features = ["sync"] }
