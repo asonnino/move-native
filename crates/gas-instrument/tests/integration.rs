@@ -15,6 +15,12 @@ use gas_instrument::{ParsedAssembly, build_cfg, instrument};
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
+const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm_samples/forward_only.s");
+const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
+const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/cbz_loop.s");
+const UNCONDITIONAL_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/unconditional_loop.s");
+const MULTIPLE_FUNCTIONS_ASM: &str = include_str!("../../../tests/asm_samples/multiple_functions.s");
+const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm_samples/large_block.s");
 
 /// Tests the full instrumentation pipeline on a simple loop.
 ///
@@ -169,4 +175,133 @@ fn test_label_collision_does_not_hang() {
 
     // Should skip 0-99 and use 100
     assert!(output.contains(".L__gas_ok_100:"));
+}
+
+/// Tests that forward-only code receives NO gas instrumentation.
+/// This is an important optimization: forward branches are bounded by code size.
+#[test]
+fn test_forward_only_no_instrumentation() {
+    let asm = ParsedAssembly::parse(FORWARD_ONLY_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let cfg = &cfg_result.cfg;
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // Should have no back-edges
+    let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+    assert_eq!(back_edge_count, 0, "forward-only code should have no back-edges");
+
+    // Should have no gas check sequences
+    assert!(!output.contains("sub x23"), "should not have gas decrement");
+    assert!(!output.contains("tbz x23"), "should not have gas check");
+    assert!(!output.contains("brk #0"), "should not have trap");
+
+    // Original structure preserved
+    assert!(output.contains(".Lsmall:"));
+    assert!(output.contains(".Ldone:"));
+    assert!(output.contains("b.lt .Lsmall"));
+}
+
+/// Tests that function calls within loops are handled correctly.
+/// The bl instruction should remain, and gas check should be at the back-edge.
+#[test]
+fn test_function_call_instrumentation() {
+    let asm = ParsedAssembly::parse(FUNCTION_CALL_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let cfg = &cfg_result.cfg;
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // Should have exactly one back-edge (the main loop)
+    let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+    assert_eq!(back_edge_count, 1, "should have one back-edge for main loop");
+
+    // Gas check should be present
+    assert!(output.contains("sub x23, x23"), "should have gas decrement");
+    assert!(output.contains("tbz x23, #63"), "should have gas check");
+
+    // bl instruction should be preserved (not treated as back-edge)
+    assert!(output.contains("bl _helper"), "bl instruction should be preserved");
+    assert!(output.contains("b.lt .Lloop"), "loop back-edge should be preserved");
+}
+
+/// Tests cbnz loop instrumentation.
+#[test]
+fn test_cbz_loop_instrumentation() {
+    let asm = ParsedAssembly::parse(CBZ_LOOP_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let cfg = &cfg_result.cfg;
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // Should detect the cbnz back-edge
+    let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+    assert_eq!(back_edge_count, 1, "should detect cbnz as back-edge");
+
+    // Gas check sequence present
+    assert!(output.contains("sub x23, x23, #2"), "should charge for 2 instructions");
+    assert!(output.contains("cbnz x0, .Lloop"), "cbnz branch preserved");
+}
+
+/// Tests unconditional back-edge (plain `b` instruction).
+#[test]
+fn test_unconditional_loop_instrumentation() {
+    let asm = ParsedAssembly::parse(UNCONDITIONAL_LOOP_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let cfg = &cfg_result.cfg;
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // Should have exactly one back-edge (the unconditional b)
+    let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+    assert_eq!(back_edge_count, 1, "should detect unconditional b as back-edge");
+
+    // The forward branch (b.ge) should NOT be instrumented
+    // Only the back-edge (b .Lloop) should have gas check
+    assert_eq!(output.matches("brk #0").count(), 1, "only one gas check for back-edge");
+    assert!(output.contains("b .Lloop"), "unconditional back-edge preserved");
+    assert!(output.contains("b.ge .Ldone"), "forward branch preserved without gas check");
+}
+
+/// Tests multiple functions in one file.
+///
+/// NOTE: Current limitation - CFG analysis starts from instruction 0 and uses
+/// dominator analysis, so code after a `ret` (second function) isn't reachable
+/// from the entry point's perspective. Only the first function's back-edge is
+/// detected. This test documents this behavior.
+#[test]
+fn test_multiple_functions_instrumentation() {
+    let asm = ParsedAssembly::parse(MULTIPLE_FUNCTIONS_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let cfg = &cfg_result.cfg;
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // Current behavior: only first function's back-edge is detected
+    // (second function is unreachable from entry due to `ret`)
+    let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
+    assert_eq!(
+        back_edge_count, 1,
+        "only first function's back-edge detected (limitation: second function unreachable)"
+    );
+
+    // First function's loop is instrumented
+    assert_eq!(output.matches("brk #0").count(), 1, "one gas check sequence");
+
+    // Both function labels preserved in output
+    assert!(output.contains("_func_add:") || output.contains("func_add:"));
+    assert!(output.contains("_func_mul:") || output.contains("func_mul:"));
+
+    // First loop back-edge preserved and instrumented
+    assert!(output.contains("b.lt .Ladd_loop"));
+}
+
+/// Tests large basic block has correct instruction count.
+#[test]
+fn test_large_block_instruction_count() {
+    let asm = ParsedAssembly::parse(LARGE_BLOCK_ASM);
+    let cfg_result = build_cfg(&asm).unwrap();
+    let output = instrument::instrument(asm.lines(), &cfg_result).unwrap();
+
+    // The loop body has 20 instructions, so gas decrement should be #20
+    assert!(
+        output.contains("sub x23, x23, #20"),
+        "should charge for 20 instructions in large block, output:\n{}",
+        output
+    );
 }
