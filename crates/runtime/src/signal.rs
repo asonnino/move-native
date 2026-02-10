@@ -1,4 +1,6 @@
-//! SIGTRAP handler for out-of-gas detection
+//! Signal handlers for gas exhaustion and memory fault detection
+//!
+//! ## SIGTRAP (Out-of-Gas)
 //!
 //! When the gas counter goes negative, the instrumented code executes `brk #0`
 //! which triggers SIGTRAP. The signal handler advances PC past the trap
@@ -7,6 +9,14 @@
 //! Out-of-gas is detected by checking the gas counter (x23) after execution:
 //! - `gas_remaining >= 0` → completed normally
 //! - `gas_remaining < 0` → ran out of gas (trap was triggered)
+//!
+//! ## SIGSEGV/SIGBUS (Memory Faults)
+//!
+//! Memory faults are handled by setting a TLS flag, restoring SP to a known-good
+//! value, and redirecting PC to a saved return address in the executor's asm block.
+//! This bypasses LR entirely, which is necessary because nested `bl` calls inside
+//! Move code clobber LR. This follows the DeCl paper approach: "terminate programs
+//! after a memory fault."
 //!
 //! # Warning: Debugger Interaction
 //!
@@ -19,7 +29,10 @@
 
 use std::{mem::MaybeUninit, sync::OnceLock};
 
-use crate::error::{RuntimeError, RuntimeResult};
+use crate::{
+    error::{RuntimeError, RuntimeResult},
+    fault::{get_return_pc, get_saved_sp, is_in_move_execution, record_fault},
+};
 
 // Once guard to ensure the handler is installed exactly once per process.
 //
@@ -101,9 +114,9 @@ impl SignalHandler {
         Ok(())
     }
 
-    /// Inner implementation that performs the actual sigaction syscall
+    /// Inner implementation that performs the actual sigaction syscalls
     fn install_inner() -> RuntimeResult<()> {
-        // Check if a handler is already installed
+        // Check if a SIGTRAP handler is already installed
         let old_sa = Self::query_current_handler()?;
         let handler_addr = old_sa.sa_sigaction;
         if handler_addr != 0 && handler_addr != libc::SIG_DFL && handler_addr != libc::SIG_IGN {
@@ -112,33 +125,51 @@ impl SignalHandler {
             });
         }
 
-        // Safety: We're setting up a signal handler with valid parameters
-        unsafe {
-            // Zero-initialize the sigaction struct
-            let mut sa: libc::sigaction = std::mem::zeroed();
+        // Store our handler address for later verification
+        OUR_HANDLER.get_or_init(|| Self::handle_sigtrap as *const () as usize);
 
-            // Set our handler function (cast to pointer then usize for the union field)
-            sa.sa_sigaction = Self::handle_sigtrap as *const () as usize;
+        // Signal handlers to install: (signal, handler, name)
+        let handlers: [(libc::c_int, usize, &str); 3] = [
+            (
+                libc::SIGTRAP,
+                Self::handle_sigtrap as *const () as usize,
+                "SIGTRAP",
+            ),
+            (
+                libc::SIGSEGV,
+                Self::handle_fault as *const () as usize,
+                "SIGSEGV",
+            ),
+            (
+                libc::SIGBUS,
+                Self::handle_fault as *const () as usize,
+                "SIGBUS",
+            ),
+        ];
 
-            // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
-            // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
-            // SA_RESTART: restart interrupted syscalls instead of returning EINTR.
-            sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+        for (signal, handler, name) in handlers {
+            // Safety: We're setting up signal handlers with valid parameters
+            unsafe {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = handler;
+                // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
+                // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
+                // SA_RESTART: restart interrupted syscalls instead of returning EINTR.
+                sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+                libc::sigemptyset(&mut sa.sa_mask);
 
-            // Initialize signal mask to empty (no signals blocked during handler)
-            libc::sigemptyset(&mut sa.sa_mask);
-
-            // Store our handler address for later verification
-            OUR_HANDLER.get_or_init(|| Self::handle_sigtrap as *const () as usize);
-
-            // Register the handler for SIGTRAP (raised by `brk #0`).
-            // Args: signal number, new action, old action (null = don't save previous)
-            if libc::sigaction(libc::SIGTRAP, &sa, std::ptr::null_mut()) != 0 {
-                return Err(RuntimeError::SignalSetupError {
-                    reason: format!("sigaction failed: {}", std::io::Error::last_os_error()),
-                });
+                if libc::sigaction(signal, &sa, std::ptr::null_mut()) != 0 {
+                    return Err(RuntimeError::SignalSetupError {
+                        reason: format!(
+                            "{} sigaction failed: {}",
+                            name,
+                            std::io::Error::last_os_error()
+                        ),
+                    });
+                }
             }
         }
+
         Ok(())
     }
 
@@ -216,12 +247,86 @@ impl SignalHandler {
     unsafe fn handle_brk_trap(_info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
         panic!("unsupported platform for signal handler");
     }
+
+    /// Signal handler for memory faults (SIGSEGV/SIGBUS)
+    ///
+    /// Only handles faults that occur during Move native code execution.
+    /// If the fault originated outside Move execution (e.g., a Rust bug on a
+    /// networking thread), resets to SIG_DFL so the kernel re-delivers the
+    /// signal with default disposition — producing a clean crash with core dump.
+    ///
+    /// Note: `#[inline(never)]` ensures this function has a stable address.
+    #[inline(never)]
+    extern "C" fn handle_fault(
+        sig: libc::c_int,
+        _info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
+        // Guard: only handle faults from Move execution.
+        // IN_MOVE_EXECUTION is set true only while execute_with_gas is running.
+        if !is_in_move_execution() {
+            // Not in Move execution — restore default handler so the kernel
+            // re-delivers the signal, producing a clean crash with core dump.
+            // sigaction() is async-signal-safe per POSIX.
+            unsafe {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = libc::SIG_DFL;
+                libc::sigemptyset(&mut sa.sa_mask);
+                libc::sigaction(sig, &sa, std::ptr::null_mut());
+            }
+            return;
+        }
+
+        // Record fault (one atomic write)
+        record_fault();
+
+        // Restore SP and redirect PC
+        unsafe {
+            Self::restore_sp_and_redirect_pc(ctx);
+        }
+    }
+
+    /// Restore SP and redirect PC to saved return address (macOS aarch64)
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    unsafe fn restore_sp_and_redirect_pc(ctx: *mut libc::c_void) {
+        let saved_sp = get_saved_sp();
+        let return_pc = get_return_pc();
+
+        let uctx = ctx as *mut libc::ucontext_t;
+        let mctx = (*uctx).uc_mcontext as *mut u8;
+
+        // SP offset: 16 (__es) + 232 (__x[29]) + 8 (fp) + 8 (lr) = 264
+        let sp_ptr = mctx.add(264) as *mut u64;
+        *sp_ptr = saved_sp;
+
+        // PC offset: 272
+        let pc_ptr = mctx.add(272) as *mut u64;
+        *pc_ptr = return_pc;
+    }
+
+    /// Restore SP and redirect PC to saved return address (Linux aarch64)
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    unsafe fn restore_sp_and_redirect_pc(ctx: *mut libc::c_void) {
+        let saved_sp = get_saved_sp();
+        let return_pc = get_return_pc();
+
+        let uctx = ctx as *mut libc::ucontext_t;
+        (*uctx).uc_mcontext.sp = saved_sp;
+        (*uctx).uc_mcontext.pc = return_pc;
+    }
+
+    /// Fallback for unsupported platforms
+    #[cfg(not(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux"))))]
+    unsafe fn restore_sp_and_redirect_pc(_ctx: *mut libc::c_void) {
+        panic!("unsupported platform for fault handler");
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{error::RuntimeError, signal::SignalHandler};
     use serial_test::{parallel, serial};
+
+    use crate::{error::RuntimeError, signal::SignalHandler};
 
     #[test]
     #[parallel(signal_handler)]

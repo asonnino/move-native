@@ -6,7 +6,7 @@ use std::{path::Path, process::Command};
 
 use gas_instrument::{instrument, parser};
 use object::{Object, ObjectSection};
-use runtime::{CompiledModule, Executor, MemoryStore, ModuleCache};
+use runtime::{CompiledModule, ExecutionStatus, Executor, MemoryStore, ModuleCache};
 use tempfile::TempDir;
 
 /// The function type for all test functions
@@ -22,6 +22,10 @@ const UNCONDITIONAL_LOOP_ASM: &str =
 const MULTIPLE_FUNCTIONS_ASM: &str =
     include_str!("../../../tests/asm_samples/multiple_functions.s");
 const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm_samples/large_block.s");
+const NULL_DEREF_ASM: &str = include_str!("../../../tests/asm_samples/null_deref.s");
+const UNMAPPED_JUMP_ASM: &str = include_str!("../../../tests/asm_samples/unmapped_jump.s");
+const STACK_THEN_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/stack_then_fault.s");
+const NESTED_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/nested_fault.s");
 
 /// Instruments the assembly using gas-instrument.
 fn instrument_asm(source: &str) -> String {
@@ -80,6 +84,18 @@ fn build_instrumented_binary(source: &str) -> Vec<u8> {
     extract_text_section(&obj_path)
 }
 
+/// Assembles without instrumentation (for fault-inducing code that doesn't need gas checks)
+fn build_uninstrumented_binary(source: &str) -> Vec<u8> {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+
+    // Assemble directly without instrumentation
+    assemble(source, &obj_path);
+
+    // Extract text section
+    extract_text_section(&obj_path)
+}
+
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn test_execute_with_sufficient_gas() {
@@ -101,7 +117,7 @@ fn test_execute_with_sufficient_gas() {
     let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
 
     assert!(
-        result.completed,
+        result.completed(),
         "should complete with sufficient gas, but got: {:?}",
         result
     );
@@ -143,7 +159,7 @@ fn test_execute_with_insufficient_gas() {
     let result = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
 
     assert!(
-        !result.completed,
+        !result.completed(),
         "should run out of gas with only 10 gas units"
     );
     assert_eq!(
@@ -206,7 +222,7 @@ fn test_multiple_executions() {
     for i in 0..3 {
         let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
         assert!(
-            result.completed,
+            result.completed(),
             "execution {} should complete with sufficient gas",
             i
         );
@@ -232,12 +248,12 @@ fn test_out_of_gas_then_successful() {
 
     // First execution: out of gas
     let result1 = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
-    assert!(!result1.completed, "should run out of gas");
+    assert!(!result1.completed(), "should run out of gas");
 
     // Second execution: should succeed (state properly reset)
     let result2 = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
     assert!(
-        result2.completed,
+        result2.completed(),
         "should complete after previous out-of-gas"
     );
 }
@@ -264,7 +280,7 @@ fn test_nested_loops() {
     let result = unsafe { executor.execute(&cached_fn, 10_000) }.expect("execute failed");
 
     assert!(
-        result.completed,
+        result.completed(),
         "nested loops should complete with sufficient gas"
     );
     assert!(
@@ -297,7 +313,7 @@ fn test_forward_only_no_gas_consumed_in_loops() {
     let result = unsafe { executor.execute(&cached_fn, 10) }.expect("execute failed");
 
     assert!(
-        result.completed,
+        result.completed(),
         "forward-only code should complete even with minimal gas"
     );
     // Gas consumed should be 0 since there are no back-edges to trigger checks
@@ -328,7 +344,10 @@ fn test_function_call_preserves_gas_register() {
     // Loop runs 100 times with function call each iteration
     let result = unsafe { executor.execute(&cached_fn, 10_000) }.expect("execute failed");
 
-    assert!(result.completed, "loop with function calls should complete");
+    assert!(
+        result.completed(),
+        "loop with function calls should complete"
+    );
     assert!(
         result.gas_consumed > 0,
         "should consume gas in loop iterations"
@@ -355,7 +374,7 @@ fn test_cbz_loop() {
     // Loop counts down from 10 to 0
     let result = unsafe { executor.execute(&cached_fn, 1_000) }.expect("execute failed");
 
-    assert!(result.completed, "cbnz loop should complete");
+    assert!(result.completed(), "cbnz loop should complete");
     assert!(result.gas_consumed > 0, "should consume gas in cbnz loop");
 }
 
@@ -380,7 +399,7 @@ fn test_unconditional_back_edge() {
     let result = unsafe { executor.execute(&cached_fn, 10_000) }.expect("execute failed");
 
     assert!(
-        result.completed,
+        result.completed(),
         "unconditional back-edge loop should complete"
     );
 }
@@ -406,7 +425,7 @@ fn test_multiple_functions_same_module() {
 
     let result = unsafe { executor.execute(&cached_fn, 10_000) }.expect("execute failed");
 
-    assert!(result.completed, "func_add should complete");
+    assert!(result.completed(), "func_add should complete");
 }
 
 #[test]
@@ -430,7 +449,7 @@ fn test_large_basic_block_gas_count() {
     // Total gas should be roughly 10 * 20 = 200
     let result = unsafe { executor.execute(&cached_fn, 1_000) }.expect("execute failed");
 
-    assert!(result.completed, "large block loop should complete");
+    assert!(result.completed(), "large block loop should complete");
     // Verify substantial gas was consumed (at least 100, likely ~200)
     assert!(
         result.gas_consumed >= 100,
@@ -461,7 +480,188 @@ fn test_large_block_out_of_gas() {
     let result = unsafe { executor.execute(&cached_fn, 15) }.expect("execute failed");
 
     assert!(
-        !result.completed,
+        !result.completed(),
         "should run out of gas with only 15 units for 20-instruction block"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_null_deref_returns_fault() {
+    let code = build_uninstrumented_binary(NULL_DEREF_ASM);
+    let module = CompiledModule::with_single_entry(code, "null_deref");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "null_deref")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute(&cached_fn, 1_000_000) }.expect("execute failed");
+
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Fault,
+        "null pointer dereference should return Fault status"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_unmapped_jump_returns_fault() {
+    let code = build_uninstrumented_binary(UNMAPPED_JUMP_ASM);
+    let module = CompiledModule::with_single_entry(code, "unmapped_jump");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "unmapped_jump")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute(&cached_fn, 1_000_000) }.expect("execute failed");
+
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Fault,
+        "jump to unmapped address should return Fault status"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_fault_does_not_affect_subsequent_execution() {
+    let executor = Executor::init().expect("failed to create executor");
+
+    // First: cause a fault
+    let bad_code = build_uninstrumented_binary(NULL_DEREF_ASM);
+    let bad_module = CompiledModule::with_single_entry(bad_code, "null_deref");
+    let bad_store = MemoryStore::with_module("bad".to_string(), bad_module);
+    let bad_cache = ModuleCache::new(bad_store, 4).expect("failed to create cache");
+    let bad_func = unsafe {
+        bad_cache
+            .get_function::<TestFn>(&"bad".to_string(), "null_deref")
+            .expect("failed to get function")
+    };
+
+    let result = unsafe { executor.execute(&bad_func, 1_000_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Fault,
+        "first execution should fault"
+    );
+
+    // Second: normal execution should work fine
+    let good_code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let good_module = CompiledModule::with_single_entry(good_code, "simple_loop");
+    let good_store = MemoryStore::with_module("good".to_string(), good_module);
+    let good_cache = ModuleCache::new(good_store, 4).expect("failed to create cache");
+    let good_func = unsafe {
+        good_cache
+            .get_function::<TestFn>(&"good".to_string(), "simple_loop")
+            .expect("failed to get function")
+    };
+
+    let result = unsafe { executor.execute(&good_func, 100_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Completed,
+        "execution after fault should complete normally"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_fault_after_stack_manipulation() {
+    // Tests that SP restoration works even when the faulting code
+    // has modified the stack before the fault
+    let code = build_uninstrumented_binary(STACK_THEN_FAULT_ASM);
+    let module = CompiledModule::with_single_entry(code, "stack_then_fault");
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "stack_then_fault")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute(&cached_fn, 1_000_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Fault,
+        "fault after stack manipulation should be caught"
+    );
+
+    // Verify executor is still usable
+    let simple_code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let simple_module = CompiledModule::with_single_entry(simple_code, "simple_loop");
+    let simple_store = MemoryStore::with_module("simple".to_string(), simple_module);
+    let simple_cache = ModuleCache::new(simple_store, 4).expect("failed to create cache");
+    let simple_func = unsafe {
+        simple_cache
+            .get_function::<TestFn>(&"simple".to_string(), "simple_loop")
+            .expect("failed to get function")
+    };
+
+    let result = unsafe { executor.execute(&simple_func, 100_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Completed,
+        "executor should still work after fault with stack manipulation"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_nested_call_fault() {
+    let code = build_uninstrumented_binary(NESTED_FAULT_ASM);
+    let module = CompiledModule::with_single_entry(code, "nested_fault");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "nested_fault")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute(&cached_fn, 1_000_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Fault,
+        "fault inside nested bl call should return Fault status"
+    );
+
+    // Verify executor is still usable after nested-call fault
+    let good_code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let good_module = CompiledModule::with_single_entry(good_code, "simple_loop");
+    let good_store = MemoryStore::with_module("good".to_string(), good_module);
+    let good_cache = ModuleCache::new(good_store, 4).expect("failed to create cache");
+    let good_func = unsafe {
+        good_cache
+            .get_function::<TestFn>(&"good".to_string(), "simple_loop")
+            .expect("failed to get function")
+    };
+
+    let result = unsafe { executor.execute(&good_func, 100_000) }.expect("execute failed");
+    assert_eq!(
+        result.status,
+        ExecutionStatus::Completed,
+        "executor should still work after nested-call fault"
     );
 }

@@ -13,6 +13,7 @@ use std::arch::asm;
 
 use crate::{
     error::{RuntimeError, RuntimeResult},
+    fault::{saved_return_pc_ptr, saved_sp_ptr, set_in_move_execution, take_fault},
     module::FunctionHandle,
     signal::SignalHandler,
 };
@@ -24,15 +25,36 @@ use crate::{
 /// 10^15 gas would allow ~11 days of computation at 1 instruction/ns.
 pub const MAX_GAS_LIMIT: u64 = 1_000_000_000_000_000; // 10^15
 
+/// Execution status after running native code
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    /// Execution completed normally
+    Completed,
+    /// Ran out of gas (trap was triggered)
+    OutOfGas,
+    /// Memory fault occurred (SIGSEGV or SIGBUS)
+    Fault,
+}
+
 /// Result of executing native code
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GasResult {
-    /// Whether execution completed (true) or ran out of gas (false)
-    pub completed: bool,
+    /// Execution status: completed, out-of-gas, or fault
+    pub status: ExecutionStatus,
     /// Amount of gas consumed during execution
     pub gas_consumed: u64,
     /// Remaining gas after execution (clamped to 0 if exhausted)
     pub gas_remaining: u64,
+}
+
+impl GasResult {
+    /// Returns true if execution completed normally (no out-of-gas or fault)
+    ///
+    /// Provided for backward compatibility and convenience.
+    #[inline]
+    pub fn completed(&self) -> bool {
+        self.status == ExecutionStatus::Completed
+    }
 }
 
 /// Executor for gas-instrumented native code
@@ -61,10 +83,10 @@ pub struct GasResult {
 /// // Execute with gas metering
 /// let executor = Executor::init()?;
 /// let result = unsafe { executor.execute(&func, 1_000_000) }?;
-/// if result.completed {
+/// if result.completed() {
 ///     println!("Completed, used {} gas", result.gas_consumed);
 /// } else {
-///     println!("Out of gas!");
+///     println!("Out of gas or faulted!");
 /// }
 /// # Ok::<(), runtime::RuntimeError>(())
 /// ```
@@ -166,7 +188,19 @@ impl Executor {
         }
 
         // Execute with gas tracking (internally uses i64 for sign bit check)
+        // SP is saved inside the asm block for fault recovery
+        set_in_move_execution(true);
         let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
+        set_in_move_execution(false);
+
+        // Check for memory fault first (one TLS read - fast path if no fault)
+        if take_fault() {
+            return Ok(GasResult {
+                status: ExecutionStatus::Fault,
+                gas_consumed: gas_limit, // Assume all gas consumed on fault
+                gas_remaining: 0,
+            });
+        }
 
         // Out-of-gas is detected by checking the sign of the gas counter
         let out_of_gas = raw_remaining < 0;
@@ -175,7 +209,11 @@ impl Executor {
         let gas_remaining = raw_remaining.max(0) as u64;
 
         Ok(GasResult {
-            completed: !out_of_gas,
+            status: if out_of_gas {
+                ExecutionStatus::OutOfGas
+            } else {
+                ExecutionStatus::Completed
+            },
             gas_consumed: gas_limit.saturating_sub(gas_remaining),
             gas_remaining,
         })
@@ -185,12 +223,28 @@ impl Executor {
     ///
     /// This function:
     /// 1. Saves x23 to the stack (callee-saved, must preserve for caller)
-    /// 2. Sets x23 to the gas limit
-    /// 3. Calls the entry function
-    /// 4. Reads the remaining gas from x23
-    /// 5. Restores x23 from the stack
+    /// 2. Saves SP to TLS (for fault recovery - must be after our stack push)
+    /// 3. Sets x23 to the gas limit
+    /// 4. Computes and saves the return address (label `2:`) to TLS
+    /// 5. Calls the entry function
+    /// 6. Reads the remaining gas from x23
+    /// 7. Restores x23 from the stack
     ///
     /// Returns the remaining gas value from x23 after execution.
+    ///
+    /// ## Fault Recovery
+    ///
+    /// If a memory fault (SIGSEGV/SIGBUS) occurs during execution:
+    /// 1. Signal handler records the fault in TLS
+    /// 2. Signal handler restores SP to the saved value
+    /// 3. Signal handler redirects PC to the saved return address (label `2:`)
+    /// 4. Execution resumes at `mov x8, x23` — no LR dependency
+    /// 5. `ldr x23, [sp], #16` correctly restores x23 because SP was restored
+    ///    to the value it had after our `str x23, [sp, #-16]!`
+    ///
+    /// This approach avoids relying on LR (x30), which gets clobbered by
+    /// nested `bl` calls inside Move code. The return address is computed
+    /// with `adr` before `blr {entry}` and saved to TLS.
     ///
     /// # Safety
     ///
@@ -203,23 +257,41 @@ impl Executor {
         // Convert function pointer to raw pointer for inline asm
         let entry_ptr: *const () = std::mem::transmute_copy(&entry);
         let gas_remaining: i64;
+        let sp_ptr = saved_sp_ptr(); // Get TLS address for SP save
+        let ret_ptr = saved_return_pc_ptr(); // Get TLS address for return PC save
 
         asm!(
             // Save x23 to stack (callee-saved, must preserve for our caller)
             "str x23, [sp, #-16]!",
+            // Save SP to memory at sp_ptr *after* our push - this is the SP that fault handler restores
+            // x10 is used as scratch (reserved via out("x10") below to prevent
+            // the compiler from allocating it to any in(reg) input)
+            "mov x10, sp",
+            "str x10, [{sp_ptr}]",
             // Set gas limit
             "mov x23, {gas_limit}",
+            // Compute return address (label 2f) and save to TLS.
+            // The signal handler will redirect PC here on fault, bypassing LR.
+            "adr x10, 2f",
+            "str x10, [{ret_ptr}]",
             // Call the function
             "blr {entry}",
-            // Read remaining gas into x8
+            // Return point — signal handler sets PC here on fault
+            "2:",
+            // Read remaining gas into x8 (will be our output)
             "mov x8, x23",
             // Restore x23 from stack
             "ldr x23, [sp], #16",
             gas_limit = in(reg) gas_limit,
             entry = in(reg) entry_ptr,
+            sp_ptr = in(reg) sp_ptr,
+            ret_ptr = in(reg) ret_ptr,
+            // x10 is used as scratch — out("x10") reserves it so the compiler
+            // won't allocate it for any in(reg) input
+            out("x10") _,
             // Clobbers: all caller-saved registers (function call)
             clobber_abi("C"),
-            // x8 is our output register
+            // x8 is our output register (explicit, as required by clobber_abi)
             out("x8") gas_remaining,
         );
 

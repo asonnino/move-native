@@ -1,3 +1,5 @@
+#![feature(thread_local)]
+
 //! Execution runtime for gas-instrumented native Move code
 //!
 //! This crate provides the runtime environment for executing Arm64 code
@@ -55,6 +57,7 @@
 mod cache;
 mod error;
 mod execute;
+mod fault;
 mod module;
 mod signal;
 mod slot;
@@ -62,10 +65,9 @@ mod store;
 
 pub use cache::ModuleCache;
 pub use error::{RuntimeError, RuntimeResult};
-pub use execute::{Executor, GasResult};
+pub use execute::{ExecutionStatus, Executor, GasResult};
 pub use module::{CompiledModule, FunctionHandle};
 pub use slot::SlotPool;
-pub use store::{MemoryStore, ModuleStore};
-
 #[cfg(test)]
 pub use store::mock::MockStore;
+pub use store::{MemoryStore, ModuleStore};
