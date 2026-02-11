@@ -98,6 +98,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 back_edge_target: None,         // to be filled later
                 has_explicit_terminator: false, // to be filled later
                 instruction_count,
+                call_targets: Vec::new(),       // to be filled later
             });
             self.nodes.push(node);
 
@@ -124,15 +125,17 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 }
 
                 // Add edge to branch target if one exists.
-                // Calls are excluded (they return to next instruction, not jump to target).
                 // Non-branches and indirect branches have no target (branch_target() = None).
-                if !item.is_call() {
+                if item.is_call() {
+                    // Calls return to next instruction, not jump to target.
                     if let Some(target) = item.branch_target() {
-                        // Target may not exist if it's outside the function's instruction
-                        // range (adversarial code) - the verifier will reject these later.
-                        if let Some(&target_node) = self.target_to_block.get(&target) {
-                            self.graph.add_edge(node, target_node, ());
-                        }
+                        self.graph[node].call_targets.push(target);
+                    }
+                } else if let Some(target) = item.branch_target() {
+                    // Target may not exist if it's outside the function's instruction
+                    // range (adversarial code) - the verifier will reject these later.
+                    if let Some(&target_node) = self.target_to_block.get(&target) {
+                        self.graph.add_edge(node, target_node, ());
                     }
                 }
 
@@ -469,6 +472,70 @@ mod tests {
         // The call has fall-through because it's not an unconditional jump
         assert_eq!(cfg.block_count(), 2);
         assert_eq!(cfg.back_edge_count(), 0);
+    }
+
+    #[test]
+    fn test_bl_populates_call_targets() {
+        // bl stores its target in call_targets, not as a CFG edge
+        //   0: mov
+        //   1: bl -> 0
+        //   2: ret
+        let instructions = vec![
+            MockInstruction::new("mov", 0),
+            MockInstruction::with_target("bl", 1, 0),
+            MockInstruction::new("ret", 2),
+        ];
+        let cfg = crate::build_cfg(&instructions);
+
+        // Block 0: [mov, bl] — should have call_targets = [0]
+        let block0 = cfg.blocks().next().unwrap();
+        assert_eq!(cfg.call_targets(block0), &[0]);
+    }
+
+    #[test]
+    fn test_non_call_branches_have_no_call_targets() {
+        // b and b.cond should NOT populate call_targets
+        let instructions = vec![
+            MockInstruction::with_target("b.lt", 0, 2),
+            MockInstruction::new("add", 1),
+            MockInstruction::with_target("b", 2, 0), // back-edge
+        ];
+        let cfg = crate::build_cfg(&instructions);
+
+        for block in cfg.blocks() {
+            assert!(
+                cfg.call_targets(block).is_empty(),
+                "block starting at {:?} should have no call targets",
+                cfg.instruction_range(block)
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiple_bl_in_block() {
+        // Two consecutive bl instructions in one block (bl has fall-through,
+        // so both stay in the same block unless the target creates a split).
+        //   0: bl -> 100
+        //   1: bl -> 200
+        //   2: ret
+        let instructions = vec![
+            MockInstruction::with_target("bl", 0, 100),
+            MockInstruction::with_target("bl", 1, 200),
+            MockInstruction::new("ret", 2),
+        ];
+        let cfg = crate::build_cfg(&instructions);
+
+        // Blocks: [bl, bl], [ret]
+        // Only the last instruction in a block is the terminator checked
+        // for call_targets, but both bl's create block boundaries.
+        // Actually: bl at 0 is a branch → next instruction (1) starts a new block.
+        // So blocks are: [bl->100], [bl->200], [ret]
+        // Each single-bl block has one call target.
+        let blocks: Vec<_> = cfg.blocks().collect();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(cfg.call_targets(blocks[0]), &[100]);
+        assert_eq!(cfg.call_targets(blocks[1]), &[200]);
+        assert!(cfg.call_targets(blocks[2]).is_empty());
     }
 
     #[test]

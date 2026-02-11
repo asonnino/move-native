@@ -170,6 +170,24 @@ impl ClassifiedOpcode {
         }
     }
 
+    /// Return instruction that passes the whitelist check.
+    ///
+    /// `ret` is allowed because all reachable code is verified (whitelisted,
+    /// gas-checked, x23-protected). If `ret` lands in verified code, gas checks
+    /// work. If it lands outside the code section, SIGSEGV is caught by the
+    /// fault handler. The DeCl paper also allows `ret`.
+    const fn allowed_return(mnemonic: &'static str) -> Self {
+        Self {
+            mnemonic,
+            is_branch: true,
+            is_call: false,
+            is_return: true,
+            is_indirect: true,
+            is_conditional: false,
+            check_result: CheckResult::Allowed,
+        }
+    }
+
     /// Unknown opcode classification (returned for opcodes not in the map)
     pub const UNKNOWN: Self = Self {
         mnemonic: "unknown",
@@ -831,7 +849,7 @@ const OPCODE_TABLE: &[ClassifiedOpcode] = &[
     // Rejected: Indirect branches
     ClassifiedOpcode::indirect_branch("br"),
     ClassifiedOpcode::indirect_call("blr"),
-    ClassifiedOpcode::indirect_return("ret"),
+    ClassifiedOpcode::allowed_return("ret"),
     // PAC indirect branches
     ClassifiedOpcode::indirect_branch("braa"),
     ClassifiedOpcode::indirect_branch("braaz"),
@@ -1052,10 +1070,8 @@ mod tests {
         assert!(c.is_branch);
         assert!(c.is_return);
         assert!(c.is_indirect);
-        assert_eq!(
-            c.check_result,
-            CheckResult::Rejected(RejectionReason::IndirectBranch)
-        );
+        // ret is allowed (safe: all reachable code is verified, DeCl also allows ret)
+        assert_eq!(c.check_result, CheckResult::Allowed);
     }
 
     #[test]

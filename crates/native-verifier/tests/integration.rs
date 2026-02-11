@@ -5,6 +5,7 @@
 //! Key tests:
 //! - Raw (uninstrumented) code should FAIL verification (missing gas checks)
 //! - Instrumented code should PASS verification
+//! - Stack depth verification works with real assembled code
 
 use std::process::Command;
 
@@ -15,6 +16,7 @@ use tempfile::TempDir;
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
+const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
 
 /// Assembles the given assembly source and returns the code section bytes.
 fn assemble(source: &str) -> Vec<u8> {
@@ -64,13 +66,7 @@ fn test_raw_simple_loop_fails_verification() {
         "raw code should fail verification (no gas checks)"
     );
 
-    // Should have errors for: indirect branch (ret) and malformed gas check
-    assert!(
-        result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
-    );
+    // Should have malformed gas check error (ret is now allowed, not flagged)
     assert!(
         result
             .errors()
@@ -104,30 +100,19 @@ fn test_raw_nested_loops_fails_verification() {
     );
 }
 
-// Instrumented code verification (should PASS - but fails on ret for now)
+// Instrumented code verification
 
 #[test]
-fn test_instrumented_simple_loop_gas_checks_present() {
+fn test_instrumented_simple_loop_fully_passes() {
     let code = instrument_and_assemble(SIMPLE_LOOP_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
     let result = Verifier::new(&instructions).verify();
 
-    // Gas checks should be valid (no MalformedGasCheck errors)
+    // With ret now allowed, instrumented code should fully pass
     assert!(
-        !result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })),
-        "instrumented code should have valid gas checks"
-    );
-
-    // Note: Still fails due to `ret` (indirect branch) - this is expected
-    // until we handle function returns properly
-    assert!(
-        result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+        result.is_ok(),
+        "instrumented simple loop should pass all checks: {:?}",
+        result.errors()
     );
 }
 
@@ -147,7 +132,90 @@ fn test_instrumented_nested_loops_gas_checks_present() {
     );
 }
 
-// Decoding tests
+// ret and indirect branch tests
+
+#[test]
+fn test_ret_now_allowed() {
+    // ret alone should NOT produce IndirectBranch
+    let code = [0xc0, 0x03, 0x5f, 0xd6]; // ret
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        !result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })),
+        "ret should not produce IndirectBranch error"
+    );
+}
+
+#[test]
+fn test_br_still_rejected() {
+    // br x0 should still produce IndirectBranch
+    let code = [0x00, 0x00, 0x1f, 0xd6]; // br x0
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })),
+        "br x0 should still be rejected as IndirectBranch"
+    );
+}
+
+#[test]
+fn test_stack_depth_within_budget() {
+    // function_call.s has bl + stack frames (stp/ldp), should pass default budget
+    let code = instrument_and_assemble(FUNCTION_CALL_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        !result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::StackDepthExceeded { .. })),
+        "function_call.s stack depth should be within default budget: {:?}",
+        result.errors()
+    );
+}
+
+#[test]
+fn test_stack_depth_exceeded_with_small_budget() {
+    // Same code but with a very small budget — function_call.s has stp [sp, #-16]!
+    // so the caller frame is at least 16 bytes. Budget of 8 should fail.
+    let code = instrument_and_assemble(FUNCTION_CALL_ASM);
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::with_stack_budget(&instructions, 8).verify();
+
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::StackDepthExceeded { .. })),
+        "function_call.s with budget=8 should fail StackDepthExceeded: {:?}",
+        result.errors()
+    );
+}
+
+#[test]
+fn test_unsafe_sp_modification_rejected() {
+    // Hand-crafted bytes with sub sp, sp, x0, uxtx → UnsafeStackModification
+    let code = [0xff, 0x63, 0x20, 0xcb]; // sub sp, sp, x0, uxtx
+    let instructions = decode_instructions(&code).expect("decode failed");
+    let result = Verifier::new(&instructions).verify();
+
+    assert!(
+        result
+            .errors()
+            .iter()
+            .any(|e| matches!(e, VerificationError::UnsafeStackModification { .. })),
+        "sub sp, sp, x0 should produce UnsafeStackModification"
+    );
+}
 
 #[test]
 fn test_decode_raw_simple_loop() {

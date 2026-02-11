@@ -6,6 +6,8 @@ use cfg::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand, SizeCode};
 
+use crate::error::VerificationError;
+
 /// Errors that can occur during decoding
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -166,6 +168,155 @@ impl DecodedInstruction {
         let is_bit_63 = matches!(&ops[1], Operand::Immediate(63) | Operand::Imm16(63));
 
         Self::is_x23_destination(&ops[0]) && is_bit_63
+    }
+
+    /// Check if this is a `bl` (branch with link) instruction.
+    pub fn is_bl(&self) -> bool {
+        self.opcode() == Opcode::BL
+    }
+
+    /// Returns the SP decrement amount (in bytes) for recognized
+    /// SP-decrementing instructions.
+    ///
+    /// Recognized patterns:
+    /// - `sub sp, sp, #N` — immediate stack allocation
+    /// - `stp Xt, Xt2, [sp, #-N]!` — pre-index store pair
+    /// - `str Xt, [sp, #-N]!` — pre-index store
+    ///
+    /// Returns `Ok(0)` for instructions that don't decrement SP.
+    /// Returns `Err(UnknownStackDecrement)` if the instruction decrements SP
+    /// but the amount can't be statically determined (e.g. `sub sp, sp, x0`).
+    pub fn sp_decrement(&self) -> Result<u32, VerificationError> {
+        let ops = self.operands();
+        match self.opcode() {
+            Opcode::SUB => {
+                // sub sp, sp, #N: dst=RegisterOrSP(X,31), src=RegisterOrSP(X,31), imm
+                let is_sp_dst = matches!(ops[0], Operand::RegisterOrSP(SizeCode::X, 31));
+                let is_sp_src = matches!(ops[1], Operand::RegisterOrSP(SizeCode::X, 31));
+                if !is_sp_dst || !is_sp_src {
+                    return Ok(0);
+                }
+                match &ops[2] {
+                    Operand::Immediate(n) => Ok(*n),
+                    Operand::Imm64(n) => Ok(*n as u32),
+                    _ => Err(VerificationError::UnknownStackDecrement {
+                        offset: self.offset,
+                        description: format!("sub sp, sp, {}", self.mnemonic),
+                    }),
+                }
+            }
+            Opcode::STP => {
+                // stp Xt, Xt2, [sp, #-N]! → operand[2] is RegPreIndex(31, neg_offset, true)
+                if let Operand::RegPreIndex(31, offset, true) = &ops[2] {
+                    if *offset < 0 {
+                        return Ok((-*offset) as u32);
+                    }
+                }
+                Ok(0)
+            }
+            Opcode::STR => {
+                // str Xt, [sp, #-N]! → operand[1] is RegPreIndex(31, neg_offset, true)
+                if let Operand::RegPreIndex(31, offset, true) = &ops[1] {
+                    if *offset < 0 {
+                        return Ok((-*offset) as u32);
+                    }
+                }
+                Ok(0)
+            }
+            _ => Ok(0),
+        }
+    }
+
+    /// Check if this instruction modifies SP (register 31 in RegisterOrSP context).
+    ///
+    /// SP is modified in exactly two ways on ARM64:
+    /// 1. Destination operand: RegisterOrSP(_, 31) in operands()[0] for opcodes that
+    ///    write to their first operand (excludes comparisons and stores).
+    /// 2. Writeback: RegPreIndex(31, ..), RegPostIndex(31, ..), RegPostIndexReg(31, ..)
+    fn modifies_sp(&self) -> bool {
+        let ops = self.operands();
+
+        // Case 1: SP as destination (first operand).
+        // Exclude store opcodes where operands[0] is the value being stored, not a destination.
+        // Note: CMP/CMN/TST don't need exclusion — they're aliases for SUBS/ADDS/ANDS
+        // with XZR destination, which yaxpeax represents as Register(_, 31) not
+        // RegisterOrSP(_, 31), so they won't match the SP check below.
+        let is_store = matches!(
+            self.opcode(),
+            Opcode::STR
+                | Opcode::STP
+                | Opcode::STRB
+                | Opcode::STRH
+                | Opcode::STUR
+                | Opcode::STURB
+                | Opcode::STURH
+        );
+
+        if !is_store {
+            if matches!(
+                ops[0],
+                Operand::RegisterOrSP(SizeCode::X, 31) | Operand::RegisterOrSP(SizeCode::W, 31)
+            ) {
+                return true;
+            }
+        }
+
+        // Case 2: Writeback addressing modes with SP as base.
+        // RegPreIndex(base, offset, writeback): only writeback=true modifies SP.
+        // RegPostIndex and RegPostIndexReg always modify the base register.
+        for op in ops {
+            match op {
+                Operand::RegPreIndex(31, _, true)
+                | Operand::RegPostIndex(31, _)
+                | Operand::RegPostIndexReg(31, _) => return true,
+                _ => {}
+            }
+        }
+
+        false
+    }
+
+    /// Check if this is a recognized safe SP modification pattern.
+    ///
+    /// Recognized patterns (3 decrements + 3 increments):
+    /// 1. `sub sp, sp, #N` — allocation
+    /// 2. `stp Xt, Xt2, [sp, #-N]!` — pre-index store pair
+    /// 3. `str Xt, [sp, #-N]!` — pre-index store
+    /// 4. `add sp, sp, #N` — deallocation
+    /// 5. `ldp Xt, Xt2, [sp], #N` — post-index load pair
+    /// 6. `ldr Xt, [sp], #N` — post-index load
+    fn is_recognized_sp_pattern(&self) -> bool {
+        let ops = self.operands();
+        match self.opcode() {
+            // Pattern 1: sub sp, sp, #N
+            Opcode::SUB => {
+                matches!(ops[0], Operand::RegisterOrSP(SizeCode::X, 31))
+                    && matches!(ops[1], Operand::RegisterOrSP(SizeCode::X, 31))
+                    && matches!(ops[2], Operand::Immediate(_) | Operand::Imm64(_))
+            }
+            // Pattern 4: add sp, sp, #N
+            Opcode::ADD => {
+                matches!(ops[0], Operand::RegisterOrSP(SizeCode::X, 31))
+                    && matches!(ops[1], Operand::RegisterOrSP(SizeCode::X, 31))
+                    && matches!(ops[2], Operand::Immediate(_) | Operand::Imm64(_))
+            }
+            // Pattern 2: stp Xt, Xt2, [sp, #-N]!
+            // Pattern 5: ldp Xt, Xt2, [sp], #N
+            Opcode::STP => matches!(ops[2], Operand::RegPreIndex(31, _, true)),
+            Opcode::LDP => matches!(ops[2], Operand::RegPostIndex(31, _)),
+            // Pattern 3: str Xt, [sp, #-N]!
+            // Pattern 6: ldr Xt, [sp], #N
+            Opcode::STR => matches!(ops[1], Operand::RegPreIndex(31, _, true)),
+            Opcode::LDR => matches!(ops[1], Operand::RegPostIndex(31, _)),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this instruction modifies SP in a way that isn't one of
+    /// the 6 recognized safe patterns. Such instructions make stack depth
+    /// unbounded and must be rejected.
+    pub fn is_unsafe_sp_modification(&self) -> bool {
+        self.modifies_sp() && !self.is_recognized_sp_pattern()
     }
 
     /// Check if this is `brk #0` (out-of-gas trap)
@@ -621,5 +772,167 @@ mod tests {
             !instructions[0].is_gas_decrement(),
             "add w23, w23, #1 should not be a valid gas decrement"
         );
+    }
+
+    #[test]
+    fn test_sp_decrement_sub_sp() {
+        // sub sp, sp, #32 -> 0xd10083ff
+        let code = [0xff, 0x83, 0x00, 0xd1];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert_eq!(instructions[0].sp_decrement().unwrap(), 32);
+    }
+
+    #[test]
+    fn test_sp_decrement_stp_preindex() {
+        // stp x29, x30, [sp, #-16]! -> 0xa9bf7bfd
+        let code = [0xfd, 0x7b, 0xbf, 0xa9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert_eq!(instructions[0].sp_decrement().unwrap(), 16);
+    }
+
+    #[test]
+    fn test_sp_decrement_str_preindex() {
+        // str x0, [sp, #-16]! -> 0xf81f0fe0
+        let code = [0xe0, 0x0f, 0x1f, 0xf8];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert_eq!(instructions[0].sp_decrement().unwrap(), 16);
+    }
+
+    #[test]
+    fn test_sp_decrement_non_sp_instruction() {
+        // add x0, x1, x2 -> 0x8b020020
+        let code = [0x20, 0x00, 0x02, 0x8b];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert_eq!(instructions[0].sp_decrement().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_sp_decrement_sub_register() {
+        // sub sp, sp, x0, uxtx — extended register form where Rn=SP, Rd=SP
+        // Encoding: 0xcb2063ff  (little-endian: [0xff, 0x63, 0x20, 0xcb])
+        let code = [0xff, 0x63, 0x20, 0xcb];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(
+            instructions[0].sp_decrement().is_err(),
+            "sub sp, sp, x0 should return Err (unknown stack decrement)"
+        );
+    }
+
+    #[test]
+    fn test_sp_increment_not_flagged() {
+        // add sp, sp, #32 -> 0x910083ff
+        let code = [0xff, 0x83, 0x00, 0x91];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert_eq!(instructions[0].sp_decrement().unwrap(), 0);
+        assert!(
+            !instructions[0].is_unsafe_sp_modification(),
+            "add sp, sp, #N is a recognized safe pattern"
+        );
+    }
+
+    #[test]
+    fn test_is_bl() {
+        // bl #8 -> 0x94000002
+        let code = [0x02, 0x00, 0x00, 0x94];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(instructions[0].is_bl());
+    }
+
+    #[test]
+    fn test_modifies_sp_sub_imm() {
+        // sub sp, sp, #32 -> 0xd10083ff
+        let code = [0xff, 0x83, 0x00, 0xd1];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(instructions[0].modifies_sp());
+    }
+
+    #[test]
+    fn test_modifies_sp_writeback() {
+        // stp x29, x30, [sp, #-16]! -> 0xa9bf7bfd
+        let code = [0xfd, 0x7b, 0xbf, 0xa9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(instructions[0].modifies_sp());
+    }
+
+    #[test]
+    fn test_does_not_modify_sp_read_only() {
+        // ldr x0, [sp, #16] (no writeback) -> 0xf94013e0
+        let code = [0xe0, 0x13, 0x40, 0xf9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(
+            !instructions[0].modifies_sp(),
+            "ldr x0, [sp, #16] with no writeback should not modify SP"
+        );
+    }
+
+    #[test]
+    fn test_does_not_modify_sp_cmp() {
+        // cmp sp, #0 -> 0xf100001f
+        // Although operands[0] is RegisterOrSP(X, 31), CMP doesn't write to it
+        let code = [0x1f, 0x00, 0x00, 0xf1];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(
+            !instructions[0].modifies_sp(),
+            "cmp sp, #0 should not modify SP"
+        );
+    }
+
+    #[test]
+    fn test_unsafe_sp_sub_register() {
+        // sub sp, sp, x0, uxtx — extended register form where Rn=SP, Rd=SP
+        // Encoding: 0xcb2063ff  (little-endian: [0xff, 0x63, 0x20, 0xcb])
+        let code = [0xff, 0x63, 0x20, 0xcb];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(
+            instructions[0].is_unsafe_sp_modification(),
+            "sub sp, sp, x0 (register operand) should be unsafe"
+        );
+    }
+
+    #[test]
+    fn test_unsafe_sp_mov() {
+        // mov sp, x0 -> 0x9100001f (add sp, x0, #0)
+        let code = [0x1f, 0x00, 0x00, 0x91];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        // This is ADD sp, x0, #0 which writes SP from x0 - not recognized safe pattern
+        // (recognized pattern requires both dst AND src to be SP)
+        assert!(
+            instructions[0].is_unsafe_sp_modification(),
+            "mov sp, x0 should be unsafe"
+        );
+    }
+
+    #[test]
+    fn test_unsafe_sp_post_index_reg() {
+        // ldr x0, [sp], x1 — post-index with register offset modifies SP
+        // This is the LDRAA/LDRAB or similar form; using a simpler approach:
+        // Actually, ldr x0, [sp], x1 isn't a standard ARM64 encoding.
+        // Use ldp with post-index instead: ldp x0, x1, [sp], #32 is safe (recognized).
+        // For a truly unsafe post-index-reg, we need RegPostIndexReg(31, _).
+        // This form doesn't exist for standard load/store. Skip this specific test
+        // since ARM64 doesn't have a standard post-index-register form for SP loads.
+    }
+
+    #[test]
+    fn test_safe_sp_patterns_not_flagged() {
+        // Pattern 1: sub sp, sp, #32
+        let code = [0xff, 0x83, 0x00, 0xd1];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(!instructions[0].is_unsafe_sp_modification());
+
+        // Pattern 2: stp x29, x30, [sp, #-16]!
+        let code = [0xfd, 0x7b, 0xbf, 0xa9];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(!instructions[0].is_unsafe_sp_modification());
+
+        // Pattern 4: add sp, sp, #32
+        let code = [0xff, 0x83, 0x00, 0x91];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(!instructions[0].is_unsafe_sp_modification());
+
+        // Pattern 5: ldp x29, x30, [sp], #16
+        let code = [0xfd, 0x7b, 0xc1, 0xa8];
+        let instructions = crate::decode_instructions(&code).unwrap();
+        assert!(!instructions[0].is_unsafe_sp_modification());
     }
 }

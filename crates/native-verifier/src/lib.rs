@@ -13,9 +13,18 @@
 //! | **UNPREDICTABLE patterns** | Reject patterns like `ldr x0, [x0], #16` (writeback to same register) |
 //! | **Gas check at back-edges** | Verify `sub x23` / `tbz x23, #63` / `brk #0` sequence before each back-edge |
 //! | **x23 protection** | Gas counter only modified by gas decrement sequences |
-//! | **No indirect branches** | Reject `br`, `blr`, `ret`, `bra*`, `blra*` (Move has no dynamic dispatch) |
-//! | **No unreachable code** | All basic blocks must be reachable from entry point |
+//! | **No indirect branches** | Reject `br`, `blr`, `bra*`, `blra*` (`ret` is allowed — see below) |
+//! | **No unreachable code** | All basic blocks must be reachable from entry point (multi-root for multi-function code) |
 //! | **Branch targets valid** | All branch targets must be valid instruction boundaries |
+//! | **SP safety** | Only recognized SP modification patterns allowed (no dynamic stack allocation) |
+//! | **Stack depth** | Worst-case stack depth must be within budget (static analysis via call graph) |
+//!
+//! ## Why `ret` is allowed
+//!
+//! `ret` is safe because all reachable code is verified (whitelisted, gas-checked,
+//! x23-protected). If `ret` lands in verified code, gas checks work. If it lands
+//! outside the code section, SIGSEGV is caught by the fault handler. The DeCl paper
+//! also allows `ret`.
 //!
 //! # Why Verify Machine Code?
 //!
@@ -44,13 +53,16 @@
 //!
 //! Dead code is rejected because an unrelated bug could allow jumping into
 //! uninstrumented dead code containing an infinite loop. All basic blocks
-//! must be reachable from the entry point.
+//! must be reachable from the entry point (or from function entries reachable
+//! via the call graph).
 
 mod decode;
 mod error;
+mod stack;
 mod verify;
 
 pub use cfg::{CheckResult, RejectionReason};
 pub use decode::{DecodeError, DecodedInstruction, decode_instructions};
 pub use error::{VerificationError, VerificationResult};
+pub use stack::DEFAULT_STACK_BUDGET;
 pub use verify::Verifier;

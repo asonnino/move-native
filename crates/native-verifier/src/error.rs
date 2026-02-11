@@ -1,5 +1,7 @@
 //! Error types for native code verification
 
+use std::ops::Range;
+
 use thiserror::Error;
 
 /// Errors discovered during verification
@@ -34,8 +36,20 @@ pub enum VerificationError {
     )]
     InvalidBranchTarget { branch_offset: usize, target: usize },
 
-    #[error("unreachable code at {offset:#x}")]
-    UnreachableCode { offset: usize },
+    #[error("unreachable code at {offset:#x?}")]
+    UnreachableCode { offset: Range<usize> },
+
+    #[error("stack depth {max_depth} bytes exceeds budget of {budget} bytes")]
+    StackDepthExceeded { max_depth: u32, budget: u32 },
+
+    #[error("recursive call graph detected at function {cycle_entry:#x}")]
+    RecursiveCallGraph { cycle_entry: usize },
+
+    #[error("unbounded SP modification at offset {offset:#x}: {description}")]
+    UnsafeStackModification { offset: usize, description: String },
+
+    #[error("unknown stack decrement at offset {offset:#x}: {description}")]
+    UnknownStackDecrement { offset: usize, description: String },
 }
 
 /// Result of verification containing any errors found

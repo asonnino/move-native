@@ -10,6 +10,7 @@ use cfg::{BasicInstruction, CfgInstruction, CheckResult, build_cfg};
 use crate::{
     DecodedInstruction,
     error::{VerificationError, VerificationResult},
+    stack::{DEFAULT_STACK_BUDGET, StackAnalyzer},
 };
 
 /// Verifier for ARM64 native code
@@ -19,11 +20,18 @@ pub struct Verifier<'a> {
     instructions: &'a [DecodedInstruction],
     /// Set of valid instruction offsets for branch target validation
     valid_offsets: HashSet<usize>,
+    /// Stack depth budget in bytes.
+    stack_budget: u32,
 }
 
 impl<'a> Verifier<'a> {
-    /// Create a new verifier for the given instructions
+    /// Create a new verifier for the given instructions with default stack budget.
     pub fn new(instructions: &'a [DecodedInstruction]) -> Self {
+        Self::with_stack_budget(instructions, DEFAULT_STACK_BUDGET)
+    }
+
+    /// Create a new verifier with a specific stack budget.
+    pub fn with_stack_budget(instructions: &'a [DecodedInstruction], budget: u32) -> Self {
         let valid_offsets = instructions
             .iter()
             .map(|instruction| instruction.offset)
@@ -31,6 +39,7 @@ impl<'a> Verifier<'a> {
         Self {
             instructions,
             valid_offsets,
+            stack_budget: budget,
         }
     }
 
@@ -42,15 +51,25 @@ impl<'a> Verifier<'a> {
             self.check_instruction(&mut result, index, instruction);
         }
 
-        // Check for unreachable code
+        // Build CFG once, shared by stack analysis and unreachable code check
         let cfg = build_cfg(self.instructions);
-        for block in cfg.find_unreachable_blocks() {
-            let range = cfg.instruction_range(block);
-            for index in range.clone() {
-                result.extend([VerificationError::UnreachableCode {
-                    offset: self.instructions[index].offset,
-                }]);
+
+        // Stack depth analysis and multi-root unreachable code check
+        let analyzer = StackAnalyzer::new(self.instructions, &cfg);
+        let roots = match analyzer.verify(self.stack_budget) {
+            Ok(reachable_entries) => reachable_entries,
+            Err(error) => {
+                result.extend([error]);
+                vec![0]
             }
+        };
+
+        // Check for unreachable code.
+        for block in cfg.find_unreachable_blocks(&roots) {
+            let range = cfg.instruction_range(block);
+            let start = self.instructions[range.start].offset;
+            let end = self.instructions[range.end - 1].offset;
+            result.extend([VerificationError::UnreachableCode { offset: start..end }]);
         }
 
         result
@@ -72,19 +91,30 @@ impl<'a> Verifier<'a> {
             }]);
         }
 
-        // Indirect branches
-        if instruction.is_branch() && instruction.is_indirect() {
+        // Indirect branches (except ret, which is allowed)
+        if instruction.is_branch() && instruction.is_indirect() && !instruction.is_return() {
             result.extend([VerificationError::IndirectBranch {
                 offset: instruction.offset,
                 mnemonic: instruction.mnemonic().to_string(),
             }]);
         }
 
-        // x23 protection - only gas decrement may touch x23
-        if instruction.touches_x23() && !instruction.is_gas_decrement() {
+        // x23 protection - only gas check sequences may touch x23
+        if instruction.touches_x23()
+            && !instruction.is_gas_decrement()
+            && !instruction.is_gas_check_branch()
+        {
             result.extend([VerificationError::InvalidGasRegisterUsage {
                 offset: instruction.offset,
                 mnemonic: instruction.mnemonic().to_string(),
+            }]);
+        }
+
+        // SP safety - reject unbounded SP modifications
+        if instruction.is_unsafe_sp_modification() {
+            result.extend([VerificationError::UnsafeStackModification {
+                offset: instruction.offset,
+                description: format!("{}", instruction.mnemonic()),
             }]);
         }
 
@@ -251,17 +281,17 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_indirect_branch_ret() {
-        // ret
+    fn test_ret_is_allowed() {
+        // ret — should NOT produce IndirectBranch error
         let code = [0xc0, 0x03, 0x5f, 0xd6];
         let result = Verifier::new(&decode(&code)).verify();
 
-        assert!(!result.is_ok());
         assert!(
-            result
+            !result
                 .errors()
                 .iter()
-                .any(|e| matches!(e, VerificationError::IndirectBranch { .. }))
+                .any(|e| matches!(e, VerificationError::IndirectBranch { .. })),
+            "ret should not produce IndirectBranch error"
         );
     }
 
@@ -349,13 +379,10 @@ mod tests {
             !unreachable_errors.is_empty(),
             "should detect unreachable code"
         );
-        // The unreachable instruction is at offset 4
-        assert!(
-            result
-                .errors()
-                .iter()
-                .any(|e| matches!(e, VerificationError::UnreachableCode { offset: 4 }))
-        );
+        // The unreachable block spans offset 4
+        assert!(result.errors().iter().any(
+            |e| matches!(e, VerificationError::UnreachableCode { offset } if offset.start == 4)
+        ));
     }
 
     #[test]
@@ -425,6 +452,47 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, VerificationError::InvalidBranchTarget { .. })),
             "branch to negative address should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_unsafe_sp_modification_detected() {
+        // sub sp, sp, x0, uxtx — register-based SP modification
+        let code = [0xff, 0x63, 0x20, 0xcb];
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(
+            result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::UnsafeStackModification { .. })),
+            "sub sp, sp, x0 should produce UnsafeStackModification"
+        );
+    }
+
+    #[test]
+    fn test_multi_function_no_false_unreachable() {
+        // Two functions: func1 calls func2, func2 code after func1's ret
+        // func1: bl func2; ret
+        // func2: mov x0, #0; ret
+        //
+        // Without multi-root BFS, func2 would be flagged as unreachable
+        // because ret terminates the block and there's no fall-through.
+        let code = [
+            0x02, 0x00, 0x00, 0x94, // bl #8 (→ offset 8)  [0]
+            0xc0, 0x03, 0x5f, 0xd6, // ret                  [4]
+            0x00, 0x00, 0x80, 0xd2, // mov x0, #0           [8]
+            0xc0, 0x03, 0x5f, 0xd6, // ret                  [12]
+        ];
+        let result = Verifier::new(&decode(&code)).verify();
+
+        assert!(
+            !result
+                .errors()
+                .iter()
+                .any(|e| matches!(e, VerificationError::UnreachableCode { .. })),
+            "func2 should not be flagged as unreachable: errors = {:?}",
+            result.errors()
         );
     }
 }
