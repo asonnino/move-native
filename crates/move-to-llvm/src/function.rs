@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
+use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use move_model::model::FunctionEnv;
 use move_model::ty::Type;
@@ -174,11 +175,12 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         op: &Operation,
         srcs: &[usize],
     ) -> Result<(), CompileError> {
-        match op {
+        let result = match op {
+            // Arithmetic: two same-type integers → same type
             Operation::Add | Operation::Sub | Operation::Mul | Operation::Div | Operation::Mod => {
                 let lhs = self.load_temp(srcs[0])?;
                 let rhs = self.load_temp(srcs[1])?;
-                let result = match op {
+                match op {
                     Operation::Add => self.ctx.builder.build_int_add(lhs, rhs, "add").unwrap(),
                     Operation::Sub => self.ctx.builder.build_int_sub(lhs, rhs, "sub").unwrap(),
                     Operation::Mul => self.ctx.builder.build_int_mul(lhs, rhs, "mul").unwrap(),
@@ -193,15 +195,147 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                         .build_int_unsigned_rem(lhs, rhs, "mod")
                         .unwrap(),
                     _ => unreachable!(),
+                }
+            }
+
+            // Comparisons: two same-type integers → bool (i8)
+            Operation::Lt | Operation::Gt | Operation::Le | Operation::Ge => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                let pred = match op {
+                    Operation::Lt => IntPredicate::ULT,
+                    Operation::Gt => IntPredicate::UGT,
+                    Operation::Le => IntPredicate::ULE,
+                    Operation::Ge => IntPredicate::UGE,
+                    _ => unreachable!(),
                 };
+                let cmp = self
+                    .ctx
+                    .builder
+                    .build_int_compare(pred, lhs, rhs, "cmp")
+                    .unwrap();
                 self.ctx
                     .builder
-                    .build_store(self.temps[dsts[0]], result)
-                    .unwrap();
-                Ok(())
+                    .build_int_z_extend(cmp, self.ctx.i8_type, "cmp_ext")
+                    .unwrap()
             }
-            other => Err(CompileError::UnsupportedOperation(format!("{:?}", other))),
-        }
+            Operation::Eq | Operation::Neq => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                let pred = if matches!(op, Operation::Eq) {
+                    IntPredicate::EQ
+                } else {
+                    IntPredicate::NE
+                };
+                let cmp = self
+                    .ctx
+                    .builder
+                    .build_int_compare(pred, lhs, rhs, "cmp")
+                    .unwrap();
+                self.ctx
+                    .builder
+                    .build_int_z_extend(cmp, self.ctx.i8_type, "cmp_ext")
+                    .unwrap()
+            }
+
+            // Bitwise: two same-type integers → same type
+            Operation::BitAnd => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                self.ctx.builder.build_and(lhs, rhs, "and").unwrap()
+            }
+            Operation::BitOr => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                self.ctx.builder.build_or(lhs, rhs, "or").unwrap()
+            }
+            Operation::Xor => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                self.ctx.builder.build_xor(lhs, rhs, "xor").unwrap()
+            }
+
+            // Shifts: value (any width) + shift amount (u8) → same type as value
+            Operation::Shl | Operation::Shr => {
+                let val = self.load_temp(srcs[0])?;
+                let amt = self.load_temp(srcs[1])?;
+                let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
+                    self.ctx
+                        .builder
+                        .build_int_z_extend(amt, val.get_type(), "shl_ext")
+                        .unwrap()
+                } else {
+                    amt
+                };
+                if matches!(op, Operation::Shl) {
+                    self.ctx.builder.build_left_shift(val, amt, "shl").unwrap()
+                } else {
+                    self.ctx
+                        .builder
+                        .build_right_shift(val, amt, false, "shr")
+                        .unwrap()
+                }
+            }
+
+            // Logical AND/OR: two bools (i8) → bool (i8)
+            Operation::And => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                self.ctx.builder.build_and(lhs, rhs, "land").unwrap()
+            }
+            Operation::Or => {
+                let lhs = self.load_temp(srcs[0])?;
+                let rhs = self.load_temp(srcs[1])?;
+                self.ctx.builder.build_or(lhs, rhs, "lor").unwrap()
+            }
+
+            // Logical NOT: bool (i8) → bool (i8), implemented as XOR with 1
+            Operation::Not => {
+                let src = self.load_temp(srcs[0])?;
+                let one = self.ctx.i8_type.const_int(1, false);
+                self.ctx.builder.build_xor(src, one, "not").unwrap()
+            }
+
+            // Integer casts
+            Operation::CastU8 => self.lower_cast(srcs[0], self.ctx.i8_type)?,
+            Operation::CastU16 => self.lower_cast(srcs[0], self.ctx.i16_type)?,
+            Operation::CastU32 => self.lower_cast(srcs[0], self.ctx.i32_type)?,
+            Operation::CastU64 => self.lower_cast(srcs[0], self.ctx.i64_type)?,
+            Operation::CastU128 => self.lower_cast(srcs[0], self.ctx.i128_type)?,
+            Operation::CastU256 => self.lower_cast(srcs[0], self.ctx.i256_type)?,
+
+            other => {
+                return Err(CompileError::UnsupportedOperation(format!("{:?}", other)));
+            }
+        };
+        self.ctx
+            .builder
+            .build_store(self.temps[dsts[0]], result)
+            .unwrap();
+        Ok(())
+    }
+
+    fn lower_cast(
+        &self,
+        src: usize,
+        target_ty: IntType<'ctx>,
+    ) -> Result<IntValue<'ctx>, CompileError> {
+        let val = self.load_temp(src)?;
+        let src_bits = val.get_type().get_bit_width();
+        let dst_bits = target_ty.get_bit_width();
+        Ok(if src_bits > dst_bits {
+            self.ctx
+                .builder
+                .build_int_truncate(val, target_ty, "cast")
+                .unwrap()
+        } else if src_bits < dst_bits {
+            self.ctx
+                .builder
+                .build_int_z_extend(val, target_ty, "cast")
+                .unwrap()
+        } else {
+            val
+        })
     }
 }
 
