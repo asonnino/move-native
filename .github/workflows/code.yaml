@@ -40,7 +40,7 @@ jobs:
     name: Lint Rust code
     needs: diff
     if: ${{ needs.diff.outputs.isRust == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Install LLVM 18
@@ -61,7 +61,7 @@ jobs:
     name: Build Rust code
     needs: diff
     if: ${{ needs.diff.outputs.isRust == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Install LLVM 18
@@ -80,7 +80,7 @@ jobs:
     name: Test Rust code
     needs: diff
     if: ${{ needs.diff.outputs.isRelevantForRustTests == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: taiki-e/install-action@970d55e3ce02a46d60ffae7b4fab3dedace6e769 # pin@v2.49.13
         with:
