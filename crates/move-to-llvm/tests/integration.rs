@@ -345,7 +345,6 @@ fn full_pipeline_from_move_source() {
             "build",
             "--path",
             project_dir.path().to_str().unwrap(),
-            "--skip-fetch-latest-git-deps",
         ])
         .output()
         .expect("failed to run sui move build");
