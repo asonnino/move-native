@@ -638,6 +638,14 @@ mod tests {
     }
 
     #[test]
+    fn test_add_x23_shifted_register_is_unsafe() {
+        // add x0, x1, x23, lsl #3 (x23 in RegShift operand)
+        let code = [0x20, 0x0c, 0x17, 0x8b];
+        let instructions = decode(&code);
+        assert_eq!(GasEffect::from(&instructions[0]), GasEffect::Unsafe);
+    }
+
+    #[test]
     fn test_analyzer_brk_nonzero_in_gas_sequence() {
         // Gas sequence with brk #1 instead of brk #0:
         //   [0]  nop

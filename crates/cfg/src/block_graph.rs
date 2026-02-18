@@ -361,4 +361,37 @@ mod tests {
             "loop exit should be reachable via conditional fall-through"
         );
     }
+
+    #[test]
+    fn test_terminator_index_no_terminator() {
+        // A block ending with a non-branch instruction has no explicit terminator
+        let instructions = vec![
+            MockInstruction::new("add", 0),
+            MockInstruction::new("sub", 1),
+            MockInstruction::new("mul", 2),
+        ];
+        let cfg = build_block_graph(&instructions);
+
+        let block = cfg.blocks().next().unwrap();
+        assert_eq!(cfg.terminator_index(block), None);
+    }
+
+    #[test]
+    fn test_successors() {
+        // Conditional branch creates two successors: target and fall-through
+        let instructions = vec![
+            MockInstruction::with_target("b.eq", 0, 2), // branch to index 2
+            MockInstruction::new("add", 1),             // fall-through block
+            MockInstruction::new("ret", 2),             // branch target block
+        ];
+        let cfg = build_block_graph(&instructions);
+
+        let first_block = cfg.blocks().next().unwrap();
+        let successors: Vec<_> = cfg.successors(first_block).collect();
+        assert_eq!(
+            successors.len(),
+            2,
+            "conditional branch should have 2 successors"
+        );
+    }
 }

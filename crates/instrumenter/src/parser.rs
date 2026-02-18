@@ -917,6 +917,16 @@ mod tests {
     }
 
     #[test]
+    fn test_branch_no_operands_returns_no_target() {
+        // A direct branch with no operands — branch_target_label() returns None
+        let line = parse_single_line("    b");
+        let instruction = get_instruction(&line);
+        assert!(instruction.is_branch());
+        assert!(!instruction.is_indirect());
+        assert_eq!(instruction.branch_target_label(), None);
+    }
+
+    #[test]
     fn test_resolve_error_display() {
         let err = ResolveError::TrailingLabels(vec!["foo".into(), "bar".into()]);
         assert!(err.to_string().contains("foo"));
