@@ -1,7 +1,8 @@
 # Move Native
 
 > **Warning**
-> This is experimental research code and should not be used in production. It is provided as-is for educational and research purposes only.
+> This is experimental research code and should not be used in production.
+> It is provided as-is for educational and research purposes only.
 
 [![Rust](https://img.shields.io/badge/rust-1.93+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -10,7 +11,8 @@ Ahead-of-time native compilation for Move smart contracts, replacing the Move VM
 
 ## Overview
 
-Based on the [DeCl paper](https://www.usenix.org/conference/osdi25/presentation/yedidia) (OSDI 2025), this project enforces deterministic execution on native Arm64 code through static verification rather than interpretation.
+Based on the [DeCl paper](https://www.usenix.org/conference/osdi25/presentation/yedidia) (OSDI 2025),
+this project enforces deterministic execution on native Arm64 code through static verification rather than interpretation.
 
 ## Usage
 
