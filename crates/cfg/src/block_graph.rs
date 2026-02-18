@@ -1,10 +1,14 @@
 //! CFG data structures
 
-use std::{collections::HashSet, ops::Range};
+use std::collections::VecDeque;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
 pub type BlockIndex = petgraph::graph::NodeIndex;
 
-pub(crate) type Graph = petgraph::graph::DiGraph<BlockData, ()>;
+pub(crate) type InnerBlockGraph = petgraph::graph::DiGraph<BlockData, ()>;
 
 /// Data stored in each basic block node
 #[derive(Debug)]
@@ -32,16 +36,24 @@ pub struct BlockData {
     pub call_targets: Vec<usize>,
 }
 
-/// Control flow graph backed by petgraph
-pub struct Cfg {
+/// Block-level control flow graph backed by petgraph.
+///
+/// Contains basic blocks, edges (branches/fall-through), and back-edge info.
+pub struct BlockGraph {
     /// The underlying directed graph
-    graph: Graph,
+    graph: InnerBlockGraph,
+    /// Maps instruction/byte targets to the block containing them.
+    /// Used to resolve call targets (`bl`) to blocks during reachability analysis.
+    target_to_block: HashMap<usize, BlockIndex>,
 }
 
-impl Cfg {
-    /// Create a new CFG from graph (used by builder)
-    pub(crate) fn new(graph: Graph) -> Self {
-        Self { graph }
+impl BlockGraph {
+    /// Create a new block-level CFG (used by builder).
+    pub(crate) fn new(graph: InnerBlockGraph, target_to_block: HashMap<usize, BlockIndex>) -> Self {
+        Self {
+            graph,
+            target_to_block,
+        }
     }
 
     /// Iterate over all block indices
@@ -110,7 +122,7 @@ impl Cfg {
     ///
     /// `roots` contains instruction indices that identify BFS starting points.
     /// Any block whose start index matches a root becomes a BFS origin.
-    pub fn find_unreachable_blocks(&self, roots: &[usize]) -> Vec<BlockIndex> {
+    pub fn compute_unreachable(&self, roots: &[usize]) -> Vec<BlockIndex> {
         let reachable = self.compute_reachable(roots);
         self.graph
             .node_indices()
@@ -119,6 +131,9 @@ impl Cfg {
     }
 
     /// Computes all blocks reachable from the given roots via BFS.
+    ///
+    /// In addition to following CFG edges, this also follows `call_targets`
+    /// (`bl` destinations) by resolving them through `target_to_block`.
     fn compute_reachable(&self, roots: &[usize]) -> HashSet<BlockIndex> {
         let mut reachable = HashSet::new();
 
@@ -126,13 +141,32 @@ impl Cfg {
             return reachable;
         }
 
+        // Seed the BFS queue with all root blocks.
         let root_set: HashSet<usize> = roots.iter().copied().collect();
+        let mut queue = VecDeque::new();
+
         for node in self.graph.node_indices() {
-            let start = self.graph[node].instruction_range.start;
-            if root_set.contains(&start) && !reachable.contains(&node) {
-                let mut bfs = petgraph::visit::Bfs::new(&self.graph, node);
-                while let Some(n) = bfs.next(&self.graph) {
-                    reachable.insert(n);
+            let start = self.instruction_range(node).start;
+            if root_set.contains(&start) && reachable.insert(node) {
+                queue.push_back(node);
+            }
+        }
+
+        // BFS: follow both CFG edges and call targets.
+        while let Some(node) = queue.pop_front() {
+            // CFG successors (branches, fall-through)
+            for successor in self.graph.neighbors(node) {
+                if reachable.insert(successor) {
+                    queue.push_back(successor);
+                }
+            }
+
+            // Call targets (bl destinations) — resolve to blocks
+            for &target in self.call_targets(node) {
+                if let Some(&target_block) = self.target_to_block.get(&target) {
+                    if reachable.insert(target_block) {
+                        queue.push_back(target_block);
+                    }
                 }
             }
         }
@@ -143,14 +177,14 @@ impl Cfg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{build_cfg, traits::mock_instruction::MockInstruction};
+    use crate::{build_block_graph, traits::mock_instruction::MockInstruction};
 
     #[test]
     fn test_empty_cfg_has_no_unreachable() {
         let instructions: Vec<MockInstruction> = vec![];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
-        assert!(cfg.find_unreachable_blocks(&[0]).is_empty());
+        assert!(cfg.compute_unreachable(&[0]).is_empty());
     }
 
     #[test]
@@ -160,10 +194,10 @@ mod tests {
             MockInstruction::new("sub", 1),
             MockInstruction::new("ret", 2),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
-        assert!(cfg.find_unreachable_blocks(&[0]).is_empty());
+        assert!(cfg.compute_unreachable(&[0]).is_empty());
     }
 
     #[test]
@@ -175,11 +209,11 @@ mod tests {
             MockInstruction::new("mul", 2),
             MockInstruction::new("ret", 3),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         // Blocks: [add, b.lt], [mul], [ret]
         assert_eq!(cfg.block_count(), 3);
-        assert!(cfg.find_unreachable_blocks(&[0]).is_empty());
+        assert!(cfg.compute_unreachable(&[0]).is_empty());
     }
 
     #[test]
@@ -191,13 +225,13 @@ mod tests {
             MockInstruction::new("sub", 2),            // unreachable
             MockInstruction::new("mul", 3),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         // Blocks: [add, b], [sub, mul]
         // Second block is unreachable (no edge from first block)
         assert_eq!(cfg.block_count(), 2);
 
-        let unreachable = cfg.find_unreachable_blocks(&[0]);
+        let unreachable = cfg.compute_unreachable(&[0]);
         assert_eq!(unreachable.len(), 1);
 
         // Verify the unreachable block is the one starting at index 2
@@ -214,12 +248,12 @@ mod tests {
             MockInstruction::new("sub", 2), // unreachable
             MockInstruction::new("mul", 3),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         // Blocks: [add, ret], [sub, mul]
         assert_eq!(cfg.block_count(), 2);
 
-        let unreachable = cfg.find_unreachable_blocks(&[0]);
+        let unreachable = cfg.compute_unreachable(&[0]);
         assert_eq!(unreachable.len(), 1);
 
         let unreachable_block = unreachable[0];
@@ -227,60 +261,40 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_root_rescues_unreachable_block() {
-        // Two "functions": func1 returns, func2 starts after it.
-        // Without extra roots, func2 is unreachable.
-        // With extra root at index 2, func2 becomes reachable.
-        //
-        // func1: [add, ret]  (indices 0,1)
-        // func2: [sub, ret]  (indices 2,3)
+    fn test_call_rescues_unreachable_block() {
+        // Two "functions": func1 calls func2, func2 starts after func1's ret.
+        // The bl instruction makes func2 reachable via call_targets.
         let instructions = vec![
-            MockInstruction::new("add", 0),
+            MockInstruction::with_target("bl", 0, 2), // call func2
             MockInstruction::new("ret", 1),
             MockInstruction::new("sub", 2), // func2 entry
             MockInstruction::new("ret", 3),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
-        // Without extra roots: func2 is unreachable
-        let unreachable = cfg.find_unreachable_blocks(&[0]);
-        assert_eq!(unreachable.len(), 1);
-        assert_eq!(cfg.instruction_range(unreachable[0]).start, 2);
-
-        // With roots at 0 (entry) and 2 (func2): all reachable
-        let unreachable = cfg.find_unreachable_blocks(&[0, 2]);
+        // With only root at 0, func2 is reachable via call edge
+        let unreachable = cfg.compute_unreachable(&[0]);
         assert!(
             unreachable.is_empty(),
-            "func2 should be reachable via extra root"
+            "func2 should be reachable via bl call target"
         );
     }
 
     #[test]
-    fn test_extra_root_transitive_reachability() {
-        // func1: [add, ret]
-        // func2: [b.lt -> func3, sub]  (conditional branch to func3)
-        // func3: [mul, ret]
-        //
-        // Extra root at func2 should make both func2 AND func3 reachable.
+    fn test_call_transitive_reachability() {
+        // func1 calls func2 via bl; func2 branches to func3.
+        // All three should be reachable from root 0.
         let instructions = vec![
-            MockInstruction::new("add", 0),
+            MockInstruction::with_target("bl", 0, 2), // call func2
             MockInstruction::new("ret", 1),
             MockInstruction::with_target("b.lt", 2, 4), // func2: branch to func3
             MockInstruction::new("sub", 3),
             MockInstruction::new("mul", 4), // func3 entry
             MockInstruction::new("ret", 5),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
-        // Without roots: func2 and func3 are unreachable
-        let unreachable = cfg.find_unreachable_blocks(&[0]);
-        assert!(
-            unreachable.len() >= 2,
-            "func2 and func3 should be unreachable"
-        );
-
-        // With roots at 0 and func2: func3 should also become reachable transitively
-        let unreachable = cfg.find_unreachable_blocks(&[0, 2]);
+        let unreachable = cfg.compute_unreachable(&[0]);
         assert!(
             unreachable.is_empty(),
             "func3 should be transitively reachable via func2: unreachable = {:?}",
@@ -292,25 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_root_partial_rescue() {
-        // Three functions after entry. Only func2 gets an extra root.
-        // func3 remains unreachable.
-        //
-        // func1: [add, ret]    (indices 0,1)
-        // func2: [sub, ret]    (indices 2,3)
-        // func3: [mul, ret]    (indices 4,5)
+    fn test_uncalled_function_remains_unreachable() {
+        // Three functions. func1 calls func2 but NOT func3.
+        // func3 should remain unreachable.
         let instructions = vec![
-            MockInstruction::new("add", 0),
+            MockInstruction::with_target("bl", 0, 2), // call func2 only
             MockInstruction::new("ret", 1),
             MockInstruction::new("sub", 2), // func2
             MockInstruction::new("ret", 3),
-            MockInstruction::new("mul", 4), // func3
+            MockInstruction::new("mul", 4), // func3 (uncalled)
             MockInstruction::new("ret", 5),
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
-        // Roots at 0 (entry) and func2; func3 should still be unreachable
-        let unreachable = cfg.find_unreachable_blocks(&[0, 2]);
+        let unreachable = cfg.compute_unreachable(&[0]);
         assert_eq!(unreachable.len(), 1);
         assert_eq!(cfg.instruction_range(unreachable[0]).start, 4);
     }
@@ -319,15 +328,6 @@ mod tests {
     fn test_diamond_both_arms_reachable() {
         // if-else diamond: conditional branch to "else", fall-through to "then",
         // both merge at the end.
-        //
-        // [cmp, b.eq -> 3]  block0
-        // [add]             block1 (then)
-        // [b -> 4]          block1 continues... actually let me restructure
-        //
-        // block0: [cmp, b.eq -> idx 3]  (conditional: fall-through to 2, branch to 3)
-        // block1: [add, b -> idx 4]     (then-arm, unconditional jump to merge)
-        // block2: [sub]                 (else-arm, fall-through to merge)
-        // block3: [ret]                 (merge point)
         let instructions = vec![
             MockInstruction::with_target("b.eq", 0, 3), // if eq, goto else
             MockInstruction::new("add", 1),             // then
@@ -335,10 +335,10 @@ mod tests {
             MockInstruction::new("sub", 3),             // else
             MockInstruction::new("ret", 4),             // merge
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         assert!(
-            cfg.find_unreachable_blocks(&[0]).is_empty(),
+            cfg.compute_unreachable(&[0]).is_empty(),
             "all arms of diamond should be reachable"
         );
     }
@@ -346,18 +346,15 @@ mod tests {
     #[test]
     fn test_loop_exit_reachable() {
         // Loop with conditional back-edge and fall-through exit
-        //
-        // block0: [add, b.lt -> idx 0]  (loop body with back-edge)
-        // block1: [ret]                 (exit, reachable via fall-through)
         let instructions = vec![
             MockInstruction::new("add", 0),
             MockInstruction::with_target("b.lt", 1, 0), // back-edge
             MockInstruction::new("ret", 2),             // loop exit
         ];
-        let cfg = build_cfg(&instructions);
+        let cfg = build_block_graph(&instructions);
 
         assert!(
-            cfg.find_unreachable_blocks(&[0]).is_empty(),
+            cfg.compute_unreachable(&[0]).is_empty(),
             "loop exit should be reachable via conditional fall-through"
         );
     }

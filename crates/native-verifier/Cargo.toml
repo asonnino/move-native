@@ -10,7 +10,6 @@ description = "Verifies Arm64 binaries for deterministic execution and gas instr
 cfg.workspace = true
 yaxpeax-arm.workspace = true
 yaxpeax-arch.workspace = true
-petgraph.workspace = true
 thiserror.workspace = true
 object = { version = "0.38", default-features = false, features = ["read", "macho", "elf"] }
 

@@ -13,7 +13,10 @@ use std::arch::asm;
 
 use crate::{
     error::{RuntimeError, RuntimeResult},
-    fault::{saved_return_pc_ptr, saved_sp_ptr, set_in_move_execution, take_fault},
+    fault::{
+        enter_move_execution, exit_move_execution, get_return_pc, get_saved_sp,
+        saved_return_pc_ptr, saved_sp_ptr, set_return_pc, set_saved_sp, take_fault,
+    },
     module::FunctionHandle,
     signal::SignalHandler,
 };
@@ -176,6 +179,12 @@ impl Executor {
 
     /// Inner execution logic (shared by both execute methods)
     ///
+    /// Saves and restores TLS fault-recovery state (SAVED_SP, RETURN_PC) around
+    /// the call to support re-entrant execution. If a native function calls back
+    /// into `execute_with_gas`, the inner call overwrites SAVED_SP/RETURN_PC;
+    /// restoring them on return ensures the outer call's fault recovery remains
+    /// correct.
+    ///
     /// # Safety
     ///
     /// The caller must ensure:
@@ -187,11 +196,20 @@ impl Executor {
             return Err(RuntimeError::GasLimitTooLarge { limit: gas_limit });
         }
 
+        // Save outer TLS state for re-entrancy support
+        let old_sp = get_saved_sp();
+        let old_pc = get_return_pc();
+
         // Execute with gas tracking (internally uses i64 for sign bit check)
         // SP is saved inside the asm block for fault recovery
-        set_in_move_execution(true);
+        enter_move_execution();
         let raw_remaining = Self::execute_with_gas(entry, gas_limit as i64);
-        set_in_move_execution(false);
+        exit_move_execution();
+
+        // Restore outer TLS state (must happen after exit but before return,
+        // regardless of whether execution completed normally or faulted)
+        set_saved_sp(old_sp);
+        set_return_pc(old_pc);
 
         // Check for memory fault first (one TLS read - fast path if no fault)
         if take_fault() {

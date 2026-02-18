@@ -18,6 +18,8 @@ inkwell = { version = "0.8", features = ["llvm18-1"] }
 # Sui / Move crates
 move-binary-format = { git = "https://github.com/MystenLabs/sui", rev = "e4146b827fc1ceb26af5885acb3259c9fc193964", package = "move-binary-format" }
 move-core-types = { git = "https://github.com/MystenLabs/sui", rev = "e4146b827fc1ceb26af5885acb3259c9fc193964", package = "move-core-types" }
+move-model = { git = "https://github.com/MystenLabs/sui", rev = "e4146b827fc1ceb26af5885acb3259c9fc193964", package = "move-model" }
+move-stackless-bytecode = { git = "https://github.com/MystenLabs/sui", rev = "e4146b827fc1ceb26af5885acb3259c9fc193964", package = "move-stackless-bytecode" }
 
 # Internal crates
 cfg = { path = "crates/cfg" }

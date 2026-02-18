@@ -1,0 +1,31 @@
+[package]
+name = "move-to-llvm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compile Move bytecode to Arm64 via LLVM"
+
+[[bin]]
+name = "move-to-llvm"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+move-binary-format.workspace = true
+move-core-types.workspace = true
+move-model.workspace = true
+move-stackless-bytecode.workspace = true
+inkwell.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+gas-instrument.workspace = true
+move-core-types.workspace = true
+move-binary-format.workspace = true
+runtime = { path = "../runtime" }
+native-verifier = { path = "../native-verifier" }
+object = "0.38"

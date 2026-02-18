@@ -41,9 +41,44 @@ use crate::{
 // per process, regardless of how many SignalHandler instances exist.
 static HANDLER_INIT: OnceLock<RuntimeResult<()>> = OnceLock::new();
 
-// Store our handler's address for verification.
-// This allows us to detect if another component has replaced our handler.
-static OUR_HANDLER: OnceLock<usize> = OnceLock::new();
+// Store our handler addresses for verification.
+// This allows us to detect if another component has replaced our handlers.
+static OUR_TRAP_HANDLER: OnceLock<usize> = OnceLock::new();
+static OUR_FAULT_HANDLER: OnceLock<usize> = OnceLock::new();
+
+/// SA_SIGINFO-style signal handler signature.
+type SigActionFn = extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void);
+
+/// Signal table: (signal, handler_fn, addr_lock, reject_preexisting, name)
+///
+/// `reject_preexisting`: SIGTRAP has no fallback path — our handler blindly
+/// advances PC, which is wrong for non-brk traps (e.g. debugger breakpoints).
+/// SIGSEGV/SIGBUS handlers already reset to SIG_DFL for non-Move faults, so
+/// pre-existing handlers (Rust runtime stack overflow, crash reporters) are
+/// safely superseded.
+const HANDLER_TABLE: [(libc::c_int, SigActionFn, &OnceLock<usize>, bool, &str); 3] = [
+    (
+        libc::SIGTRAP,
+        SignalHandler::handle_sigtrap,
+        &OUR_TRAP_HANDLER,
+        true,
+        "SIGTRAP",
+    ),
+    (
+        libc::SIGSEGV,
+        SignalHandler::handle_fault,
+        &OUR_FAULT_HANDLER,
+        false,
+        "SIGSEGV",
+    ),
+    (
+        libc::SIGBUS,
+        SignalHandler::handle_fault,
+        &OUR_FAULT_HANDLER,
+        false,
+        "SIGBUS",
+    ),
+];
 
 /// Handle to the installed SIGTRAP signal handler
 ///
@@ -72,92 +107,83 @@ impl SignalHandler {
         Ok(Self)
     }
 
-    /// Query the current SIGTRAP handler
-    fn query_current_handler() -> RuntimeResult<libc::sigaction> {
-        unsafe {
-            let mut sa = MaybeUninit::<libc::sigaction>::uninit();
-            if libc::sigaction(libc::SIGTRAP, std::ptr::null(), sa.as_mut_ptr()) != 0 {
-                return Err(RuntimeError::SignalSetupError {
-                    reason: "failed to query signal handler".into(),
-                });
-            }
-            Ok(sa.assume_init())
+    /// Query the current handler for a given signal
+    ///
+    /// # Safety
+    ///
+    /// Calls `libc::sigaction` — must only be called with a valid signal number.
+    unsafe fn query_handler(signal: libc::c_int) -> RuntimeResult<libc::sigaction> {
+        let mut sa = MaybeUninit::<libc::sigaction>::uninit();
+        if libc::sigaction(signal, std::ptr::null(), sa.as_mut_ptr()) != 0 {
+            return Err(RuntimeError::SignalSetupError {
+                reason: format!("failed to query signal handler for signal {}", signal),
+            });
         }
+        Ok(sa.assume_init())
     }
 
-    /// Verify our handler is still installed
+    /// Verify our handlers are still installed
     ///
-    /// This checks that the current SIGTRAP handler matches the one we installed.
-    /// If another component has replaced our handler, gas metering will silently
-    /// break (infinite loops instead of out-of-gas errors).
+    /// This checks that the current SIGTRAP, SIGSEGV, and SIGBUS handlers
+    /// match the ones we installed. If another component has replaced any
+    /// handler, gas metering or fault recovery will silently break.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The signal handler query fails
-    /// - The handler was replaced by another component
+    /// - A signal handler query fails
+    /// - Any handler was replaced by another component
     pub fn verify_installed(&self) -> RuntimeResult<()> {
-        let current = Self::query_current_handler()?;
-
-        let our_handler =
-            OUR_HANDLER
-                .get()
-                .copied()
-                .ok_or_else(|| RuntimeError::SignalSetupError {
-                    reason: "handler address not recorded (install not called?)".into(),
-                })?;
-        if current.sa_sigaction != our_handler {
-            return Err(RuntimeError::SignalSetupError {
-                reason: "SIGTRAP handler was replaced by another component".into(),
-            });
+        for (signal, _, expected_lock, _, name) in HANDLER_TABLE {
+            let current = unsafe { Self::query_handler(signal)? };
+            let expected =
+                expected_lock
+                    .get()
+                    .copied()
+                    .ok_or_else(|| RuntimeError::SignalSetupError {
+                        reason: format!(
+                            "{} handler address not recorded (install not called?)",
+                            name
+                        ),
+                    })?;
+            if current.sa_sigaction != expected {
+                return Err(RuntimeError::SignalSetupError {
+                    reason: format!("{} handler was replaced by another component", name),
+                });
+            }
         }
         Ok(())
     }
 
     /// Inner implementation that performs the actual sigaction syscalls
     fn install_inner() -> RuntimeResult<()> {
-        // Check if a SIGTRAP handler is already installed
-        let old_sa = Self::query_current_handler()?;
-        let handler_addr = old_sa.sa_sigaction;
-        if handler_addr != 0 && handler_addr != libc::SIG_DFL && handler_addr != libc::SIG_IGN {
-            return Err(RuntimeError::SignalSetupError {
-                reason: "SIGTRAP handler already installed by another component".into(),
-            });
-        }
+        for (signal, handler_fn, addr_lock, reject_preexisting, name) in HANDLER_TABLE {
+            let handler = handler_fn as usize;
+            // Check for pre-existing handler (only reject when flagged)
+            // Safety: signal numbers above are valid.
+            if reject_preexisting {
+                let old_sa = unsafe { Self::query_handler(signal)? };
+                let old_addr = old_sa.sa_sigaction;
+                if old_addr != 0 && old_addr != libc::SIG_DFL && old_addr != libc::SIG_IGN {
+                    return Err(RuntimeError::SignalSetupError {
+                        reason: format!("{} handler already installed by another component", name),
+                    });
+                }
+            }
 
-        // Store our handler address for later verification
-        OUR_HANDLER.get_or_init(|| Self::handle_sigtrap as *const () as usize);
+            // Record our handler address for verify_installed()
+            addr_lock.get_or_init(|| handler);
 
-        // Signal handlers to install: (signal, handler, name)
-        let handlers: [(libc::c_int, usize, &str); 3] = [
-            (
-                libc::SIGTRAP,
-                Self::handle_sigtrap as *const () as usize,
-                "SIGTRAP",
-            ),
-            (
-                libc::SIGSEGV,
-                Self::handle_fault as *const () as usize,
-                "SIGSEGV",
-            ),
-            (
-                libc::SIGBUS,
-                Self::handle_fault as *const () as usize,
-                "SIGBUS",
-            ),
-        ];
-
-        for (signal, handler, name) in handlers {
-            // Safety: We're setting up signal handlers with valid parameters
+            // Install our handler
+            // Safety: We're setting up signal handlers with valid parameters.
+            // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
+            // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
+            // SA_RESTART: restart interrupted syscalls instead of returning EINTR.
             unsafe {
                 let mut sa: libc::sigaction = std::mem::zeroed();
                 sa.sa_sigaction = handler;
-                // SA_SIGINFO: use sa_sigaction (3-arg handler) instead of sa_handler (1-arg).
-                // This gives us access to siginfo_t and ucontext_t, which we need to advance PC.
-                // SA_RESTART: restart interrupted syscalls instead of returning EINTR.
                 sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
                 libc::sigemptyset(&mut sa.sa_mask);
-
                 if libc::sigaction(signal, &sa, std::ptr::null_mut()) != 0 {
                     return Err(RuntimeError::SignalSetupError {
                         reason: format!(
@@ -263,7 +289,7 @@ impl SignalHandler {
         ctx: *mut libc::c_void,
     ) {
         // Guard: only handle faults from Move execution.
-        // IN_MOVE_EXECUTION is set true only while execute_with_gas is running.
+        // MOVE_EXECUTION_DEPTH is non-zero only while execute_with_gas is running.
         if !is_in_move_execution() {
             // Not in Move execution — restore default handler so the kernel
             // re-delivers the signal, producing a clean crash with core dump.
@@ -277,7 +303,7 @@ impl SignalHandler {
             return;
         }
 
-        // Record fault (one atomic write)
+        // Record fault (thread-local write, no synchronization needed)
         record_fault();
 
         // Restore SP and redirect PC
@@ -349,15 +375,27 @@ mod tests {
 
     #[test]
     #[parallel(signal_handler)]
-    fn test_handler_address_is_recorded() {
-        // After install, OUR_HANDLER should be set
+    fn test_handler_addresses_are_recorded() {
+        // After install, both handler addresses should be set
         let _handler = SignalHandler::install().expect("failed to install handler");
-        let recorded = super::OUR_HANDLER.get();
+
+        let trap = super::OUR_TRAP_HANDLER.get();
         assert!(
-            recorded.is_some(),
-            "OUR_HANDLER should be set after install"
+            trap.is_some(),
+            "OUR_TRAP_HANDLER should be set after install"
         );
-        assert_ne!(*recorded.unwrap(), 0, "handler address should not be zero");
+        assert_ne!(*trap.unwrap(), 0, "trap handler address should not be zero");
+
+        let fault = super::OUR_FAULT_HANDLER.get();
+        assert!(
+            fault.is_some(),
+            "OUR_FAULT_HANDLER should be set after install"
+        );
+        assert_ne!(
+            *fault.unwrap(),
+            0,
+            "fault handler address should not be zero"
+        );
     }
 
     // This test temporarily replaces the signal handler, which would cause other

@@ -1,32 +1,12 @@
 //! Static stack depth verification
 //!
-//! Verifies that the total stack usage cannot exceed a budget, and that
-//! the call graph contains no cycles (which would imply unbounded depth).
-//!
-//! # Why static verification?
-//!
-//! Move has no recursion (call graph is a DAG) and no dynamic dispatch
-//! (all `bl` targets are PC-relative). This makes static stack bounding
-//! feasible with zero runtime overhead.
-//!
-//! Without this check, a deep call chain could overflow the stack, hitting
-//! the guard page. The SIGSEGV handler would run on the same overflowed
-//! stack, double-fault, and kill the validator process (denial-of-service).
-//!
-//! # Algorithm
-//!
-//! 1. Sum all SP decrements across the entire module (conservative upper bound)
-//! 2. Reject if the sum exceeds the budget
-//! 3. Identify function entries from `bl` targets in the CFG
-//! 4. Build call graph via CFG BFS (including tail calls via `b` to function entries)
-//! 5. Verify no cycles (defense-in-depth: Move prevents recursion)
+//! Verifies that the total stack usage cannot exceed a budget.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-
-use cfg::Cfg;
-use petgraph::graph::{DiGraph, NodeIndex};
+use cfg::{BasicInstruction, CfgInstruction};
+use yaxpeax_arm::armv8::a64::{Opcode, Operand, SizeCode};
 
 use crate::DecodedInstruction;
+
 use crate::error::VerificationError;
 
 /// Default stack budget in bytes (1 MiB).
@@ -36,212 +16,329 @@ use crate::error::VerificationError;
 /// of headroom for the runtime, signal handlers, and native functions.
 pub const DEFAULT_STACK_BUDGET: u32 = 1024 * 1024;
 
+/// Classification of an instruction's effect on the stack pointer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpEffect {
+    /// Instruction does not modify SP.
+    None,
+    /// Safe SP decrement by `N` bytes (stack allocation).
+    ///
+    /// Recognized patterns:
+    /// - `sub sp, sp, #N`
+    /// - `stp Xt, Xt2, [sp, #-N]!` (negative pre-index)
+    /// - `str Xt, [sp, #-N]!` (negative pre-index)
+    Decrement(u32),
+    /// Safe SP increment (stack deallocation). Amount is irrelevant for budget.
+    ///
+    /// Recognized patterns:
+    /// - `add sp, sp, #N`
+    /// - `ldp Xt, Xt2, [sp], #+N` (positive post-index)
+    /// - `ldr Xt, [sp], #+N` (positive post-index)
+    Increment,
+    /// Modifies SP in an unrecognized way. Must be rejected.
+    Unsafe,
+}
+
+impl From<&DecodedInstruction> for SpEffect {
+    /// Classify a decoded instruction's effect on the stack pointer.
+    fn from(instruction: &DecodedInstruction) -> Self {
+        let ops = instruction.operands();
+        let opcode = instruction.opcode();
+
+        // Check for SP as explicit destination (first operand).
+        // Exclude store opcodes where operands[0] is the value being stored, not a destination.
+        let sp_is_destination = !instruction.is_store()
+            && matches!(
+                ops[0],
+                Operand::RegisterOrSP(SizeCode::X, 31) | Operand::RegisterOrSP(SizeCode::W, 31)
+            );
+
+        // Check for SP writeback (pre-index, post-index).
+        let has_sp_writeback = ops.iter().any(|op| {
+            matches!(
+                op,
+                Operand::RegPreIndex(31, _, true)
+                    | Operand::RegPostIndex(31, _)
+                    | Operand::RegPostIndexReg(31, _)
+            )
+        });
+
+        if !sp_is_destination && !has_sp_writeback {
+            return SpEffect::None;
+        }
+
+        // SP is modified — classify the pattern.
+        // Each arm returns Some for a recognized safe pattern, None otherwise.
+        const SP: &Operand = &Operand::RegisterOrSP(SizeCode::X, 31);
+
+        match (opcode, &ops[0], &ops[1], &ops[2]) {
+            // sub sp, sp, #N — allocation
+            (Opcode::SUB, SP, SP, Operand::Immediate(n)) => SpEffect::Decrement(*n),
+            (Opcode::SUB, SP, SP, Operand::Imm64(n)) => SpEffect::Decrement(*n as u32),
+            // add sp, sp, #N — deallocation
+            (Opcode::ADD, SP, SP, Operand::Immediate(_) | Operand::Imm64(_)) => SpEffect::Increment,
+            // stp Xt, Xt2, [sp, #-N]! — pre-index store pair (negative offset only)
+            (Opcode::STP, _, _, Operand::RegPreIndex(31, off, true)) if *off < 0 => {
+                SpEffect::Decrement((-off) as u32)
+            }
+            // ldp Xt, Xt2, [sp], #+N — post-index load pair (positive offset only)
+            (Opcode::LDP, _, _, Operand::RegPostIndex(31, off)) if *off >= 0 => SpEffect::Increment,
+            // str Xt, [sp, #-N]! — pre-index store (negative offset only)
+            (Opcode::STR, _, Operand::RegPreIndex(31, off, true), _) if *off < 0 => {
+                SpEffect::Decrement((-off) as u32)
+            }
+            // ldr Xt, [sp], #+N — post-index load (positive offset only)
+            (Opcode::LDR, _, Operand::RegPostIndex(31, off), _) if *off >= 0 => SpEffect::Increment,
+            _ => SpEffect::Unsafe,
+        }
+    }
+}
+
 /// Analyzes stack depth for a sequence of decoded instructions.
 pub struct StackAnalyzer<'a> {
     instructions: &'a [DecodedInstruction],
-    cfg: &'a Cfg,
 }
 
 impl<'a> StackAnalyzer<'a> {
-    pub fn new(instructions: &'a [DecodedInstruction], cfg: &'a Cfg) -> Self {
-        Self { instructions, cfg }
+    pub fn new(instructions: &'a [DecodedInstruction]) -> Self {
+        Self { instructions }
     }
 
-    /// Run stack depth verification against the given budget.
+    /// Run stack depth verification against the given budgets.
     ///
-    /// Returns reachable function entry offsets (instruction indices into
-    /// `self.instructions`) for use in multi-root reachability, or an error
-    /// if the stack depth exceeds the budget or cycles are detected.
-    pub fn verify(&self, budget: u32) -> Result<Vec<usize>, VerificationError> {
+    /// `min_gas_decrement` is the smallest `sub x23, x23, #N` amount found
+    /// in the program (computed by the caller during gas-check verification).
+    /// It bounds loop iterations: `max_iterations = gas_budget / min_gas_decrement`.
+    /// Computes a worst-case stack bound that accounts for SP decrements
+    /// inside loops being executed multiple times (bounded by gas budget).
+    pub fn verify(
+        &self,
+        stack_budget: u32,
+        gas_budget: u64,
+        min_gas_decrement: u32,
+    ) -> (Vec<VerificationError>, u64) {
         if self.instructions.is_empty() {
-            return Ok(vec![]);
+            return (vec![], 0);
         }
 
-        // Linear sum of all SP decrements as conservative upper bound.
-        // This overestimates (counts all functions, not just the worst-case
-        // call chain), but with a 1 MiB budget and realistic Move programs
-        // the overestimate is negligible.
-        let total_sp = self
+        let mut errors = Vec::new();
+
+        // Collect [target, offset] ranges from backward branches.
+        // Same principle as gas.rs: target <= offset means backward branch,
+        // and any cycle must contain at least one.
+        let loop_ranges: Vec<std::ops::RangeInclusive<usize>> = self
             .instructions
             .iter()
-            .try_fold(0u32, |acc, instruction| {
-                Ok(acc.saturating_add(instruction.sp_decrement()?))
-            })?;
-
-        if total_sp > budget {
-            return Err(VerificationError::StackDepthExceeded {
-                max_depth: total_sp,
-                budget,
-            });
-        }
-
-        // Build a directed graph of function calls (bl targets + tail calls).
-        let call_graph = self.build_call_graph();
-
-        // Move forbids recursion, so the call graph must be a DAG.
-        // A cycle would imply unbounded stack depth.
-        self.check_no_cycles(&call_graph)?;
-
-        // Return function entries reachable from offset 0 via the call graph.
-        // The caller uses these as additional roots for unreachable-code detection.
-        Ok(self.reachable_function_entries(&call_graph))
-    }
-
-    /// Build a call graph as a `DiGraph` where each node weight is the
-    /// function's entry byte offset and edges represent calls.
-    ///
-    /// Function entries are: offset 0 (entry) plus all internal `bl` targets.
-    /// For each function, BFS through CFG successors assigns blocks to functions,
-    /// stopping at blocks belonging to other functions. Tail calls (`b`/`b.cond`
-    /// to another function's entry) are recorded as call edges.
-    fn build_call_graph(&self) -> DiGraph<usize, ()> {
-        // Collect function entries: offset 0 + all bl targets from CFG blocks
-        let mut entries = HashSet::new();
-        entries.insert(0usize);
-
-        let valid_offsets: HashSet<usize> = self.instructions.iter().map(|i| i.offset).collect();
-
-        for block in self.cfg.blocks() {
-            for &target in self.cfg.call_targets(block) {
-                if valid_offsets.contains(&target) {
-                    entries.insert(target);
-                }
-            }
-        }
-
-        // Map byte offset → block index for the block starting at that offset
-        let offset_to_block: HashMap<usize, cfg::BlockIndex> = self
-            .cfg
-            .blocks()
-            .map(|b| {
-                let start_idx = self.cfg.instruction_range(b).start;
-                (self.instructions[start_idx].offset, b)
+            .filter(|i| i.is_branch() && !i.is_indirect() && !i.is_call())
+            .filter_map(|i| {
+                let target = i.branch_target()?;
+                (target <= i.offset).then_some(target..=i.offset)
             })
             .collect();
 
-        // Build the DiGraph: one node per function entry
-        let mut graph = DiGraph::new();
-        let mut offset_to_node: HashMap<usize, NodeIndex> = HashMap::new();
+        // Classify each instruction's SP effect.
+        let mut non_loop_sp = 0u32;
+        let mut loop_sp = 0u32;
 
-        for &entry in &entries {
-            let node = graph.add_node(entry);
-            offset_to_node.insert(entry, node);
-        }
-
-        // For each function entry, BFS through CFG successors.
-        // Stop at blocks that start at another function's entry.
-        // Record bl targets and tail-call edges as call graph edges.
-        for &entry in &entries {
-            let Some(&start_block) = offset_to_block.get(&entry) else {
-                continue;
-            };
-
-            let caller = offset_to_node[&entry];
-            let mut callees = HashSet::new();
-            let mut visited = HashSet::new();
-            let mut queue = VecDeque::new();
-
-            visited.insert(start_block);
-            queue.push_back(start_block);
-
-            while let Some(block) = queue.pop_front() {
-                // Collect bl targets from this block
-                for &target in self.cfg.call_targets(block) {
-                    if entries.contains(&target) {
-                        callees.insert(target);
-                    }
-                }
-
-                // Traverse CFG successors, stopping at other function entries
-                for succ in self.cfg.successors(block) {
-                    if visited.contains(&succ) {
-                        continue;
-                    }
-
-                    let succ_start = self.cfg.instruction_range(succ).start;
-                    let succ_offset = self.instructions[succ_start].offset;
-
-                    if succ_offset != entry && entries.contains(&succ_offset) {
-                        // Successor is another function's entry — tail call
-                        callees.insert(succ_offset);
+        for instruction in self.instructions.iter() {
+            match SpEffect::from(instruction) {
+                SpEffect::Decrement(n) => {
+                    let in_loop = loop_ranges.iter().any(|r| r.contains(&instruction.offset));
+                    if in_loop {
+                        loop_sp = loop_sp.saturating_add(n);
                     } else {
-                        // Same function, continue BFS
-                        visited.insert(succ);
-                        queue.push_back(succ);
+                        non_loop_sp = non_loop_sp.saturating_add(n);
                     }
                 }
-            }
-
-            for callee_offset in callees {
-                let callee = offset_to_node[&callee_offset];
-                graph.add_edge(caller, callee, ());
-            }
-        }
-
-        graph
-    }
-
-    /// Verify the call graph is acyclic using petgraph's topological sort.
-    fn check_no_cycles(&self, graph: &DiGraph<usize, ()>) -> Result<(), VerificationError> {
-        if let Err(cycle) = petgraph::algo::toposort(graph, None) {
-            let cycle_entry = graph[cycle.node_id()];
-            return Err(VerificationError::RecursiveCallGraph { cycle_entry });
-        }
-        Ok(())
-    }
-
-    /// BFS on call graph from function at offset 0 to find reachable function entries.
-    /// Returns instruction indices (not byte offsets) for use with
-    /// `find_unreachable_blocks`.
-    fn reachable_function_entries(&self, graph: &DiGraph<usize, ()>) -> Vec<usize> {
-        // Find the node for the entry function (offset 0)
-        let entry_node = graph
-            .node_indices()
-            .find(|&n| graph[n] == 0)
-            .expect("call graph must contain entry function at offset 0");
-
-        let mut bfs = petgraph::visit::Bfs::new(graph, entry_node);
-        let mut entries = Vec::new();
-
-        while let Some(node) = bfs.next(graph) {
-            let offset = graph[node];
-            if let Some(instr_idx) = self
-                .instructions
-                .iter()
-                .position(|instr| instr.offset == offset)
-            {
-                entries.push(instr_idx);
+                SpEffect::Unsafe => {
+                    errors.push(VerificationError::UnsafeStackModification {
+                        offset: instruction.offset,
+                        mnemonic: instruction.mnemonic().to_string(),
+                    });
+                }
+                _ => {}
             }
         }
 
-        entries
+        let worst_case = if loop_sp > 0 && min_gas_decrement > 0 {
+            let max_iterations = gas_budget / min_gas_decrement as u64;
+            non_loop_sp as u64 + loop_sp as u64 * max_iterations
+        } else {
+            non_loop_sp as u64
+        };
+
+        if worst_case > stack_budget as u64 {
+            errors.push(VerificationError::StackDepthExceeded {
+                max_depth: worst_case,
+                budget: stack_budget as u64,
+            });
+        }
+
+        (errors, worst_case)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use cfg::build_cfg;
-
-    use crate::decode_instructions;
+    use crate::decode::decode_instructions_unchecked as decode;
     use crate::error::VerificationError;
+    use crate::gas::DEFAULT_GAS_BUDGET;
 
-    use super::{DEFAULT_STACK_BUDGET, DecodedInstruction, StackAnalyzer};
+    use super::{DEFAULT_STACK_BUDGET, SpEffect, StackAnalyzer};
 
-    fn decode(bytes: &[u8]) -> Vec<DecodedInstruction> {
-        decode_instructions(bytes).expect("decode failed")
+    #[test]
+    fn test_sp_effect_sub_sp_imm() {
+        // sub sp, sp, #32
+        let code = [0xff, 0x83, 0x00, 0xd1];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Decrement(32));
+    }
+
+    #[test]
+    fn test_sp_effect_stp_preindex() {
+        // stp x29, x30, [sp, #-16]!
+        let code = [0xfd, 0x7b, 0xbf, 0xa9];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Decrement(16));
+    }
+
+    #[test]
+    fn test_sp_effect_str_preindex() {
+        // str x0, [sp, #-16]!
+        let code = [0xe0, 0x0f, 0x1f, 0xf8];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Decrement(16));
+    }
+
+    #[test]
+    fn test_sp_effect_add_sp_imm() {
+        // add sp, sp, #32
+        let code = [0xff, 0x83, 0x00, 0x91];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Increment);
+    }
+
+    #[test]
+    fn test_sp_effect_ldp_postindex() {
+        // ldp x29, x30, [sp], #16
+        let code = [0xfd, 0x7b, 0xc1, 0xa8];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Increment);
+    }
+
+    #[test]
+    fn test_sp_effect_ldr_postindex() {
+        // ldr x0, [sp], #16 — post-index load (stack deallocation)
+        let code: [u8; 4] = 0xf84107e0_u32.to_le_bytes();
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Increment);
+    }
+
+    #[test]
+    fn test_sp_effect_non_sp_instruction() {
+        // add x0, x1, x2
+        let code = [0x20, 0x00, 0x02, 0x8b];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::None);
+    }
+
+    #[test]
+    fn test_sp_effect_ldr_no_writeback() {
+        // ldr x0, [sp, #16] (no writeback) — reads from SP but doesn't modify it
+        let code = [0xe0, 0x13, 0x40, 0xf9];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::None);
+    }
+
+    #[test]
+    fn test_sp_effect_cmp_sp() {
+        // cmp sp, #0 — reads SP but doesn't modify it
+        let code = [0x1f, 0x00, 0x00, 0xf1];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::None);
+    }
+
+    #[test]
+    fn test_sp_effect_sub_register_is_unsafe() {
+        // sub sp, sp, x0, uxtx — register-based, amount unknown
+        let code = [0xff, 0x63, 0x20, 0xcb];
+        let instructions = decode(&code);
+        assert_eq!(
+            SpEffect::from(&instructions[0]),
+            SpEffect::Unsafe,
+            "sub sp, sp, x0 should be Unsafe (unknown stack decrement)"
+        );
+    }
+
+    #[test]
+    fn test_sp_effect_mov_sp_is_unsafe() {
+        // mov sp, x0 → add sp, x0, #0
+        let code = [0x1f, 0x00, 0x00, 0x91];
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_sp_effect_ldp_negative_postindex_is_unsafe() {
+        // ldp x0, x1, [sp], #-16 — decrements SP via post-index
+        let code: [u8; 4] = 0xa8ff07e0_u32.to_le_bytes();
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_sp_effect_ldr_negative_postindex_is_unsafe() {
+        // ldr x0, [sp], #-16 — decrements SP via post-index
+        let code: [u8; 4] = 0xf85f07e0_u32.to_le_bytes();
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_sp_effect_stp_positive_preindex_is_unsafe() {
+        // stp x0, x1, [sp, #16]! — increments SP via pre-index
+        let code: [u8; 4] = 0xa98107e0_u32.to_le_bytes();
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_sp_effect_str_positive_preindex_is_unsafe() {
+        // str x0, [sp, #16]! — increments SP via pre-index
+        let code: [u8; 4] = 0xf8010fe0_u32.to_le_bytes();
+        let instructions = decode(&code);
+        assert_eq!(SpEffect::from(&instructions[0]), SpEffect::Unsafe);
+    }
+
+    /// Helper: assert verify() produces no errors.
+    fn assert_ok(analyzer: &StackAnalyzer, budget: u32, gas_budget: u64, min_gas: u32) {
+        let (errors, _) = analyzer.verify(budget, gas_budget, min_gas);
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    /// Helper: assert verify() produces an error matching the predicate.
+    fn assert_has_error(
+        analyzer: &StackAnalyzer,
+        budget: u32,
+        gas_budget: u64,
+        min_gas: u32,
+        pred: fn(&VerificationError) -> bool,
+        msg: &str,
+    ) {
+        let (errors, _) = analyzer.verify(budget, gas_budget, min_gas);
+        assert!(errors.iter().any(pred), "{}: {:?}", msg, errors);
     }
 
     #[test]
     fn test_empty_code() {
         let instructions = decode(&[]);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        analyzer.verify(DEFAULT_STACK_BUDGET).unwrap();
+        let analyzer = StackAnalyzer::new(&instructions);
+        assert_ok(&analyzer, DEFAULT_STACK_BUDGET, DEFAULT_GAS_BUDGET, 0);
     }
 
     #[test]
     fn test_budget_exceeded() {
-        // Single function with large frame
+        // Single function with large frame (no loops, so min_gas_decrement irrelevant)
         // sub sp, sp, #4095 (max 12-bit immediate)
         let code = [
             0xff, 0xff, 0x3f, 0xd1, // sub sp, sp, #4095   [0]
@@ -249,27 +346,26 @@ mod tests {
             0xc0, 0x03, 0x5f, 0xd6, // ret                  [8]
         ];
         let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        let result = analyzer.verify(8); // very small budget
+        let analyzer = StackAnalyzer::new(&instructions);
+        let (errors, depth) = analyzer.verify(8, DEFAULT_GAS_BUDGET, 0);
+        assert_eq!(depth, 4095);
         assert!(
-            matches!(
-                result,
-                Err(VerificationError::StackDepthExceeded {
+            errors.iter().any(|e| matches!(
+                e,
+                VerificationError::StackDepthExceeded {
                     max_depth: 4095,
                     budget: 8
-                })
-            ),
+                }
+            )),
             "should report stack depth exceeded: {:?}",
-            result
+            errors
         );
     }
 
     #[test]
     fn test_linear_sum_across_functions() {
         // Two functions: func1 (frame=16), func2 (frame=32)
-        // Linear sum = 48 (conservative: counts both, even though
-        // the actual worst-case call depth would be less)
+        // No loops, so linear sum = 16 + 32 = 48
         let code = [
             0xff, 0x43, 0x00, 0xd1, // sub sp, sp, #16    (offset 0)
             0x03, 0x00, 0x00, 0x94, // bl #12 (offset 16)  (offset 4)
@@ -280,93 +376,25 @@ mod tests {
             0xc0, 0x03, 0x5f, 0xd6, // ret                (offset 24)
         ];
         let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
+        let analyzer = StackAnalyzer::new(&instructions);
 
         // Budget of 47 should fail (linear sum = 16 + 32 = 48)
-        let result = analyzer.verify(47);
+        let (errors, depth) = analyzer.verify(47, DEFAULT_GAS_BUDGET, 0);
+        assert_eq!(depth, 48);
         assert!(
-            matches!(
-                result,
-                Err(VerificationError::StackDepthExceeded {
+            errors.iter().any(|e| matches!(
+                e,
+                VerificationError::StackDepthExceeded {
                     max_depth: 48,
                     budget: 47
-                })
-            ),
+                }
+            )),
             "linear sum should be 48: {:?}",
-            result
+            errors
         );
 
         // Budget of 48 should pass
-        let result = analyzer.verify(48);
-        assert!(result.is_ok(), "budget of 48 should pass: {:?}", result);
-    }
-
-    #[test]
-    fn test_cycle_detection_via_bl() {
-        // Two functions that call each other via bl:
-        // func_a [0]: bl func_b (→8); ret
-        // func_b [8]: bl func_a (→0); ret
-        let code = [
-            0x02, 0x00, 0x00, 0x94, // bl #2 (→8)          [0]
-            0xc0, 0x03, 0x5f, 0xd6, // ret                  [4]
-            0xfe, 0xff, 0xff, 0x97, // bl #-2 (→0)          [8]
-            0xc0, 0x03, 0x5f, 0xd6, // ret                  [12]
-        ];
-        let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        let result = analyzer.verify(DEFAULT_STACK_BUDGET);
-        assert!(
-            matches!(result, Err(VerificationError::RecursiveCallGraph { .. })),
-            "should detect recursive call graph via bl"
-        );
-    }
-
-    #[test]
-    fn test_cycle_detection_via_tail_call() {
-        // func_a calls func_b via bl, func_b tail-calls func_a via b.
-        // This is a cycle: A → B → A (where B→A is a tail call).
-        //
-        // func_a [0]: bl func_b (→8)
-        // func_a [4]: ret
-        // func_b [8]: b func_a (→0)   ← tail call
-        let code = [
-            0x02, 0x00, 0x00, 0x94, // bl #2 (→8)          [0]
-            0xc0, 0x03, 0x5f, 0xd6, // ret                  [4]
-            0xfe, 0xff, 0xff, 0x17, // b #-2 (→0)           [8]
-        ];
-        let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        let result = analyzer.verify(DEFAULT_STACK_BUDGET);
-        assert!(
-            matches!(result, Err(VerificationError::RecursiveCallGraph { .. })),
-            "should detect recursive call graph via tail call: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_reachable_entries_returned() {
-        // func1 calls func2; both should be reachable
-        let code = [
-            0x02, 0x00, 0x00, 0x94, // bl #8 (→ offset 8)  [0]
-            0xc0, 0x03, 0x5f, 0xd6, // ret                  [4]
-            0x00, 0x00, 0x80, 0xd2, // mov x0, #0           [8]
-            0xc0, 0x03, 0x5f, 0xd6, // ret                  [12]
-        ];
-        let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        let entries = analyzer.verify(DEFAULT_STACK_BUDGET).unwrap();
-
-        // Should return instruction indices for both function entries
-        assert!(entries.contains(&0), "entry function should be reachable");
-        assert!(
-            entries.contains(&2),
-            "called function (instruction index 2) should be reachable"
-        );
+        assert_ok(&analyzer, 48, DEFAULT_GAS_BUDGET, 0);
     }
 
     #[test]
@@ -377,9 +405,103 @@ mod tests {
             0xc0, 0x03, 0x5f, 0xd6, // ret
         ];
         let instructions = decode(&code);
-        let cfg = build_cfg(&instructions);
-        let analyzer = StackAnalyzer::new(&instructions, &cfg);
-        let result = analyzer.verify(DEFAULT_STACK_BUDGET);
-        assert!(result.is_ok());
+        let analyzer = StackAnalyzer::new(&instructions);
+        assert_ok(&analyzer, DEFAULT_STACK_BUDGET, DEFAULT_GAS_BUDGET, 0);
+    }
+
+    #[test]
+    fn test_sp_in_loop_exceeds_budget() {
+        // Gas-instrumented loop with sub sp, sp, #16 inside.
+        // Assembled from:
+        //   sub sp, sp, #16; add sp, sp, #16; sub x23, x23, #3;
+        //   tbz x23, #63, Lok; brk #0; Lok: b.lt start; ret
+        let code = [
+            0xff, 0x43, 0x00, 0xd1, // sub sp, sp, #16      [0x00]
+            0xff, 0x43, 0x00, 0x91, // add sp, sp, #16      [0x04]
+            0xf7, 0x0e, 0x00, 0xd1, // sub x23, x23, #3     [0x08]
+            0x57, 0x00, 0xf8, 0xb6, // tbz x23, #63, 0x14   [0x0c]
+            0x00, 0x00, 0x20, 0xd4, // brk #0                [0x10]
+            0x6b, 0xff, 0xff, 0x54, // b.lt 0x0              [0x14]
+            0xc0, 0x03, 0x5f, 0xd6, // ret                   [0x18]
+        ];
+        let instructions = decode(&code);
+        let analyzer = StackAnalyzer::new(&instructions);
+
+        // With gas_budget=300 and min_gas_decrement=3, max_iterations=100
+        // worst_case = 0 (non-loop) + 16 (loop_sp) * 100 = 1600
+        // A small stack budget should fail
+        assert_has_error(
+            &analyzer,
+            64,
+            300,
+            3,
+            |e| matches!(e, VerificationError::StackDepthExceeded { .. }),
+            "SP decrement in loop should exceed budget",
+        );
+
+        // Large budget should pass
+        assert_ok(&analyzer, 2000, 300, 3);
+    }
+
+    #[test]
+    fn test_loop_sp_ignored_when_no_gas_decrement() {
+        // Same loop code as test_sp_in_loop_exceeds_budget, but with
+        // min_gas_decrement=0 (caller found no gas decrements).
+        // verify() should treat worst_case = non_loop_sp only (loop SP ignored).
+        let code = [
+            0xff, 0x43, 0x00, 0xd1, // sub sp, sp, #16      [0x00]
+            0xff, 0x43, 0x00, 0x91, // add sp, sp, #16      [0x04]
+            0xf7, 0x0e, 0x00, 0xd1, // sub x23, x23, #3     [0x08]
+            0x57, 0x00, 0xf8, 0xb6, // tbz x23, #63, 0x14   [0x0c]
+            0x00, 0x00, 0x20, 0xd4, // brk #0                [0x10]
+            0x6b, 0xff, 0xff, 0x54, // b.lt 0x0              [0x14]
+            0xc0, 0x03, 0x5f, 0xd6, // ret                   [0x18]
+        ];
+        let instructions = decode(&code);
+        let analyzer = StackAnalyzer::new(&instructions);
+
+        // min_gas_decrement=0 → loop SP ignored, worst_case = 0 (no non-loop SP)
+        assert_ok(&analyzer, 1, 300, 0);
+    }
+
+    #[test]
+    fn test_sp_in_prologue_not_in_loop() {
+        // SP decrement in function prologue (not a loop), then a gas-instrumented loop
+        // with no SP decrements. The prologue SP should NOT be multiplied.
+        // Assembled from:
+        //   sub sp, sp, #32; Lloop: add x0, x0, #1; sub x23, x23, #2;
+        //   tbz x23, #63, Lok; brk #0; Lok: b.lt Lloop; add sp, sp, #32; ret
+        let code = [
+            0xff, 0x83, 0x00, 0xd1, // sub sp, sp, #32      [0x00]
+            0x00, 0x04, 0x00, 0x91, // add x0, x0, #1       [0x04]
+            0xf7, 0x0a, 0x00, 0xd1, // sub x23, x23, #2     [0x08]
+            0x57, 0x00, 0xf8, 0xb6, // tbz x23, #63, 0x14   [0x0c]
+            0x00, 0x00, 0x20, 0xd4, // brk #0                [0x10]
+            0x8b, 0xff, 0xff, 0x54, // b.lt 0x04             [0x14]
+            0xff, 0x83, 0x00, 0x91, // add sp, sp, #32      [0x18]
+            0xc0, 0x03, 0x5f, 0xd6, // ret                   [0x1c]
+        ];
+        let instructions = decode(&code);
+        let analyzer = StackAnalyzer::new(&instructions);
+
+        // Non-loop SP = 32, loop SP = 0 -> worst_case = 32
+        // Budget of 32 should be enough (min_gas_decrement irrelevant since loop_sp=0)
+        assert_ok(&analyzer, 32, DEFAULT_GAS_BUDGET, 2);
+    }
+
+    #[test]
+    fn test_unsafe_sp_detected() {
+        // sub sp, sp, x0, uxtx — register-based SP modification
+        let code = [0xff, 0x63, 0x20, 0xcb];
+        let instructions = decode(&code);
+        let analyzer = StackAnalyzer::new(&instructions);
+        assert_has_error(
+            &analyzer,
+            DEFAULT_STACK_BUDGET,
+            DEFAULT_GAS_BUDGET,
+            0,
+            |e| matches!(e, VerificationError::UnsafeStackModification { .. }),
+            "sub sp, sp, x0 should produce UnsafeStackModification",
+        );
     }
 }

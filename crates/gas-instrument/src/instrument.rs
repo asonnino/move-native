@@ -27,6 +27,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use cfg::BlockGraph;
+
 use crate::{
     BlockIndex, CfgResult,
     error::InstrumentError,
@@ -69,7 +71,7 @@ pub fn instrument(
 /// State for instrumenting assembly with gas checks
 struct Instrumenter<'a> {
     lines: &'a [ParsedLine<'a>],
-    cfg: &'a cfg::Cfg,
+    cfg: &'a BlockGraph,
     resolved: &'a [ResolvedInstruction],
     existing_labels: HashSet<String>,
     label_counter: usize,

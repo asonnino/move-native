@@ -69,6 +69,8 @@ pub struct ClassifiedOpcode {
     pub is_indirect: bool,
     /// Control flow: can this instruction fall through? (conditional branches)
     pub is_conditional: bool,
+    /// Memory: is this a store instruction? (operand[0] is value, not destination)
+    pub is_store: bool,
     /// Verification result
     pub check_result: CheckResult,
 }
@@ -82,6 +84,20 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: false,
             is_conditional: false,
+            is_store: false,
+            check_result: CheckResult::Allowed,
+        }
+    }
+
+    const fn store(mnemonic: &'static str) -> Self {
+        Self {
+            mnemonic,
+            is_branch: false,
+            is_call: false,
+            is_return: false,
+            is_indirect: false,
+            is_conditional: false,
+            is_store: true,
             check_result: CheckResult::Allowed,
         }
     }
@@ -94,6 +110,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: false,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Rejected(reason),
         }
     }
@@ -106,6 +123,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: false,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Allowed,
         }
     }
@@ -118,6 +136,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: false,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Allowed,
         }
     }
@@ -130,6 +149,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: false,
             is_conditional: true,
+            is_store: false,
             check_result: CheckResult::Allowed,
         }
     }
@@ -142,6 +162,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: true,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Rejected(RejectionReason::IndirectBranch),
         }
     }
@@ -154,6 +175,7 @@ impl ClassifiedOpcode {
             is_return: false,
             is_indirect: true,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Rejected(RejectionReason::IndirectBranch),
         }
     }
@@ -166,6 +188,7 @@ impl ClassifiedOpcode {
             is_return: true,
             is_indirect: true,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Rejected(RejectionReason::IndirectBranch),
         }
     }
@@ -184,6 +207,7 @@ impl ClassifiedOpcode {
             is_return: true,
             is_indirect: true,
             is_conditional: false,
+            is_store: false,
             check_result: CheckResult::Allowed,
         }
     }
@@ -196,6 +220,7 @@ impl ClassifiedOpcode {
         is_return: false,
         is_indirect: false,
         is_conditional: false,
+        is_store: false,
         check_result: CheckResult::Rejected(RejectionReason::Unknown),
     };
 
@@ -305,18 +330,18 @@ const OPCODE_TABLE: &[ClassifiedOpcode] = &[
     ClassifiedOpcode::allowed("ldurh"),
     ClassifiedOpcode::allowed("ldnp"),
     // Allowed: Non-exclusive stores
-    ClassifiedOpcode::allowed("stp"),
-    ClassifiedOpcode::allowed("str"),
-    ClassifiedOpcode::allowed("strw"),
-    ClassifiedOpcode::allowed("strb"),
-    ClassifiedOpcode::allowed("strh"),
-    ClassifiedOpcode::allowed("sttr"),
-    ClassifiedOpcode::allowed("sttrb"),
-    ClassifiedOpcode::allowed("sttrh"),
-    ClassifiedOpcode::allowed("stur"),
-    ClassifiedOpcode::allowed("sturb"),
-    ClassifiedOpcode::allowed("sturh"),
-    ClassifiedOpcode::allowed("stnp"),
+    ClassifiedOpcode::store("stp"),
+    ClassifiedOpcode::store("str"),
+    ClassifiedOpcode::store("strw"),
+    ClassifiedOpcode::store("strb"),
+    ClassifiedOpcode::store("strh"),
+    ClassifiedOpcode::store("sttr"),
+    ClassifiedOpcode::store("sttrb"),
+    ClassifiedOpcode::store("sttrh"),
+    ClassifiedOpcode::store("stur"),
+    ClassifiedOpcode::store("sturb"),
+    ClassifiedOpcode::store("sturh"),
+    ClassifiedOpcode::store("stnp"),
     // Allowed: Direct branches
     ClassifiedOpcode::direct_branch("b"),
     ClassifiedOpcode::direct_call("bl"),
@@ -384,10 +409,10 @@ const OPCODE_TABLE: &[ClassifiedOpcode] = &[
     ClassifiedOpcode::allowed("prfm"),
     ClassifiedOpcode::allowed("prfum"),
     // Allowed: SIMD vector loads/stores
-    ClassifiedOpcode::allowed("st1"),
-    ClassifiedOpcode::allowed("st2"),
-    ClassifiedOpcode::allowed("st3"),
-    ClassifiedOpcode::allowed("st4"),
+    ClassifiedOpcode::store("st1"),
+    ClassifiedOpcode::store("st2"),
+    ClassifiedOpcode::store("st3"),
+    ClassifiedOpcode::store("st4"),
     ClassifiedOpcode::allowed("ld1"),
     ClassifiedOpcode::allowed("ld2"),
     ClassifiedOpcode::allowed("ld3"),
@@ -1031,6 +1056,7 @@ mod tests {
         assert_eq!(c.mnemonic, "add");
         assert_eq!(c.check_result, CheckResult::Allowed);
         assert!(!c.is_branch);
+        assert!(!c.is_store);
     }
 
     #[test]
@@ -1130,6 +1156,68 @@ mod tests {
             c.check_result,
             CheckResult::Rejected(RejectionReason::Unknown)
         );
+    }
+
+    #[test]
+    fn test_store_flag_set() {
+        let c = ClassifiedOpcode::from_opcode(Opcode::STR);
+        assert!(c.is_store);
+        assert_eq!(c.check_result, CheckResult::Allowed);
+
+        let c = ClassifiedOpcode::from_opcode(Opcode::STP);
+        assert!(c.is_store);
+
+        // SIMD store via mnemonic (yaxpeax doesn't have a direct Opcode variant)
+        let c = ClassifiedOpcode::from_mnemonic("st1");
+        assert!(c.is_store);
+    }
+
+    #[test]
+    fn test_store_flag_not_set_on_load() {
+        let c = ClassifiedOpcode::from_opcode(Opcode::LDR);
+        assert!(!c.is_store);
+
+        let c = ClassifiedOpcode::from_opcode(Opcode::LDP);
+        assert!(!c.is_store);
+    }
+
+    #[test]
+    fn test_rejected_store_not_flagged() {
+        // Atomic stores are rejected — is_store stays false since they never
+        // reach sp_effect() anyway (blocked by the whitelist first).
+        let c = ClassifiedOpcode::from_mnemonic("stxr");
+        assert!(!c.is_store);
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::Atomic)
+        );
+    }
+
+    #[test]
+    fn test_indirect_branches_rejected_ret_allowed() {
+        // Scan the entire opcode table: every entry marked is_indirect must be
+        // Rejected(IndirectBranch), except "ret" which is the sole allowed one.
+        use super::OPCODE_TABLE;
+
+        for entry in OPCODE_TABLE {
+            if !entry.is_indirect {
+                continue;
+            }
+            if entry.mnemonic == "ret" {
+                assert_eq!(
+                    entry.check_result,
+                    CheckResult::Allowed,
+                    "ret should be Allowed"
+                );
+            } else {
+                assert_eq!(
+                    entry.check_result,
+                    CheckResult::Rejected(RejectionReason::IndirectBranch),
+                    "{} is indirect but not Rejected(IndirectBranch)",
+                    entry.mnemonic
+                );
+            }
+        }
     }
 
     #[test]

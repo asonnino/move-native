@@ -10,7 +10,7 @@
 use std::process::Command;
 
 use gas_instrument::{instrument, parser};
-use native_verifier::{VerificationError, Verifier, decode_instructions};
+use native_verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
 
@@ -71,7 +71,9 @@ fn test_raw_simple_loop_fails_verification() {
         result
             .errors()
             .iter()
-            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. }))
+            .any(|e| matches!(e, VerificationError::MissingGasCheck { .. }
+                    | VerificationError::GasSequenceUnexpectedInstruction { .. }
+                    | VerificationError::GasSequenceBadTarget { .. }))
     );
 }
 
@@ -90,7 +92,9 @@ fn test_raw_nested_loops_fails_verification() {
     let malformed_gas_checks: Vec<_> = result
         .errors()
         .iter()
-        .filter(|e| matches!(e, VerificationError::MalformedGasCheck { .. }))
+        .filter(|e| matches!(e, VerificationError::MissingGasCheck { .. }
+                    | VerificationError::GasSequenceUnexpectedInstruction { .. }
+                    | VerificationError::GasSequenceBadTarget { .. }))
         .collect();
 
     assert_eq!(
@@ -127,42 +131,10 @@ fn test_instrumented_nested_loops_gas_checks_present() {
         !result
             .errors()
             .iter()
-            .any(|e| matches!(e, VerificationError::MalformedGasCheck { .. })),
+            .any(|e| matches!(e, VerificationError::MissingGasCheck { .. }
+                    | VerificationError::GasSequenceUnexpectedInstruction { .. }
+                    | VerificationError::GasSequenceBadTarget { .. })),
         "instrumented code should have valid gas checks for all back-edges"
-    );
-}
-
-// ret and indirect branch tests
-
-#[test]
-fn test_ret_now_allowed() {
-    // ret alone should NOT produce IndirectBranch
-    let code = [0xc0, 0x03, 0x5f, 0xd6]; // ret
-    let instructions = decode_instructions(&code).expect("decode failed");
-    let result = Verifier::new(&instructions).verify();
-
-    assert!(
-        !result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })),
-        "ret should not produce IndirectBranch error"
-    );
-}
-
-#[test]
-fn test_br_still_rejected() {
-    // br x0 should still produce IndirectBranch
-    let code = [0x00, 0x00, 0x1f, 0xd6]; // br x0
-    let instructions = decode_instructions(&code).expect("decode failed");
-    let result = Verifier::new(&instructions).verify();
-
-    assert!(
-        result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::IndirectBranch { .. })),
-        "br x0 should still be rejected as IndirectBranch"
     );
 }
 
@@ -189,7 +161,7 @@ fn test_stack_depth_exceeded_with_small_budget() {
     // so the caller frame is at least 16 bytes. Budget of 8 should fail.
     let code = instrument_and_assemble(FUNCTION_CALL_ASM);
     let instructions = decode_instructions(&code).expect("decode failed");
-    let result = Verifier::with_stack_budget(&instructions, 8).verify();
+    let result = Verifier::with_budgets(&instructions, 8, 1_000_000_000).verify();
 
     assert!(
         result
@@ -198,22 +170,6 @@ fn test_stack_depth_exceeded_with_small_budget() {
             .any(|e| matches!(e, VerificationError::StackDepthExceeded { .. })),
         "function_call.s with budget=8 should fail StackDepthExceeded: {:?}",
         result.errors()
-    );
-}
-
-#[test]
-fn test_unsafe_sp_modification_rejected() {
-    // Hand-crafted bytes with sub sp, sp, x0, uxtx → UnsafeStackModification
-    let code = [0xff, 0x63, 0x20, 0xcb]; // sub sp, sp, x0, uxtx
-    let instructions = decode_instructions(&code).expect("decode failed");
-    let result = Verifier::new(&instructions).verify();
-
-    assert!(
-        result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::UnsafeStackModification { .. })),
-        "sub sp, sp, x0 should produce UnsafeStackModification"
     );
 }
 
@@ -241,7 +197,10 @@ fn test_decode_instrumented_nested_loops() {
     let instructions = decode_instructions(&code).expect("decode failed");
 
     // Should have 2 gas check sequences (one per back-edge)
-    let gas_decrements = instructions.iter().filter(|i| i.is_gas_decrement()).count();
+    let gas_decrements = instructions
+        .iter()
+        .filter(|i| matches!(GasEffect::from(*i), GasEffect::Decrement(_)))
+        .count();
 
     assert_eq!(gas_decrements, 2, "expected two gas decrements");
 }

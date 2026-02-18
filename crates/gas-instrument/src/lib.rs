@@ -12,6 +12,7 @@ pub mod error;
 pub mod instrument;
 pub mod parser;
 
+use cfg::BlockGraph;
 pub use cfg::BlockIndex;
 pub use error::{InstrumentError, ResolveError};
 pub use instrument::instrument;
@@ -20,7 +21,7 @@ pub use parser::{ParsedAssembly, ParsedLine};
 /// Result of building a CFG from parsed assembly
 pub struct CfgResult {
     /// The control flow graph
-    pub cfg: cfg::Cfg,
+    pub cfg: BlockGraph,
     /// The resolved instructions (for mapping back to line numbers)
     pub(crate) resolved: Vec<parser::ResolvedInstruction>,
 }
@@ -34,6 +35,6 @@ pub struct CfgResult {
 /// Returns an error if label resolution fails (undefined labels, trailing labels).
 pub fn build_cfg(asm: &ParsedAssembly<'_>) -> Result<CfgResult, ResolveError> {
     let resolved = asm.resolve()?;
-    let cfg = cfg::build_cfg(&resolved);
+    let cfg = cfg::build_block_graph(&resolved);
     Ok(CfgResult { cfg, resolved })
 }

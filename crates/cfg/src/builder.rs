@@ -7,44 +7,48 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     CfgInstruction,
-    graph::{BlockData, BlockIndex, Cfg, Graph},
+    block_graph::{BlockData, BlockGraph, BlockIndex, InnerBlockGraph},
 };
 
-/// Build a CFG from a sequence of instructions.
+/// Build a block-level CFG from a sequence of instructions.
 ///
-/// The instructions must implement [`CfgInstruction`] to provide the
-/// control flow information needed for CFG construction.
-pub fn build_cfg<I: CfgInstruction>(instructions: &[I]) -> Cfg {
-    CfgBuilder::new(instructions).build()
+/// This is the lightweight path used by the gas instrumenter.
+/// It does **not** compute the call graph.
+pub fn build_block_graph<I: CfgInstruction>(instructions: &[I]) -> BlockGraph {
+    CfgBuilder::new(instructions).build_block_graph()
 }
 
-/// Builder for constructing a CFG from instructions
-struct CfgBuilder<'a, I: CfgInstruction> {
-    instructions: &'a [I],
-    graph: Graph,
-    target_to_block: HashMap<usize, BlockIndex>,
-    nodes: Vec<BlockIndex>,
+/// Builder for constructing a CFG from instructions.
+pub struct CfgBuilder<'a, I: CfgInstruction> {
+    pub(crate) instructions: &'a [I],
+    pub(crate) inner_block_graph: InnerBlockGraph,
+    pub(crate) target_to_block: HashMap<usize, BlockIndex>,
+    pub(crate) nodes: Vec<BlockIndex>,
 }
 
 impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
     /// Create a new CFG builder.
-    fn new(instructions: &'a [I]) -> Self {
+    pub fn new(instructions: &'a [I]) -> Self {
         Self {
             instructions,
-            graph: Graph::default(),
+            inner_block_graph: InnerBlockGraph::default(),
             target_to_block: HashMap::new(),
             nodes: Vec::new(),
         }
     }
 
-    /// Build the CFG.
-    fn build(mut self) -> Cfg {
+    /// Build a block-level CFG (no call graph).
+    pub fn build_block_graph(mut self) -> BlockGraph {
+        self.compute_block_graph();
+        BlockGraph::new(self.inner_block_graph, self.target_to_block)
+    }
+
+    /// Run the four common build steps shared by both terminal methods.
+    pub(crate) fn compute_block_graph(&mut self) {
         let block_starts = self.find_block_boundaries();
         self.create_blocks(&block_starts);
         self.add_edges();
         self.identify_back_edges();
-
-        Cfg::new(self.graph)
     }
 
     /// Find basic block boundaries.
@@ -93,12 +97,12 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
             // All items are instructions, count = range length
             let instruction_count = instruction_range.len();
 
-            let node = self.graph.add_node(BlockData {
+            let node = self.inner_block_graph.add_node(BlockData {
                 instruction_range: instruction_range.clone(),
                 back_edge_target: None,         // to be filled later
                 has_explicit_terminator: false, // to be filled later
                 instruction_count,
-                call_targets: Vec::new(),       // to be filled later
+                call_targets: Vec::new(), // to be filled later
             });
             self.nodes.push(node);
 
@@ -113,7 +117,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
     /// Add edges based on control flow and record terminator indices.
     fn add_edges(&mut self) {
         for (block_idx, &node) in self.nodes.iter().enumerate() {
-            let block = &self.graph[node];
+            let block = &self.inner_block_graph[node];
 
             // The terminator is the last instruction in the block
             // (all items are instructions, so last in range)
@@ -121,7 +125,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 let item = &self.instructions[terminator_idx];
 
                 if item.is_branch() {
-                    self.graph[node].has_explicit_terminator = true;
+                    self.inner_block_graph[node].has_explicit_terminator = true;
                 }
 
                 // Add edge to branch target if one exists.
@@ -129,25 +133,25 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 if item.is_call() {
                     // Calls return to next instruction, not jump to target.
                     if let Some(target) = item.branch_target() {
-                        self.graph[node].call_targets.push(target);
+                        self.inner_block_graph[node].call_targets.push(target);
                     }
                 } else if let Some(target) = item.branch_target() {
                     // Target may not exist if it's outside the function's instruction
                     // range (adversarial code) - the verifier will reject these later.
                     if let Some(&target_node) = self.target_to_block.get(&target) {
-                        self.graph.add_edge(node, target_node, ());
+                        self.inner_block_graph.add_edge(node, target_node, ());
                     }
                 }
 
                 // Add fall-through edge (if not return and not unconditional jump)
                 if !item.is_branch() || item.is_conditional() || item.is_call() {
                     if let Some(&next_node) = self.nodes.get(block_idx + 1) {
-                        self.graph.add_edge(node, next_node, ());
+                        self.inner_block_graph.add_edge(node, next_node, ());
                     }
                 }
             } else if let Some(&next_node) = self.nodes.get(block_idx + 1) {
                 // Empty block - fall through to next block
-                self.graph.add_edge(node, next_node, ());
+                self.inner_block_graph.add_edge(node, next_node, ());
             }
         }
     }
@@ -160,7 +164,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
         }
 
         let entry = self.nodes[0];
-        let dominators = petgraph::algo::dominators::simple_fast(&self.graph, entry);
+        let dominators = petgraph::algo::dominators::simple_fast(&self.inner_block_graph, entry);
 
         // Find nodes that are SOURCES of back-edges (nodes with a successor that dominates them)
         let back_edge_sources: Vec<_> = self
@@ -168,7 +172,7 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
             .iter()
             .copied()
             .filter(|&node| {
-                self.graph.neighbors(node).any(|successor| {
+                self.inner_block_graph.neighbors(node).any(|successor| {
                     dominators
                         .dominators(node)
                         .is_some_and(|mut iter| iter.any(|d| d == successor))
@@ -178,22 +182,23 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
 
         for node in back_edge_sources {
             assert!(
-                self.graph[node].instruction_count > 0,
+                self.inner_block_graph[node].instruction_count > 0,
                 "back-edge source block has no instructions"
             );
             // Get branch target directly from the terminator instruction.
             // Back-edge sources must have an explicit terminator (the branch that creates the back-edge).
-            let block = &self.graph[node];
+            let block = &self.inner_block_graph[node];
             if block.has_explicit_terminator {
                 let terminator_idx = block.instruction_range.end - 1;
                 // Indirect branches have no static target. This can happen if the back-edge is via
                 // fall-through from an indirect branch. The verifier will reject indirect branches.
                 if let Some(target) = self.instructions[terminator_idx].branch_target() {
-                    self.graph[node].back_edge_target = Some(target);
+                    self.inner_block_graph[node].back_edge_target = Some(target);
                 }
             }
         }
     }
+
 }
 
 #[cfg(test)]
@@ -203,7 +208,7 @@ mod tests {
     #[test]
     fn test_empty_input() {
         let instructions: Vec<MockInstruction> = vec![];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         assert_eq!(cfg.block_count(), 0);
         assert_eq!(cfg.back_edge_count(), 0);
@@ -212,7 +217,7 @@ mod tests {
     #[test]
     fn test_single_instruction() {
         let instructions = vec![MockInstruction::new("add", 0)];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
         assert_eq!(cfg.back_edge_count(), 0);
@@ -231,7 +236,7 @@ mod tests {
             MockInstruction::with_target("b", 1, 100), // branch to external target
             MockInstruction::new("sub", 2),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Should have 2 blocks: [add, b] and [sub]
         assert_eq!(cfg.block_count(), 2);
@@ -246,7 +251,7 @@ mod tests {
             MockInstruction::new("ret", 1),
             MockInstruction::new("sub", 2),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Should have 2 blocks: [add, ret] and [sub]
         assert_eq!(cfg.block_count(), 2);
@@ -262,7 +267,7 @@ mod tests {
             MockInstruction::new("mul", 2),
             MockInstruction::new("sub", 3), // branch target
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Should have 3 blocks: [add, b.lt], [mul], [sub]
         assert_eq!(cfg.block_count(), 3);
@@ -277,7 +282,7 @@ mod tests {
             MockInstruction::new("mul", 2),
             MockInstruction::new("mov", 3),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Single block with all 4 instructions
         assert_eq!(cfg.block_count(), 1);
@@ -294,7 +299,7 @@ mod tests {
             MockInstruction::new("sub", 2),
             MockInstruction::new("ret", 3),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Should have 3 blocks
         assert_eq!(cfg.block_count(), 3);
@@ -311,7 +316,7 @@ mod tests {
             MockInstruction::new("ret", 1),
             MockInstruction::new("sub", 2), // unreachable
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // 2 blocks: [add, ret], [sub]
         assert_eq!(cfg.block_count(), 2);
@@ -327,7 +332,7 @@ mod tests {
             MockInstruction::with_target("b", 1, 100), // unconditional branch away
             MockInstruction::new("sub", 2),            // unreachable via fall-through
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // 2 blocks
         assert_eq!(cfg.block_count(), 2);
@@ -344,7 +349,7 @@ mod tests {
             MockInstruction::new("cmp", 1),
             MockInstruction::with_target("b.lt", 2, 0), // back-edge to start
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Single block with a back-edge to itself
         assert_eq!(cfg.block_count(), 1);
@@ -359,7 +364,7 @@ mod tests {
     fn test_self_loop() {
         // Single instruction loop: b -> 0
         let instructions = vec![MockInstruction::with_target("b", 0, 0)];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
         assert_eq!(cfg.back_edge_count(), 1);
@@ -383,7 +388,7 @@ mod tests {
             MockInstruction::new("cmp", 3),
             MockInstruction::with_target("b.ne", 4, 0), // outer loop back
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Blocks: [mov], [add, b.lt], [cmp, b.ne]
         // Block at index 1 is a branch target, block at index 3 is after a branch
@@ -404,7 +409,7 @@ mod tests {
             MockInstruction::new("add", 2),
             MockInstruction::new("ret", 3),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // 3 blocks: [cmp, b.eq], [add], [ret]
         assert_eq!(cfg.block_count(), 3);
@@ -420,7 +425,7 @@ mod tests {
             MockInstruction::new("sub", 2),
             MockInstruction::new("mul", 3),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         assert_eq!(cfg.block_count(), 1);
         assert_eq!(cfg.back_edge_count(), 0);
@@ -442,7 +447,7 @@ mod tests {
             MockInstruction::with_target("b", 3, 0), // back-edge
             MockInstruction::new("ret", 4),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Blocks: [cmp, b.ge], [add, b], [ret]
         assert_eq!(cfg.block_count(), 3);
@@ -465,7 +470,7 @@ mod tests {
             MockInstruction::with_target("bl", 1, 0), // call to earlier address
             MockInstruction::new("ret", 2),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // bl is a call, so it doesn't create an edge in the CFG (calls return)
         // 2 blocks: [mov, bl], [ret]
@@ -485,7 +490,7 @@ mod tests {
             MockInstruction::with_target("bl", 1, 0),
             MockInstruction::new("ret", 2),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Block 0: [mov, bl] — should have call_targets = [0]
         let block0 = cfg.blocks().next().unwrap();
@@ -500,7 +505,7 @@ mod tests {
             MockInstruction::new("add", 1),
             MockInstruction::with_target("b", 2, 0), // back-edge
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         for block in cfg.blocks() {
             assert!(
@@ -523,7 +528,7 @@ mod tests {
             MockInstruction::with_target("bl", 1, 200),
             MockInstruction::new("ret", 2),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Blocks: [bl, bl], [ret]
         // Only the last instruction in a block is the terminator checked
@@ -551,7 +556,7 @@ mod tests {
             MockInstruction::new("add", 2),
             MockInstruction::new("ret", 3),
         ];
-        let cfg = crate::build_cfg(&instructions);
+        let cfg = crate::build_block_graph(&instructions);
 
         // Blocks: [b.eq], [b.lt], [add], [ret]
         // Each conditional branch ends its block, and ret is a target
