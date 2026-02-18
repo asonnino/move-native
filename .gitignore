@@ -25,6 +25,9 @@ tarpaulin-report.html
 *.sw?
 *~
 
+# Docs
+*.pdf
+
 # OS
 .DS_Store
 Thumbs.db
