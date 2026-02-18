@@ -82,7 +82,7 @@ jobs:
     if: ${{ needs.diff.outputs.isRelevantForRustTests == 'true' }}
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: taiki-e/install-action@970d55e3ce02a46d60ffae7b4fab3dedace6e769 # pin@v2.49.13
+      - uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
         with:
           tool: cargo-nextest
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
