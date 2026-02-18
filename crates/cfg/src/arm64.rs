@@ -234,7 +234,7 @@ impl ClassifiedOpcode {
             .unwrap_or(&Self::UNKNOWN)
     }
 
-    /// Classify by mnemonic string (for gas-instrument).
+    /// Classify by mnemonic string (for instrumenter).
     ///
     /// Returns `UNKNOWN` for mnemonics not in the opcode table.
     pub fn from_mnemonic(mnemonic: &str) -> &'static Self {

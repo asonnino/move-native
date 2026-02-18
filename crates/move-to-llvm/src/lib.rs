@@ -15,7 +15,7 @@ use crate::function::lower_function;
 /// Compile a serialized Move module to AArch64 assembly.
 ///
 /// The input is raw Move bytecode (a serialized `CompiledModule`).
-/// Returns assembly text suitable for feeding into `gas-instrument`.
+/// Returns assembly text suitable for feeding into `instrumenter`.
 pub fn compile(bytecode: &[u8]) -> Result<String, CompileError> {
     let module = CompiledModule::deserialize_with_defaults(bytecode)
         .map_err(|e| CompileError::Deserialize(e.to_string()))?;

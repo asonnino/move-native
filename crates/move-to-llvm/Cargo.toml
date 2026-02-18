@@ -23,9 +23,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-gas-instrument.workspace = true
+instrumenter.workspace = true
 move-core-types.workspace = true
 move-binary-format.workspace = true
 runtime = { path = "../runtime" }
-native-verifier = { path = "../native-verifier" }
+verifier = { path = "../verifier" }
 object = "0.38"

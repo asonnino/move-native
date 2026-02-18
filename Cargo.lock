@@ -654,16 +654,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gas-instrument"
-version = "0.1.0"
-dependencies = [
- "cfg",
- "indoc",
- "petgraph",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -983,6 +973,16 @@ dependencies = [
  "serde",
  "similar",
  "tempfile",
+]
+
+[[package]]
+name = "instrumenter"
+version = "0.1.0"
+dependencies = [
+ "cfg",
+ "indoc",
+ "petgraph",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1483,17 +1483,17 @@ dependencies = [
 name = "move-to-llvm"
 version = "0.1.0"
 dependencies = [
- "gas-instrument",
  "inkwell",
+ "instrumenter",
  "move-binary-format",
  "move-core-types",
  "move-model",
  "move-stackless-bytecode",
- "native-verifier",
  "object 0.38.1",
  "runtime",
  "tempfile",
  "thiserror 2.0.18",
+ "verifier",
 ]
 
 [[package]]
@@ -1514,19 +1514,6 @@ version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui?rev=e4146b827fc1ceb26af5885acb3259c9fc193964#e4146b827fc1ceb26af5885acb3259c9fc193964"
 dependencies = [
  "move-binary-format",
-]
-
-[[package]]
-name = "native-verifier"
-version = "0.1.0"
-dependencies = [
- "cfg",
- "gas-instrument",
- "object 0.38.1",
- "tempfile",
- "thiserror 2.0.18",
- "yaxpeax-arch",
- "yaxpeax-arm",
 ]
 
 [[package]]
@@ -2143,7 +2130,7 @@ name = "runtime"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "gas-instrument",
+ "instrumenter",
  "libc",
  "moka",
  "object 0.38.1",
@@ -2739,6 +2726,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "verifier"
+version = "0.1.0"
+dependencies = [
+ "cfg",
+ "instrumenter",
+ "object 0.38.1",
+ "tempfile",
+ "thiserror 2.0.18",
+ "yaxpeax-arch",
+ "yaxpeax-arm",
 ]
 
 [[package]]

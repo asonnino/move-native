@@ -3,20 +3,20 @@
 //! Reads Arm64 assembly from stdin, instruments it with gas checks, and writes to stdout.
 //!
 //! Usage:
-//!     cat test.s | gas-instrument > test_instrumented.s
+//!     cat test.s | instrumenter > test_instrumented.s
 
 use std::io::{self, Read};
 
-use gas_instrument::{ParsedAssembly, build_cfg, instrument};
+use instrumenter::{ParsedAssembly, build_cfg, instrument};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     // Check for --help
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("gas-instrument - Arm64 assembly gas instrumentation tool");
+        eprintln!("instrumenter - Arm64 assembly gas instrumentation tool");
         eprintln!();
-        eprintln!("Usage: cat input.s | gas-instrument > output.s");
+        eprintln!("Usage: cat input.s | instrumenter > output.s");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --help, -h  Show this help message");

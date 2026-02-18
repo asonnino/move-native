@@ -17,6 +17,6 @@ tempfile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-gas-instrument.workspace = true
+instrumenter.workspace = true
 object = "0.38"
 serial_test = "3"

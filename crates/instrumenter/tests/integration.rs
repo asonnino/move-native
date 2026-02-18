@@ -1,4 +1,4 @@
-//! Integration tests for gas-instrument
+//! Integration tests for instrumenter
 //!
 //! These tests exercise the full instrumentation pipeline using real assembly files
 //! from `tests/asm_samples/`. They verify that:
@@ -11,7 +11,7 @@
 //! Unlike unit tests (which use inline assembly strings), these tests serve as
 //! end-to-end validation and documentation of expected behavior on real files.
 
-use gas_instrument::{ParsedAssembly, build_cfg, instrument};
+use instrumenter::{ParsedAssembly, build_cfg, instrument};
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");

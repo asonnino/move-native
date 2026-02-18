@@ -23,5 +23,5 @@ move-stackless-bytecode = { git = "https://github.com/MystenLabs/sui", rev = "e4
 
 # Internal crates
 cfg = { path = "crates/cfg" }
-gas-instrument = { path = "crates/gas-instrument" }
+instrumenter = { path = "crates/instrumenter" }
 move-to-llvm = { path = "crates/move-to-llvm" }

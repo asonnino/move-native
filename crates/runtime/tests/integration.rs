@@ -4,7 +4,7 @@
 
 use std::{path::Path, process::Command};
 
-use gas_instrument::{instrument, parser};
+use instrumenter::{instrument, parser};
 use object::{Object, ObjectSection};
 use runtime::{CompiledModule, ExecutionStatus, Executor, MemoryStore, ModuleCache};
 use tempfile::TempDir;
@@ -27,10 +27,10 @@ const UNMAPPED_JUMP_ASM: &str = include_str!("../../../tests/asm_samples/unmappe
 const STACK_THEN_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/stack_then_fault.s");
 const NESTED_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/nested_fault.s");
 
-/// Instruments the assembly using gas-instrument.
+/// Instruments the assembly using instrumenter.
 fn instrument_asm(source: &str) -> String {
     let asm = parser::ParsedAssembly::parse(source);
-    let cfg_result = gas_instrument::build_cfg(&asm).expect("CFG build failed");
+    let cfg_result = instrumenter::build_cfg(&asm).expect("CFG build failed");
     instrument::instrument(asm.lines(), &cfg_result).unwrap()
 }
 

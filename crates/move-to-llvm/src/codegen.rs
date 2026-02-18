@@ -70,7 +70,7 @@ pub fn emit_assembly(module: &Module<'_>) -> Result<String, CompileError> {
 /// Post-process LLVM assembly to add platform-compatible symbol aliases.
 ///
 /// On macOS (where LLVM emits `_name` symbols), adds unprefixed aliases
-/// so that gas-instrument and the runtime can find functions by their
+/// so that instrumenter and the runtime can find functions by their
 /// Move names. On Linux, adds underscore-prefixed aliases for the same
 /// cross-platform compatibility.
 pub fn add_symbol_aliases(asm: &str) -> String {

@@ -1,4 +1,4 @@
-//! Integration tests for native-verifier
+//! Integration tests for verifier
 //!
 //! Tests the full pipeline: assembly → object file → decode → verify.
 //!
@@ -9,8 +9,8 @@
 
 use std::process::Command;
 
-use gas_instrument::{instrument, parser};
-use native_verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
+use instrumenter::{instrument, parser};
+use verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
 
@@ -44,10 +44,10 @@ fn assemble(source: &str) -> Vec<u8> {
     text_section.data().expect("failed to read code").to_vec()
 }
 
-/// Instruments the assembly using gas-instrument, then assembles it.
+/// Instruments the assembly using instrumenter, then assembles it.
 fn instrument_and_assemble(source: &str) -> Vec<u8> {
     let asm = parser::ParsedAssembly::parse(source);
-    let cfg_result = gas_instrument::build_cfg(&asm).expect("CFG build failed");
+    let cfg_result = instrumenter::build_cfg(&asm).expect("CFG build failed");
     let instrumented = instrument::instrument(asm.lines(), &cfg_result).unwrap();
 
     assemble(&instrumented)

@@ -7,8 +7,8 @@
 //!
 //! - [`CfgInstruction`]: Full interface for CFG construction, extending
 //!   `BasicInstruction` with target information. Implemented by:
-//!   - Text assembly: `ResolvedInstruction` (in gas-instrument)
-//!   - Binary: `DecodedInstruction` (in native-verifier)
+//!   - Text assembly: `ResolvedInstruction` (in instrumenter)
+//!   - Binary: `DecodedInstruction` (in verifier)
 
 use crate::arm64::ClassifiedOpcode;
 

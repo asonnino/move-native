@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command};
 
-use gas_instrument::{ParsedAssembly, build_cfg, instrument};
+use instrumenter::{ParsedAssembly, build_cfg, instrument};
 use move_binary_format::{CompiledModule, file_format::*};
 use move_core_types::{account_address::AccountAddress, identifier::Identifier};
 use tempfile::TempDir;
@@ -121,7 +121,7 @@ fn compile_add_instruments_without_error() {
     let module = make_add_module();
     let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
 
-    // Feed through gas-instrument — should not error (forward-only code, no back-edges)
+    // Feed through instrumenter — should not error (forward-only code, no back-edges)
     let parsed = ParsedAssembly::parse(&asm);
     let cfg_result = build_cfg(&parsed).expect("CFG build failed");
     let instrumented =
@@ -221,7 +221,7 @@ fn full_pipeline_compile_instrument_execute() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn full_pipeline_from_mv_file() {
-    use native_verifier::{VerificationError, Verifier, decode_instructions};
+    use verifier::{VerificationError, Verifier, decode_instructions};
     use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
 
     // 1. Compile: .mv bytes → assembly text
@@ -311,7 +311,7 @@ fn full_pipeline_from_mv_file() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn full_pipeline_from_move_source() {
-    use native_verifier::{VerificationError, Verifier, decode_instructions};
+    use verifier::{VerificationError, Verifier, decode_instructions};
     use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
 
     // 0. Check if `sui` CLI is available; skip gracefully if not.

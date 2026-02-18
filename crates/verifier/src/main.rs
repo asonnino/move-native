@@ -1,4 +1,4 @@
-//! CLI for native-verifier
+//! CLI for verifier
 //!
 //! Verifies Arm64 object files for safe deterministic execution.
 //!
@@ -7,17 +7,17 @@
 //! ```bash
 //! # Assemble and verify
 //! as -o test.o test.s
-//! native-verifier test.o
+//! verifier test.o
 //!
 //! # Full pipeline with gas instrumentation
-//! gas-instrument test.s > test_instrumented.s
+//! instrumenter test.s > test_instrumented.s
 //! as -o test.o test_instrumented.s
-//! native-verifier test.o
+//! verifier test.o
 //! ```
 
 use std::{env, fs, process};
 
-use native_verifier::{Verifier, decode_instructions};
+use verifier::{Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 
 fn main() {

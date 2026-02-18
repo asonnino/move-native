@@ -13,7 +13,7 @@ use crate::{
 
 /// Build a block-level CFG with call-cycle detection from a sequence of instructions.
 ///
-/// This is the full path used by the native verifier. Returns the block graph
+/// This is the full path used by the verifier. Returns the block graph
 /// together with the call-cycle result: `Some(entry)` if the call graph contains
 /// a cycle, `None` if acyclic.
 pub fn build_call_graph<I: CfgInstruction>(instructions: &[I]) -> (BlockGraph, Option<usize>) {
