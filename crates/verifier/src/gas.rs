@@ -605,6 +605,87 @@ mod tests {
     }
 
     #[test]
+    fn test_sub_x23_register_operand_is_unsafe() {
+        // sub x23, x23, x0 (register operand, not immediate)
+        let code = [0xf7, 0x02, 0x00, 0xcb];
+        let instructions = decode(&code);
+        assert_eq!(GasEffect::from(&instructions[0]), GasEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_tbz_wrong_bit_is_not_gas_check() {
+        // tbz x23, #62, +8 (bit 62, not 63 — not a valid gas check)
+        let code = [0x57, 0x00, 0xf0, 0xb6];
+        let instructions = decode(&code);
+        // tbz with bit != 63 references x23 → Unsafe
+        assert_eq!(GasEffect::from(&instructions[0]), GasEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_ldp_w23_pair_is_unsafe() {
+        // ldp w23, w24, [sp] (RegisterPair with w23)
+        let code = [0xf7, 0x63, 0x40, 0x29];
+        let instructions = decode(&code);
+        assert_eq!(GasEffect::from(&instructions[0]), GasEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_ldr_register_offset_x23_is_unsafe() {
+        // ldr x0, [x1, x23] (x23 as index register in RegRegOffset)
+        let code = [0x20, 0x68, 0x77, 0xf8];
+        let instructions = decode(&code);
+        assert_eq!(GasEffect::from(&instructions[0]), GasEffect::Unsafe);
+    }
+
+    #[test]
+    fn test_analyzer_brk_nonzero_in_gas_sequence() {
+        // Gas sequence with brk #1 instead of brk #0:
+        //   [0]  nop
+        //   [4]  sub x23, x23, #3
+        //   [8]  tbz x23, #63, +8 (target = 16)
+        //   [12] brk #1             (wrong trap value)
+        //   [16] b.lt -16           (back-edge → 0)
+        let code = [
+            0x1f, 0x20, 0x03, 0xd5, // nop
+            0xf7, 0x0e, 0x00, 0xd1, // sub x23, x23, #3
+            0x57, 0x00, 0xf8, 0xb6, // tbz x23, #63, +8
+            0x20, 0x00, 0x20, 0xd4, // brk #1
+            0x8b, 0xff, 0xff, 0x54, // b.lt -16
+        ];
+        let instructions = decode(&code);
+        let result = GasAnalyzer::new(&instructions).verify();
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().iter().any(|e| matches!(
+                e,
+                VerificationError::GasSequenceUnexpectedInstruction {
+                    expected: "brk #0",
+                    ..
+                }
+            )),
+            "brk #1 should not be accepted as gas trap"
+        );
+    }
+
+    #[test]
+    fn test_analyzer_backward_branch_from_zero() {
+        // b #-4 at offset 0: target = 0 + (-4) = -4 → unresolvable (negative)
+        let code = [0xff, 0xff, 0xff, 0x17]; // b #-4
+        let instructions = decode(&code);
+        let result = GasAnalyzer::new(&instructions).verify();
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .iter()
+                .any(|e| matches!(e, VerificationError::InvalidBranchTarget { .. })),
+            "backward branch with unresolvable target should be rejected"
+        );
+    }
+
+    #[test]
     fn test_analyzer_branch_into_gas_sequence() {
         // A branch targets the tbz inside a valid gas sequence:
         //   [0]  b +12              (targets 12 = protected tbz offset)

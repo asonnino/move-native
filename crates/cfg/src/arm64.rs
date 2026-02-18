@@ -12,8 +12,7 @@ use lazy_static::lazy_static;
 use yaxpeax_arm::armv8::a64::Opcode;
 
 /// Result of checking an instruction against the whitelist
-#[derive(Clone, Copy)]
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckResult {
     /// Instruction is allowed
     Allowed,
@@ -22,8 +21,7 @@ pub enum CheckResult {
 }
 
 /// Reason an instruction was rejected
-#[derive(Clone, Copy)]
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RejectionReason {
     /// Atomic/exclusive instruction (non-deterministic monitor state)
     Atomic,
@@ -1220,6 +1218,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_rejection_reason_display() {
+        assert_eq!(
+            RejectionReason::Atomic.to_string(),
+            "atomic/exclusive instruction"
+        );
+        assert_eq!(RejectionReason::System.to_string(), "system instruction");
+        assert_eq!(RejectionReason::Barrier.to_string(), "memory barrier");
+        assert_eq!(
+            RejectionReason::FloatingPoint.to_string(),
+            "floating-point instruction"
+        );
+        assert_eq!(
+            RejectionReason::IndirectBranch.to_string(),
+            "indirect branch (requires rewriting)"
+        );
+        assert_eq!(
+            RejectionReason::PointerAuth.to_string(),
+            "pointer authentication instruction"
+        );
+        assert_eq!(
+            RejectionReason::MemoryTagging.to_string(),
+            "memory tagging instruction"
+        );
+        assert_eq!(RejectionReason::Unknown.to_string(), "unknown instruction");
+    }
+
+    #[test]
+    fn test_rejected_instruction_categories() {
+        // Atomic
+        let c = ClassifiedOpcode::from_mnemonic("ldxr");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::Atomic)
+        );
+
+        // System
+        let c = ClassifiedOpcode::from_mnemonic("svc");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::System)
+        );
+
+        // Barrier
+        let c = ClassifiedOpcode::from_mnemonic("dmb sy");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::Barrier)
+        );
+
+        // FloatingPoint
+        let c = ClassifiedOpcode::from_mnemonic("fadd");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::FloatingPoint)
+        );
+
+        // IndirectBranch
+        let c = ClassifiedOpcode::from_mnemonic("braa");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::IndirectBranch)
+        );
+
+        // PointerAuth
+        let c = ClassifiedOpcode::from_mnemonic("pacia");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::PointerAuth)
+        );
+
+        // MemoryTagging
+        let c = ClassifiedOpcode::from_mnemonic("stg");
+        assert_eq!(
+            c.check_result,
+            CheckResult::Rejected(RejectionReason::MemoryTagging)
+        );
+    }
+
+    #[test]
+    fn test_from_mnemonic_case_insensitive() {
+        let c = ClassifiedOpcode::from_mnemonic("ADD");
+        assert_eq!(c.mnemonic, "add");
+        assert_eq!(c.check_result, CheckResult::Allowed);
+
+        let c = ClassifiedOpcode::from_mnemonic("B.EQ");
+        assert_eq!(c.mnemonic, "b.eq");
+        assert!(c.is_branch);
+        assert!(c.is_conditional);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::{path::Path, process::Command};
 
 use instrumenter::{instrument, parser};
 use object::{Object, ObjectSection};
-use runtime::{CompiledModule, ExecutionStatus, Executor, MemoryStore, ModuleCache};
+use runtime::{CompiledModule, ExecutionStatus, Executor, MAX_GAS_LIMIT, MemoryStore, ModuleCache};
 use tempfile::TempDir;
 
 /// The function type for all test functions
@@ -667,4 +667,80 @@ fn test_nested_call_fault() {
         ExecutionStatus::Completed,
         "executor should still work after nested-call fault"
     );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_gas_limit_too_large() {
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute(&cached_fn, MAX_GAS_LIMIT + 1) };
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        runtime::RuntimeError::GasLimitTooLarge { limit } => {
+            assert_eq!(limit, MAX_GAS_LIMIT + 1);
+        }
+        e => panic!("expected GasLimitTooLarge, got: {:?}", e),
+    }
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn test_execute_with_sigaction_check() {
+    let code = build_instrumented_binary(SIMPLE_LOOP_ASM);
+    let module = CompiledModule::with_single_entry(code, "simple_loop");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+
+    let cached_fn = unsafe {
+        cache
+            .get_function::<TestFn>(&"test".to_string(), "simple_loop")
+            .expect("failed to get function")
+    };
+
+    let executor = Executor::init().expect("failed to create executor");
+
+    let result = unsafe { executor.execute_with_sigaction_check(&cached_fn, 100_000) }
+        .expect("execute_with_sigaction_check failed");
+
+    assert!(
+        result.completed(),
+        "should complete with sufficient gas via sigaction-checked path"
+    );
+}
+
+#[test]
+fn test_load_code_exceeds_capacity() {
+    let large_code = vec![0u8; 80];
+    let module = CompiledModule::with_single_entry(large_code, "main");
+
+    let store = MemoryStore::with_module("test".to_string(), module);
+    let cache = ModuleCache::with_capacity(store, 4, 64).expect("failed to create cache");
+
+    let result = unsafe { cache.get_function::<TestFn>(&"test".to_string(), "main") };
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        runtime::RuntimeError::LoadError { reason, .. } => {
+            assert!(
+                reason.contains("exceeds capacity"),
+                "expected 'exceeds capacity' in error, got: {reason}"
+            );
+        }
+        e => panic!("expected LoadError, got: {:?}", e),
+    }
 }

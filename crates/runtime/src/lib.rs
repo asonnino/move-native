@@ -67,7 +67,7 @@ mod store;
 
 pub use cache::ModuleCache;
 pub use error::{RuntimeError, RuntimeResult};
-pub use execute::{ExecutionStatus, Executor, GasResult};
+pub use execute::{ExecutionStatus, Executor, GasResult, MAX_GAS_LIMIT};
 pub use module::{CompiledModule, FunctionHandle};
 pub use slot::SlotPool;
 #[cfg(test)]

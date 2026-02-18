@@ -141,6 +141,7 @@ mod tests {
     use cfg::{BasicInstruction, CfgInstruction};
     use yaxpeax_arm::armv8::a64::Opcode;
 
+    use super::decode_instructions_unchecked as decode;
     use crate::DecodeError;
 
     #[test]
@@ -296,6 +297,43 @@ mod tests {
         let code = [0x02, 0x00, 0x00, 0x94];
         let instructions = crate::decode_instructions(&code).unwrap();
         assert!(instructions[0].is_bl());
+    }
+
+    #[test]
+    fn test_branch_target_negative_underflow() {
+        // b #-4 at offset 0: target = 0 + (-4) = -4 → None (can't represent as usize)
+        let code = [0xff, 0xff, 0xff, 0x17]; // b #-4
+        let instructions = decode(&code);
+
+        assert!(instructions[0].is_branch());
+        assert_eq!(
+            instructions[0].branch_target(),
+            None,
+            "negative target should return None"
+        );
+    }
+
+    #[test]
+    fn test_check_and_is_store_methods() {
+        use cfg::CheckResult;
+
+        // str x0, [sp] — allowed store
+        let code = [0xe0, 0x03, 0x00, 0xf9];
+        let instructions = decode(&code);
+        assert_eq!(instructions[0].check(), CheckResult::Allowed);
+        assert!(instructions[0].is_store());
+
+        // add x0, x0, #1 — allowed non-store
+        let code = [0x00, 0x04, 0x00, 0x91];
+        let instructions = decode(&code);
+        assert_eq!(instructions[0].check(), CheckResult::Allowed);
+        assert!(!instructions[0].is_store());
+
+        // ldxr x0, [x1] — rejected (Atomic)
+        let code = [0x20, 0x7c, 0x5f, 0xc8];
+        let instructions = decode(&code);
+        assert!(matches!(instructions[0].check(), CheckResult::Rejected(_)));
+        assert!(!instructions[0].is_store());
     }
 
     #[test]

@@ -15,6 +15,9 @@ debug/
 /coverage/
 /*.profraw
 *.profdata
+cobertura.xml
+lcov.info
+tarpaulin-report.html
 
 # IDE
 .idea/
