@@ -1,4 +1,6 @@
 #![feature(thread_local)]
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
 
 //! Execution runtime for gas-instrumented native Move code
 //!
@@ -30,9 +32,9 @@
 //!
 //! ```asm
 //! sub x23, x23, #N      // decrement gas by N (instructions in block)
-//! tbz x23, #63, .Lok    // if bit 63 is 0 (positive), continue
+//! tbz x23, #63, .Look    // if bit 63 is 0 (positive), continue
 //! brk #0                // trap - out of gas
-//! .Lok:
+//! .Look:
 //! <back-edge branch>    // the original loop branch
 //! ```
 //!

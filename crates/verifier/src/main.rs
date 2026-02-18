@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! CLI for verifier
 //!
 //! Verifies Arm64 object files for safe deterministic execution.
@@ -17,8 +20,8 @@
 
 use std::{env, fs, process};
 
-use verifier::{Verifier, decode_instructions};
 use object::{Object, ObjectSection};
+use verifier::{Verifier, decode_instructions};
 
 fn main() {
     let args: Vec<String> = env::args().collect();

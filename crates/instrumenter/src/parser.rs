@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Arm64 assembly text parser.
 //!
 //! Parses GNU-style assembly syntax as produced by LLVM/GCC.

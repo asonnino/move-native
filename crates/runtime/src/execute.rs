@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Executor for gas-instrumented native code
 //!
 //! The Executor handles signal handler installation and provides the
@@ -77,7 +80,10 @@ impl GasResult {
 /// type MoveFn = unsafe extern "C" fn();
 ///
 /// // Create a cache with a memory store
-/// let store = MemoryStore::with_module("my_module".into(), CompiledModule::with_single_entry(vec![], "main"));
+/// let store = MemoryStore::with_module(
+///     "my_module".into(),
+///     CompiledModule::with_single_entry(vec![], "main"),
+/// );
 /// let cache = ModuleCache::new(store, 4)?;
 ///
 /// // Get a function handle from the cache
@@ -281,7 +287,8 @@ impl Executor {
         asm!(
             // Save x23 to stack (callee-saved, must preserve for our caller)
             "str x23, [sp, #-16]!",
-            // Save SP to memory at sp_ptr *after* our push - this is the SP that fault handler restores
+            // Save SP to memory at sp_ptr *after* our push.
+            // This is the SP that the fault handler restores.
             // x10 is used as scratch (reserved via out("x10") below to prevent
             // the compiler from allocating it to any in(reg) input)
             "mov x10, sp",

@@ -7,6 +7,6 @@ repository.workspace = true
 description = "Control flow graph analysis and Arm64 opcode classification"
 
 [dependencies]
-yaxpeax-arm.workspace = true
-petgraph.workspace = true
 lazy_static = "1.4"
+petgraph.workspace = true
+yaxpeax-arm.workspace = true

@@ -1,6 +1,9 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Error types for the runtime crate
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -36,7 +39,7 @@ pub enum RuntimeError {
 }
 
 /// Show full path in debug builds, filename only in release
-fn display_load_error(path: &PathBuf, reason: &str) -> String {
+fn display_load_error(path: &Path, reason: &str) -> String {
     #[cfg(debug_assertions)]
     let path_display = path.display().to_string();
 

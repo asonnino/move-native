@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Integration tests for verifier
 //!
 //! Tests the full pipeline: assembly → object file → decode → verify.
@@ -10,9 +13,9 @@
 use std::process::Command;
 
 use instrumenter::{instrument, parser};
-use verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
 use object::{Object, ObjectSection};
 use tempfile::TempDir;
+use verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
 
 const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
 const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
@@ -67,14 +70,12 @@ fn test_raw_simple_loop_fails_verification() {
     );
 
     // Should have malformed gas check error (ret is now allowed, not flagged)
-    assert!(
-        result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::MissingGasCheck { .. }
-                    | VerificationError::GasSequenceUnexpectedInstruction { .. }
-                    | VerificationError::GasSequenceBadTarget { .. }))
-    );
+    assert!(result.errors().iter().any(|e| matches!(
+        e,
+        VerificationError::MissingGasCheck { .. }
+            | VerificationError::GasSequenceUnexpectedInstruction { .. }
+            | VerificationError::GasSequenceBadTarget { .. }
+    )));
 }
 
 #[test]
@@ -92,9 +93,14 @@ fn test_raw_nested_loops_fails_verification() {
     let malformed_gas_checks: Vec<_> = result
         .errors()
         .iter()
-        .filter(|e| matches!(e, VerificationError::MissingGasCheck { .. }
+        .filter(|e| {
+            matches!(
+                e,
+                VerificationError::MissingGasCheck { .. }
                     | VerificationError::GasSequenceUnexpectedInstruction { .. }
-                    | VerificationError::GasSequenceBadTarget { .. }))
+                    | VerificationError::GasSequenceBadTarget { .. }
+            )
+        })
         .collect();
 
     assert_eq!(
@@ -128,12 +134,12 @@ fn test_instrumented_nested_loops_gas_checks_present() {
 
     // No malformed gas check errors
     assert!(
-        !result
-            .errors()
-            .iter()
-            .any(|e| matches!(e, VerificationError::MissingGasCheck { .. }
-                    | VerificationError::GasSequenceUnexpectedInstruction { .. }
-                    | VerificationError::GasSequenceBadTarget { .. })),
+        !result.errors().iter().any(|e| matches!(
+            e,
+            VerificationError::MissingGasCheck { .. }
+                | VerificationError::GasSequenceUnexpectedInstruction { .. }
+                | VerificationError::GasSequenceBadTarget { .. }
+        )),
         "instrumented code should have valid gas checks for all back-edges"
     );
 }

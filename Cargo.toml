@@ -1,6 +1,6 @@
 [workspace]
-resolver = "2"
 members = ["crates/*"]
+resolver = "2"
 
 [workspace.package]
 edition = "2021"
@@ -8,12 +8,12 @@ license = "Apache-2.0"
 repository = "https://github.com/alberto/move-native"
 
 [workspace.dependencies]
-thiserror = "2"
-petgraph = "0.8"
-yaxpeax-arm = "0.4"
-yaxpeax-arch = "0.3"
-tempfile = "3"
 inkwell = { version = "0.8", features = ["llvm18-1"] }
+petgraph = "0.8"
+tempfile = "3"
+thiserror = "2"
+yaxpeax-arch = "0.3"
+yaxpeax-arm = "0.4"
 
 # Sui / Move crates
 move-binary-format = { git = "https://github.com/MystenLabs/sui", rev = "e4146b827fc1ceb26af5885acb3259c9fc193964", package = "move-binary-format" }

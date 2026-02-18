@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Generic CFG builder
 //!
 //! Builds a control flow graph from a sequence of instructions implementing
@@ -186,7 +189,8 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
                 "back-edge source block has no instructions"
             );
             // Get branch target directly from the terminator instruction.
-            // Back-edge sources must have an explicit terminator (the branch that creates the back-edge).
+            // Back-edge sources must have an explicit terminator
+            // (the branch that creates the back-edge).
             let block = &self.inner_block_graph[node];
             if block.has_explicit_terminator {
                 let terminator_idx = block.instruction_range.end - 1;
@@ -198,7 +202,6 @@ impl<'a, I: CfgInstruction> CfgBuilder<'a, I> {
             }
         }
     }
-
 }
 
 #[cfg(test)]

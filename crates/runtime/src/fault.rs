@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Fault handling for memory faults (SIGSEGV/SIGBUS)
 //!
 //! This module provides state for handling memory faults during native code
@@ -81,7 +84,7 @@ pub fn take_fault() -> bool {
 /// The asm block will store SP to this address after its own stack push
 #[inline]
 pub fn saved_sp_ptr() -> *mut u64 {
-    SAVED_SP.as_ptr() as *mut u64
+    SAVED_SP.as_ptr()
 }
 
 /// Get the saved stack pointer (called from signal handler)
@@ -100,7 +103,7 @@ pub fn set_saved_sp(val: u64) {
 /// The asm block will store the return address to this location before `blr {entry}`
 #[inline]
 pub fn saved_return_pc_ptr() -> *mut u64 {
-    RETURN_PC.as_ptr() as *mut u64
+    RETURN_PC.as_ptr()
 }
 
 /// Get the saved return PC (called from signal handler)
@@ -125,7 +128,10 @@ pub fn enter_move_execution() {
 #[inline]
 pub fn exit_move_execution() {
     let depth = MOVE_EXECUTION_DEPTH.get();
-    debug_assert!(depth > 0, "exit_move_execution called without matching enter");
+    debug_assert!(
+        depth > 0,
+        "exit_move_execution called without matching enter"
+    );
     MOVE_EXECUTION_DEPTH.set(depth - 1);
 }
 

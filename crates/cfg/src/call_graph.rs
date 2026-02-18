@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Call-graph construction and cycle detection
 //!
 //! Builds an inter-procedural call graph from the block-level CFG produced by
@@ -7,8 +10,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
     CfgInstruction,
-    builder::CfgBuilder,
     block_graph::{BlockGraph, BlockIndex, InnerBlockGraph},
+    builder::CfgBuilder,
 };
 
 /// Build a block-level CFG with call-cycle detection from a sequence of instructions.

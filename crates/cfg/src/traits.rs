@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Trait abstractions for instruction classification and CFG construction
 //!
 //! This module provides two levels of abstraction:

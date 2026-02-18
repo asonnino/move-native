@@ -56,9 +56,9 @@ At every back-edge (loop iteration):
 
 ```asm
 sub x23, x23, #N      // decrement by N (instructions in block)
-tbz x23, #63, .Lok    // if bit 63 is 0 (positive), continue
+tbz x23, #63, .Look    // if bit 63 is 0 (positive), continue
 brk #0                // trap - out of gas
-.Lok:
+.Look:
 // ... continue execution ...
 ```
 
@@ -338,8 +338,8 @@ _simple_loop:
 //     add x0, x0, #1
 //     cmp x0, x1
 //     sub x23, x23, #3      // 3 instructions in block
-//     tbz x23, #63, .Lok
+//     tbz x23, #63, .Look
 //     brk #0
-// .Lok:
+// .Look:
 //     b.lt .Lloop
 ```

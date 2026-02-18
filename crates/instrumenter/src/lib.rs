@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Gas instrumentation for Arm64 assembly
 //!
 //! This crate provides tools to:

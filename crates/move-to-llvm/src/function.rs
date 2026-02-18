@@ -49,9 +49,9 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         }
 
         // Store function parameters into their allocas
-        for i in 0..param_count {
+        for (i, alloca) in temps.iter().enumerate().take(param_count) {
             let param = function.get_nth_param(i as u32).unwrap().into_int_value();
-            ctx.builder.build_store(temps[i], param).unwrap();
+            ctx.builder.build_store(*alloca, param).unwrap();
         }
 
         // Pre-create basic blocks for all labels

@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Gas instrumentation CLI tool
 //!
 //! Reads Arm64 assembly from stdin, instruments it with gas checks, and writes to stdout.

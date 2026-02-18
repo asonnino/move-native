@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Module cache backed by pre-allocated code slots
 //!
 //! Caches compiled modules in executable memory slots with LRU eviction.

@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Signal handlers for gas exhaustion and memory fault detection
 //!
 //! ## SIGTRAP (Out-of-Gas)

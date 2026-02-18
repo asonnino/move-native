@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Arm64 instruction decoding
 //!
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
@@ -95,7 +98,7 @@ impl CfgInstruction for DecodedInstruction {
 /// The input must be 4-byte aligned (Arm64 fixed-width instructions).
 /// Returns a vector of decoded instructions.
 pub fn decode_instructions(code: &[u8]) -> Result<Vec<DecodedInstruction>, DecodeError> {
-    if code.len() % 4 != 0 {
+    if !code.len().is_multiple_of(4) {
         return Err(DecodeError::UnalignedCode { size: code.len() });
     }
 
@@ -302,6 +305,9 @@ mod tests {
         let instructions = crate::decode_instructions(&code).unwrap();
 
         assert_eq!(instructions[0].opcode(), Opcode::BRK);
-        assert!(!instructions[0].is_brk_trap(), "brk #1 should not be recognized as gas trap");
+        assert!(
+            !instructions[0].is_brk_trap(),
+            "brk #1 should not be recognized as gas trap"
+        );
     }
 }

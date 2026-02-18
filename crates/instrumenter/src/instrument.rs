@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Gas instrumentation pass
 //!
 //! Inserts gas metering sequences at back-edges (loops) to enforce bounded execution.
@@ -52,9 +55,9 @@ const MAX_LABEL_ATTEMPTS: usize = 10_000;
 /// For each basic block that ends with a back-edge branch, inserts:
 /// ```asm
 /// sub x23, x23, #N      // N = instructions in block
-/// tbz x23, #63, .Lok_M  // if positive, continue
+/// tbz x23, #63, .Look_M  // if positive, continue
 /// brk #0                // trap - out of gas
-/// .Lok_M:
+/// .Look_M:
 /// <original branch>
 /// ```
 ///
@@ -388,7 +391,7 @@ mod tests {
         let output = crate::instrument(asm.lines(), &cfg_result).unwrap();
 
         assert!(output.contains(".L__gas_ok_"));
-        assert!(!output.contains(".Lok_"));
+        assert!(!output.contains(".Look_"));
     }
 
     #[test]

@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Arm64 opcode classification
 //!
 //! Single source of truth for Arm64 opcode classification used by both
@@ -274,7 +277,6 @@ const OPCODE_TABLE: &[ClassifiedOpcode] = &[
     ClassifiedOpcode::allowed("mul"),
     // Allowed: Logic operations
     ClassifiedOpcode::allowed("and"),
-    ClassifiedOpcode::allowed("ands"),
     ClassifiedOpcode::allowed("tst"),
     ClassifiedOpcode::allowed("orr"),
     ClassifiedOpcode::allowed("orn"),
@@ -486,8 +488,8 @@ const OPCODE_TABLE: &[ClassifiedOpcode] = &[
     ClassifiedOpcode::allowed("uqrshrn2"),
     ClassifiedOpcode::allowed("ushll"),
     ClassifiedOpcode::allowed("ushll2"),
-    ClassifiedOpcode::allowed("shll"),
-    ClassifiedOpcode::allowed("shll2"),
+    ClassifiedOpcode::allowed("shell"),
+    ClassifiedOpcode::allowed("shell2"),
     ClassifiedOpcode::allowed("sshl"),
     ClassifiedOpcode::allowed("srshl"),
     ClassifiedOpcode::allowed("sqrshl"),

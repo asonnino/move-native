@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Integration tests for instrumenter
 //!
 //! These tests exercise the full instrumentation pipeline using real assembly files
@@ -18,8 +21,10 @@ const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_l
 const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm_samples/forward_only.s");
 const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
 const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/cbz_loop.s");
-const UNCONDITIONAL_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/unconditional_loop.s");
-const MULTIPLE_FUNCTIONS_ASM: &str = include_str!("../../../tests/asm_samples/multiple_functions.s");
+const UNCONDITIONAL_LOOP_ASM: &str =
+    include_str!("../../../tests/asm_samples/unconditional_loop.s");
+const MULTIPLE_FUNCTIONS_ASM: &str =
+    include_str!("../../../tests/asm_samples/multiple_functions.s");
 const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm_samples/large_block.s");
 
 /// Tests the full instrumentation pipeline on a simple loop.
@@ -59,7 +64,8 @@ fn test_back_edge_detection() {
     assert_eq!(back_edge_count, 1, "expected exactly one back-edge");
 
     // Verify the back-edge target is the loop header (instruction index 2)
-    // After resolution: _simple_loop (0), mov (1), mov (2), .Lloop/add (3), cmp (4), b.lt (5), ret (6)
+    // After resolution: _simple_loop (0), mov (1), mov (2),
+    // .Lloop/add (3), cmp (4), b.lt (5), ret (6)
     // Wait, labels are resolved - .Lloop resolves to the instruction after it
     let back_edge_block = cfg.blocks().find(|&b| cfg.has_back_edge(b)).unwrap();
     // The back-edge target is an instruction index, not a label name
@@ -188,7 +194,10 @@ fn test_forward_only_no_instrumentation() {
 
     // Should have no back-edges
     let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-    assert_eq!(back_edge_count, 0, "forward-only code should have no back-edges");
+    assert_eq!(
+        back_edge_count, 0,
+        "forward-only code should have no back-edges"
+    );
 
     // Should have no gas check sequences
     assert!(!output.contains("sub x23"), "should not have gas decrement");
@@ -212,15 +221,24 @@ fn test_function_call_instrumentation() {
 
     // Should have exactly one back-edge (the main loop)
     let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-    assert_eq!(back_edge_count, 1, "should have one back-edge for main loop");
+    assert_eq!(
+        back_edge_count, 1,
+        "should have one back-edge for main loop"
+    );
 
     // Gas check should be present
     assert!(output.contains("sub x23, x23"), "should have gas decrement");
     assert!(output.contains("tbz x23, #63"), "should have gas check");
 
     // bl instruction should be preserved (not treated as back-edge)
-    assert!(output.contains("bl _helper"), "bl instruction should be preserved");
-    assert!(output.contains("b.lt .Lloop"), "loop back-edge should be preserved");
+    assert!(
+        output.contains("bl _helper"),
+        "bl instruction should be preserved"
+    );
+    assert!(
+        output.contains("b.lt .Lloop"),
+        "loop back-edge should be preserved"
+    );
 }
 
 /// Tests cbnz loop instrumentation.
@@ -236,7 +254,10 @@ fn test_cbz_loop_instrumentation() {
     assert_eq!(back_edge_count, 1, "should detect cbnz as back-edge");
 
     // Gas check sequence present
-    assert!(output.contains("sub x23, x23, #2"), "should charge for 2 instructions");
+    assert!(
+        output.contains("sub x23, x23, #2"),
+        "should charge for 2 instructions"
+    );
     assert!(output.contains("cbnz x0, .Lloop"), "cbnz branch preserved");
 }
 
@@ -250,13 +271,26 @@ fn test_unconditional_loop_instrumentation() {
 
     // Should have exactly one back-edge (the unconditional b)
     let back_edge_count = cfg.blocks().filter(|&b| cfg.has_back_edge(b)).count();
-    assert_eq!(back_edge_count, 1, "should detect unconditional b as back-edge");
+    assert_eq!(
+        back_edge_count, 1,
+        "should detect unconditional b as back-edge"
+    );
 
     // The forward branch (b.ge) should NOT be instrumented
     // Only the back-edge (b .Lloop) should have gas check
-    assert_eq!(output.matches("brk #0").count(), 1, "only one gas check for back-edge");
-    assert!(output.contains("b .Lloop"), "unconditional back-edge preserved");
-    assert!(output.contains("b.ge .Ldone"), "forward branch preserved without gas check");
+    assert_eq!(
+        output.matches("brk #0").count(),
+        1,
+        "only one gas check for back-edge"
+    );
+    assert!(
+        output.contains("b .Lloop"),
+        "unconditional back-edge preserved"
+    );
+    assert!(
+        output.contains("b.ge .Ldone"),
+        "forward branch preserved without gas check"
+    );
 }
 
 /// Tests multiple functions in one file.
@@ -281,7 +315,11 @@ fn test_multiple_functions_instrumentation() {
     );
 
     // First function's loop is instrumented
-    assert_eq!(output.matches("brk #0").count(), 1, "one gas check sequence");
+    assert_eq!(
+        output.matches("brk #0").count(),
+        1,
+        "one gas check sequence"
+    );
 
     // Both function labels preserved in output
     assert!(output.contains("_func_add:") || output.contains("func_add:"));

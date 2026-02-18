@@ -11,13 +11,16 @@ trim_trailing_whitespace = true
 
 [*.md]
 indent_size = unset
+max_line_length = 150
+
+[{*.css,*.html,*.json,*.sh,*.toml,*.yml,*.yaml,*.mjs}]
+indent_size = 2
+max_line_length = 150
+
+[*.move]
 max_line_length = unset
 
-[{*.json,*.toml,*.yml,*.yaml}]
-indent_size = 2
-max_line_length = 120
-
-[{.git/**/*,**/*.lock,LICENSE}]
+[{.git/**/*,.claude/**/*,CLAUDE.md,Cargo.toml,**/Cargo.toml,**/*.lock,**/Move.toml,LICENSE}]
 charset = unset
 end_of_line = unset
 indent_size = unset

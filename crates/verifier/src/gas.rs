@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Gas instrumentation verification
 //!
 //! Verifies that the gas counter register (x23) is only modified by valid
@@ -226,7 +229,7 @@ impl<'a> GasAnalyzer<'a> {
 
         // Expected sequence (working backwards from back-edge):
         // index-3: sub x23, x23, #N
-        // index-2: tbz x23, #63, .Lok
+        // index-2: tbz x23, #63, .Look
         // index-1: brk #0
         // index:   <back-edge branch>
 
@@ -537,7 +540,11 @@ mod tests {
         let instructions = decode(&code);
         let result = GasAnalyzer::new(&instructions).verify();
 
-        assert!(result.is_ok(), "valid gas sequence should pass: {:?}", result.unwrap_err());
+        assert!(
+            result.is_ok(),
+            "valid gas sequence should pass: {:?}",
+            result.unwrap_err()
+        );
         assert_eq!(result.unwrap(), 3);
     }
 
@@ -561,10 +568,10 @@ mod tests {
 
         assert!(result.is_err());
         assert!(
-            result
-                .unwrap_err()
-                .iter()
-                .any(|e| matches!(e, VerificationError::GasSequenceUnexpectedInstruction { .. })),
+            result.unwrap_err().iter().any(|e| matches!(
+                e,
+                VerificationError::GasSequenceUnexpectedInstruction { .. }
+            )),
             "should report wrong instruction in gas sequence position"
         );
     }

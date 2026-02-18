@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Module abstractions for compiled native code
 //!
 //! This module contains the types that represent compiled modules and their functions:

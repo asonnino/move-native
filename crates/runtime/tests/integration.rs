@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Integration tests for the runtime crate
 //!
 //! Tests the full pipeline: instrument → assemble → extract binary → load → execute.

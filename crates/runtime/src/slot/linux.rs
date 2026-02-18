@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Linux-specific Slot implementation using memfd + dual mmap
 
 use std::{ffi::CString, os::unix::io::RawFd, ptr::NonNull};

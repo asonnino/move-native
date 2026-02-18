@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Native verifier for Arm64 binaries
 //!
 //! Verifies that compiled code is safe for deterministic execution by checking
@@ -8,15 +11,15 @@
 //!
 //! | Check | Description |
 //! |-------|-------------|
-//! | **Instruction whitelist** | Base + SIMD + crypto allowed; reject atomics, FP, syscalls, barriers, PAC, MTE |
-//! | **Gas check at back-edges** | Verify `sub x23` / `tbz x23, #63` / `brk #0` sequence before each back-edge |
-//! | **x23 protection** | Gas counter only modified by gas decrement sequences |
-//! | **No indirect branches** | Reject `br`, `blr`, `bra*`, `blra*` (`ret` is allowed — see below) |
-//! | **No recursive calls** | Reject cyclic call graphs (mutual recursion via `bl` or tail calls) |
-//! | **No unreachable code** | All basic blocks must be reachable from entry point (multi-root for multi-function code) |
-//! | **Branch targets valid** | All branch targets must be valid instruction boundaries |
-//! | **SP safety** | Only recognized SP modification patterns allowed (no dynamic stack allocation) |
-//! | **Stack depth** | Worst-case stack depth must be within budget (bounded by gas budget for loops) |
+//! | **Instruction whitelist** | Reject atomics, FP, syscalls, barriers, PAC, MTE |
+//! | **Gas check at back-edges** | `sub x23`/`tbz x23,#63`/`brk #0` before back-edges |
+//! | **x23 protection** | Gas counter only modified by gas decrements |
+//! | **No indirect branches** | Reject `br`, `blr`, `bra*`, `blra*` (`ret` ok) |
+//! | **No recursive calls** | Reject cyclic call graphs (via `bl` or tail calls) |
+//! | **No unreachable code** | All blocks reachable from entry point |
+//! | **Branch targets valid** | All targets must be instruction boundaries |
+//! | **SP safety** | Only recognized SP patterns (no dynamic alloc) |
+//! | **Stack depth** | Worst-case depth within budget (bounded by gas) |
 //!
 //! TODO: Not yet implemented:
 //! - Malformed encodings: reject UNPREDICTABLE (bad SBZ/SBO fields) and unallocated encodings

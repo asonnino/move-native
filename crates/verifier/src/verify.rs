@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Verification of ARM64 native code for deterministic execution
 //!
 //! Provides [`Verifier`] which performs the security checks described in the
@@ -131,7 +134,6 @@ impl<'a> Verifier<'a> {
 
         result
     }
-
 }
 
 #[cfg(test)]

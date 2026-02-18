@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Module storage abstraction
 //!
 //! Provides a trait for loading compiled modules from various sources:

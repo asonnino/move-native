@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // add.move — Minimal Move module for testing move-to-llvm
 //
 // Equivalent to the CompiledModule constructed in

@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Static stack depth verification
 //!
 //! Verifies that the total stack usage cannot exceed a budget.
@@ -414,7 +417,7 @@ mod tests {
         // Gas-instrumented loop with sub sp, sp, #16 inside.
         // Assembled from:
         //   sub sp, sp, #16; add sp, sp, #16; sub x23, x23, #3;
-        //   tbz x23, #63, Lok; brk #0; Lok: b.lt start; ret
+        //   tbz x23, #63, Look; brk #0; Look: b.lt start; ret
         let code = [
             0xff, 0x43, 0x00, 0xd1, // sub sp, sp, #16      [0x00]
             0xff, 0x43, 0x00, 0x91, // add sp, sp, #16      [0x04]
@@ -470,7 +473,7 @@ mod tests {
         // with no SP decrements. The prologue SP should NOT be multiplied.
         // Assembled from:
         //   sub sp, sp, #32; Lloop: add x0, x0, #1; sub x23, x23, #2;
-        //   tbz x23, #63, Lok; brk #0; Lok: b.lt Lloop; add sp, sp, #32; ret
+        //   tbz x23, #63, Look; brk #0; Look: b.lt Lloop; add sp, sp, #32; ret
         let code = [
             0xff, 0x83, 0x00, 0xd1, // sub sp, sp, #32      [0x00]
             0x00, 0x04, 0x00, 0x91, // add x0, x0, #1       [0x04]
