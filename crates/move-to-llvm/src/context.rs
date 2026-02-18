@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;

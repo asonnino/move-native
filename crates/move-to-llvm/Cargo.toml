@@ -14,18 +14,18 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+inkwell.workspace = true
 move-binary-format.workspace = true
 move-core-types.workspace = true
 move-model.workspace = true
 move-stackless-bytecode.workspace = true
-inkwell.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 instrumenter.workspace = true
-move-core-types.workspace = true
 move-binary-format.workspace = true
-runtime = { path = "../runtime" }
-verifier = { path = "../verifier" }
+move-core-types.workspace = true
 object = "0.38"
+runtime = { path = "../runtime" }
+tempfile.workspace = true
+verifier = { path = "../verifier" }

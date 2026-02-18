@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod codegen;
 pub mod context;
 pub mod error;
@@ -6,6 +9,7 @@ pub mod types;
 
 use inkwell::context::Context;
 use move_binary_format::CompiledModule;
+use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use crate::codegen::{add_symbol_aliases, emit_assembly, run_optimization_passes};
 use crate::context::LlvmContext;
@@ -28,8 +32,18 @@ pub fn compile_module(module: &CompiledModule) -> Result<String, CompileError> {
     let context = Context::create();
     let ctx = LlvmContext::new(&context, "move_module");
 
-    for func_def in &module.function_defs {
-        lower_function(&ctx, module, func_def)?;
+    let env = move_model::run_bytecode_model_builder([module])
+        .map_err(|e| CompileError::ModelBuilder(e.to_string()))?;
+
+    for module_env in env.get_modules() {
+        for func_env in module_env.into_functions() {
+            if func_env.is_native() {
+                continue;
+            }
+            let generator = StacklessBytecodeGenerator::new(&func_env);
+            let func_data = generator.generate_function();
+            lower_function(&ctx, &func_env, &func_data)?;
+        }
     }
 
     run_optimization_passes(&ctx.module)?;

@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{path::Path, process::Command};
 
 use instrumenter::{ParsedAssembly, build_cfg, instrument};
@@ -221,8 +224,8 @@ fn full_pipeline_compile_instrument_execute() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn full_pipeline_from_mv_file() {
-    use verifier::{VerificationError, Verifier, decode_instructions};
     use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
+    use verifier::{VerificationError, Verifier, decode_instructions};
 
     // 1. Compile: .mv bytes → assembly text
     let bytecode = include_bytes!("../../../tests/move_samples/add.mv");
@@ -311,8 +314,8 @@ fn full_pipeline_from_mv_file() {
 #[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn full_pipeline_from_move_source() {
-    use verifier::{VerificationError, Verifier, decode_instructions};
     use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
+    use verifier::{VerificationError, Verifier, decode_instructions};
 
     // 0. Check if `sui` CLI is available; skip gracefully if not.
     let sui_ok = Command::new("sui")

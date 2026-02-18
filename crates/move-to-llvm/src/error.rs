@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -25,4 +28,10 @@ pub enum CompileError {
 
     #[error("failed to deserialize module: {0}")]
     Deserialize(String),
+
+    #[error("unsupported operation: {0}")]
+    UnsupportedOperation(String),
+
+    #[error("model builder failed: {0}")]
+    ModelBuilder(String),
 }
