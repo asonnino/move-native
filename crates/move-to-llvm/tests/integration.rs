@@ -595,3 +595,670 @@ fn execute_sum_to_n_loop() {
     assert_eq!(unsafe { f(1) }, 0, "sum_to_n(1) should be 0");
     assert_eq!(unsafe { f(100) }, 4950, "sum_to_n(100) should be 4950");
 }
+
+// ---------------------------------------------------------------------------
+// Function call tests
+// ---------------------------------------------------------------------------
+
+/// Build a module with two functions:
+///   - `double(x: u64): u64 { x + x }`
+///   - `quadruple(x: u64): u64 { double(double(x)) }`
+fn make_caller_callee_module() -> CompiledModule {
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("double").unwrap(),
+            Identifier::new("quadruple").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![
+            // FunctionHandleIndex(0) → double
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(1),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![],
+            },
+            // FunctionHandleIndex(1) → quadruple
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // double(x: u64): u64 { x + x }
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(2),
+                    code: vec![
+                        Bytecode::CopyLoc(0),
+                        Bytecode::CopyLoc(0),
+                        Bytecode::Add,
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // quadruple(x: u64): u64 { double(double(x)) }
+            // temps: [x, inner, result]
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(3),
+                    code: vec![
+                        Bytecode::CopyLoc(0),                   // push x
+                        Bytecode::Call(FunctionHandleIndex(0)), // inner = double(x)
+                        Bytecode::StLoc(1),                     // store inner
+                        Bytecode::CopyLoc(1),                   // push inner
+                        Bytecode::Call(FunctionHandleIndex(0)), // result = double(inner)
+                        Bytecode::StLoc(2),                     // store result
+                        Bytecode::MoveLoc(2),                   // push result
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::U64]), // 0: params (x: u64)
+            Signature(vec![SignatureToken::U64]), // 1: return (u64)
+            Signature(vec![]),                    // 2: locals for double
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 3: locals for quadruple
+        ],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_function_call() {
+    let module = make_caller_callee_module();
+    let asm = move_to_llvm::compile_module(&module).expect("function call compilation failed");
+
+    assert!(
+        asm.contains("double"),
+        "assembly should contain 'double' symbol\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("quadruple"),
+        "assembly should contain 'quadruple' symbol\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("bl"),
+        "assembly should contain a 'bl' (call) instruction\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+/// Find the byte offset of a symbol within the text section of an object file.
+fn find_symbol_offset(obj_path: &Path, name: &str) -> u64 {
+    use object::{Object, ObjectSection, ObjectSymbol};
+
+    let data = std::fs::read(obj_path).expect("failed to read object file");
+    let file = object::File::parse(&*data).expect("failed to parse object file");
+
+    // On macOS, symbols have a leading underscore.
+    let candidates: Vec<String> = vec![name.to_string(), format!("_{name}")];
+
+    for sym in file.symbols() {
+        let sym_name = sym.name().unwrap_or("");
+        if candidates.iter().any(|c| c == sym_name) {
+            // Get the symbol's address relative to the text section.
+            let section_idx = sym.section_index().expect("symbol has no section");
+            let section = file
+                .section_by_index(section_idx)
+                .expect("bad section index");
+            return sym.address() - section.address();
+        }
+    }
+    panic!("symbol '{name}' not found in object file");
+}
+
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+impl ExecutableCode {
+    /// Get a function pointer at a given byte offset into the loaded code.
+    ///
+    /// # Safety
+    /// The caller must ensure `F` matches the ABI and signature of the code at `offset`.
+    unsafe fn as_fn_at<F: Copy>(&self, offset: usize) -> F {
+        assert!(
+            std::mem::size_of::<F>() == std::mem::size_of::<*const ()>(),
+            "F must be a function pointer"
+        );
+        let ptr = self.ptr.add(offset);
+        unsafe { std::mem::transmute_copy(&ptr) }
+    }
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_function_call() {
+    let module = make_caller_callee_module();
+    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
+
+    let quadruple_offset = find_symbol_offset(&obj_path, "quadruple");
+
+    let code = extract_text_section(&obj_path);
+    let exec = ExecutableCode::load(&code);
+
+    type QuadFn = unsafe extern "C" fn(u64) -> u64;
+    let f: QuadFn = unsafe { exec.as_fn_at(quadruple_offset as usize) };
+
+    assert_eq!(unsafe { f(5) }, 20, "quadruple(5) should be 20");
+    assert_eq!(unsafe { f(0) }, 0, "quadruple(0) should be 0");
+    assert_eq!(unsafe { f(100) }, 400, "quadruple(100) should be 400");
+}
+
+// ---------------------------------------------------------------------------
+// Struct tests
+// ---------------------------------------------------------------------------
+
+/// Build a module with:
+///   - `struct Point { x: u64, y: u64 }`
+///   - `new_point(x: u64, y: u64): Point` — uses Pack
+///   - `sum_point(p: Point): u64` — uses Unpack + Add
+///   - `test_struct(a: u64, b: u64): u64` — chains new_point → sum_point
+fn make_struct_module() -> CompiledModule {
+    use move_binary_format::file_format::{
+        AbilitySet, DatatypeHandle, DatatypeHandleIndex, FieldDefinition, StructDefinition,
+        StructDefinitionIndex, StructFieldInformation, TypeSignature,
+    };
+
+    // Identifiers: 0=M, 1=Point, 2=new_point, 3=sum_point, 4=test_struct, 5=x, 6=y
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("Point").unwrap(),
+            Identifier::new("new_point").unwrap(),
+            Identifier::new("sum_point").unwrap(),
+            Identifier::new("test_struct").unwrap(),
+            Identifier::new("x").unwrap(),
+            Identifier::new("y").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        datatype_handles: vec![DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::PRIMITIVES,
+            type_parameters: vec![],
+        }],
+        struct_defs: vec![StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![
+                FieldDefinition {
+                    name: IdentifierIndex(5),
+                    signature: TypeSignature(SignatureToken::U64),
+                },
+                FieldDefinition {
+                    name: IdentifierIndex(6),
+                    signature: TypeSignature(SignatureToken::U64),
+                },
+            ]),
+        }],
+        function_handles: vec![
+            // 0: new_point(u64, u64): Point
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![],
+            },
+            // 1: sum_point(Point): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(3),
+                parameters: SignatureIndex(1),
+                return_: SignatureIndex(2),
+                type_parameters: vec![],
+            },
+            // 2: test_struct(u64, u64): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(4),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(2),
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // new_point(x: u64, y: u64): Point { Point { x, y } }
+            // temps: [x, y]
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(3), // empty
+                    code: vec![
+                        Bytecode::CopyLoc(0), // push x
+                        Bytecode::CopyLoc(1), // push y
+                        Bytecode::Pack(StructDefinitionIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // sum_point(p: Point): u64 { let (x, y) = unpack(p); x + y }
+            // temps: [p, x, y]
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(4), // [u64, u64]
+                    code: vec![
+                        Bytecode::MoveLoc(0), // push p
+                        Bytecode::Unpack(StructDefinitionIndex(0)),
+                        Bytecode::StLoc(2),   // y
+                        Bytecode::StLoc(1),   // x
+                        Bytecode::CopyLoc(1), // push x
+                        Bytecode::CopyLoc(2), // push y
+                        Bytecode::Add,
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // test_struct(a: u64, b: u64): u64 { sum_point(new_point(a, b)) }
+            // temps: [a, b, point, result]
+            FunctionDefinition {
+                function: FunctionHandleIndex(2),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(5), // [Point, u64]
+                    code: vec![
+                        Bytecode::CopyLoc(0),                   // push a
+                        Bytecode::CopyLoc(1),                   // push b
+                        Bytecode::Call(FunctionHandleIndex(0)), // new_point(a, b)
+                        Bytecode::StLoc(2),                     // store point
+                        Bytecode::CopyLoc(2),                   // push point
+                        Bytecode::Call(FunctionHandleIndex(1)), // sum_point(point)
+                        Bytecode::StLoc(3),                     // store result
+                        Bytecode::MoveLoc(3),                   // push result
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 0: (u64, u64)
+            Signature(vec![SignatureToken::Datatype(DatatypeHandleIndex(0))]), // 1: (Point)
+            Signature(vec![SignatureToken::U64]),                      // 2: (u64)
+            Signature(vec![]), // 3: empty (new_point locals)
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 4: sum_point locals [x, y]
+            Signature(vec![
+                // 5: test_struct locals [Point, u64]
+                SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                SignatureToken::U64,
+            ]),
+        ],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_struct_pack_unpack() {
+    let module = make_struct_module();
+    let asm = move_to_llvm::compile_module(&module).expect("struct compilation failed");
+
+    assert!(
+        asm.contains("new_point"),
+        "assembly should contain 'new_point'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("sum_point"),
+        "assembly should contain 'sum_point'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("test_struct"),
+        "assembly should contain 'test_struct'\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_struct_round_trip() {
+    let module = make_struct_module();
+    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
+
+    let test_struct_offset = find_symbol_offset(&obj_path, "test_struct");
+
+    let code = extract_text_section(&obj_path);
+    let exec = ExecutableCode::load(&code);
+
+    type TestFn = unsafe extern "C" fn(u64, u64) -> u64;
+    let f: TestFn = unsafe { exec.as_fn_at(test_struct_offset as usize) };
+
+    assert_eq!(unsafe { f(3, 7) }, 10, "test_struct(3, 7) should be 10");
+    assert_eq!(unsafe { f(0, 0) }, 0, "test_struct(0, 0) should be 0");
+    assert_eq!(
+        unsafe { f(100, 200) },
+        300,
+        "test_struct(100, 200) should be 300"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reference tests
+// ---------------------------------------------------------------------------
+
+/// Build a module with:
+///   - `struct Pair { a: u64, b: u64 }`
+///   - `swap_and_sum(p: &mut Pair): u64` — borrows fields, reads, swaps via WriteRef, returns sum
+///   - `test_refs(x: u64, y: u64): u64` — packs Pair, BorrowLoc, calls swap_and_sum
+fn make_ref_module() -> CompiledModule {
+    use move_binary_format::file_format::{
+        AbilitySet, DatatypeHandle, DatatypeHandleIndex, FieldDefinition, FieldHandle,
+        FieldHandleIndex, StructDefinition, StructDefinitionIndex, StructFieldInformation,
+        TypeSignature,
+    };
+
+    let pair_token = SignatureToken::Datatype(DatatypeHandleIndex(0));
+    let mut_pair_ref = SignatureToken::MutableReference(Box::new(pair_token.clone()));
+    let mut_u64_ref = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
+
+    // Identifiers: 0=M, 1=Pair, 2=swap_and_sum, 3=test_refs, 4=a, 5=b
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("Pair").unwrap(),
+            Identifier::new("swap_and_sum").unwrap(),
+            Identifier::new("test_refs").unwrap(),
+            Identifier::new("a").unwrap(),
+            Identifier::new("b").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        datatype_handles: vec![DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: AbilitySet::PRIMITIVES,
+            type_parameters: vec![],
+        }],
+        struct_defs: vec![StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![
+                FieldDefinition {
+                    name: IdentifierIndex(4), // a
+                    signature: TypeSignature(SignatureToken::U64),
+                },
+                FieldDefinition {
+                    name: IdentifierIndex(5), // b
+                    signature: TypeSignature(SignatureToken::U64),
+                },
+            ]),
+        }],
+        field_handles: vec![
+            // FieldHandleIndex(0) → Pair.a (field 0)
+            FieldHandle {
+                owner: StructDefinitionIndex(0),
+                field: 0,
+            },
+            // FieldHandleIndex(1) → Pair.b (field 1)
+            FieldHandle {
+                owner: StructDefinitionIndex(0),
+                field: 1,
+            },
+        ],
+        function_handles: vec![
+            // 0: swap_and_sum(&mut Pair): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0), // (&mut Pair)
+                return_: SignatureIndex(1),    // (u64)
+                type_parameters: vec![],
+            },
+            // 1: test_refs(u64, u64): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(3),
+                parameters: SignatureIndex(2), // (u64, u64)
+                return_: SignatureIndex(1),    // (u64)
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // swap_and_sum(p: &mut Pair): u64
+            // params: [p: &mut Pair]
+            // locals: [ref_a: &mut u64, ref_b: &mut u64, a: u64, b: u64, sum: u64]
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(3), // [&mut u64, &mut u64, u64, u64, u64]
+                    code: vec![
+                        // ref_a = &mut p.a
+                        Bytecode::CopyLoc(0),                          // push p
+                        Bytecode::MutBorrowField(FieldHandleIndex(0)), // &mut p.a
+                        Bytecode::StLoc(1),                            // ref_a = ...
+                        // ref_b = &mut p.b
+                        Bytecode::CopyLoc(0),                          // push p
+                        Bytecode::MutBorrowField(FieldHandleIndex(1)), // &mut p.b
+                        Bytecode::StLoc(2),                            // ref_b = ...
+                        // a = *ref_a
+                        Bytecode::CopyLoc(1), // push ref_a
+                        Bytecode::ReadRef,    // *ref_a
+                        Bytecode::StLoc(3),   // a = ...
+                        // b = *ref_b
+                        Bytecode::CopyLoc(2), // push ref_b
+                        Bytecode::ReadRef,    // *ref_b
+                        Bytecode::StLoc(4),   // b = ...
+                        // *ref_a = b  (WriteRef pops ref from top, value from below)
+                        Bytecode::CopyLoc(4), // push b (value)
+                        Bytecode::MoveLoc(1), // push ref_a (ref)
+                        Bytecode::WriteRef,   // *ref_a = b
+                        // *ref_b = a
+                        Bytecode::CopyLoc(3), // push a (value)
+                        Bytecode::MoveLoc(2), // push ref_b (ref)
+                        Bytecode::WriteRef,   // *ref_b = a
+                        // return a + b
+                        Bytecode::CopyLoc(3), // push a
+                        Bytecode::CopyLoc(4), // push b
+                        Bytecode::Add,        // a + b
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // test_refs(x: u64, y: u64): u64
+            // params: [x: u64, y: u64]
+            // locals: [pair: Pair, ref_pair: &mut Pair, result: u64]
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(4), // [Pair, &mut Pair, u64]
+                    code: vec![
+                        // pair = Pair { x, y }
+                        Bytecode::CopyLoc(0),                     // push x
+                        Bytecode::CopyLoc(1),                     // push y
+                        Bytecode::Pack(StructDefinitionIndex(0)), // pack Pair
+                        Bytecode::StLoc(2),                       // pair = ...
+                        // ref_pair = &mut pair
+                        Bytecode::MutBorrowLoc(2), // &mut pair
+                        Bytecode::StLoc(3),        // ref_pair = ...
+                        // result = swap_and_sum(ref_pair)
+                        Bytecode::CopyLoc(3),                   // push ref_pair
+                        Bytecode::Call(FunctionHandleIndex(0)), // swap_and_sum(...)
+                        Bytecode::StLoc(4),                     // result = ...
+                        // return result
+                        Bytecode::MoveLoc(4), // push result
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            // 0: params for swap_and_sum: (&mut Pair)
+            Signature(vec![mut_pair_ref]),
+            // 1: return type: (u64)
+            Signature(vec![SignatureToken::U64]),
+            // 2: params for test_refs: (u64, u64)
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]),
+            // 3: locals for swap_and_sum: [&mut u64, &mut u64, u64, u64, u64]
+            Signature(vec![
+                mut_u64_ref.clone(),
+                mut_u64_ref,
+                SignatureToken::U64,
+                SignatureToken::U64,
+                SignatureToken::U64,
+            ]),
+            // 4: locals for test_refs: [Pair, &mut Pair, u64]
+            Signature(vec![
+                pair_token,
+                SignatureToken::MutableReference(Box::new(SignatureToken::Datatype(
+                    DatatypeHandleIndex(0),
+                ))),
+                SignatureToken::U64,
+            ]),
+        ],
+        constant_pool: vec![],
+        metadata: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_ref_ops() {
+    let module = make_ref_module();
+    let asm = move_to_llvm::compile_module(&module).expect("ref compilation failed");
+
+    assert!(
+        asm.contains("swap_and_sum"),
+        "assembly should contain 'swap_and_sum'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("test_refs"),
+        "assembly should contain 'test_refs'\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_ref_round_trip() {
+    let module = make_ref_module();
+    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
+
+    let test_refs_offset = find_symbol_offset(&obj_path, "test_refs");
+
+    let code = extract_text_section(&obj_path);
+    let exec = ExecutableCode::load(&code);
+
+    type TestFn = unsafe extern "C" fn(u64, u64) -> u64;
+    let f: TestFn = unsafe { exec.as_fn_at(test_refs_offset as usize) };
+
+    // swap_and_sum swaps a,b and returns a+b — sum is invariant under swap
+    assert_eq!(unsafe { f(3, 7) }, 10, "test_refs(3, 7) should be 10");
+    assert_eq!(unsafe { f(0, 0) }, 0, "test_refs(0, 0) should be 0");
+    assert_eq!(
+        unsafe { f(100, 200) },
+        300,
+        "test_refs(100, 200) should be 300"
+    );
+}

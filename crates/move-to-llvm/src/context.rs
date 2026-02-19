@@ -1,10 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::IntType;
+use inkwell::types::{IntType, PointerType};
 
 /// Wraps the LLVM Context, Module, and Builder for a single compilation unit.
 pub struct LlvmContext<'ctx> {
@@ -18,6 +19,7 @@ pub struct LlvmContext<'ctx> {
     pub i64_type: IntType<'ctx>,
     pub i128_type: IntType<'ctx>,
     pub i256_type: IntType<'ctx>,
+    pub ptr_type: PointerType<'ctx>,
 }
 
 impl<'ctx> LlvmContext<'ctx> {
@@ -35,6 +37,7 @@ impl<'ctx> LlvmContext<'ctx> {
             i64_type: context.i64_type(),
             i128_type: context.i128_type(),
             i256_type: context.custom_width_int_type(256),
+            ptr_type: context.ptr_type(AddressSpace::default()),
         }
     }
 }
