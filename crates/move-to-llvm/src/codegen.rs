@@ -76,6 +76,10 @@ pub fn emit_assembly(module: &Module<'_>) -> Result<String, CompileError> {
 /// so that instrumenter and the runtime can find functions by their
 /// Move names. On Linux, adds underscore-prefixed aliases for the same
 /// cross-platform compatibility.
+///
+/// Also strips `.subsections_via_symbols` — Mach-O's dead-stripping directive
+/// that prevents the assembler from encoding `tbz`/`tbnz` branch-to-label
+/// (the assembler can't guarantee range when subsections may be reordered).
 pub fn add_symbol_aliases(asm: &str) -> String {
     let mut output = String::with_capacity(asm.len());
     let mut global_names: Vec<&str> = Vec::new();
@@ -91,7 +95,14 @@ pub fn add_symbol_aliases(asm: &str) -> String {
         }
     }
 
-    output.push_str(asm);
+    // Strip .subsections_via_symbols to allow tbz/tbnz with local labels
+    for line in asm.lines() {
+        if line.trim() == ".subsections_via_symbols" {
+            continue;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
 
     if !global_names.is_empty() {
         output.push('\n');

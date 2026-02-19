@@ -22,10 +22,8 @@ move-stackless-bytecode.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-instrumenter.workspace = true
+libc = "0.2"
 move-binary-format.workspace = true
 move-core-types.workspace = true
 object = "0.38"
-runtime = { path = "../runtime" }
 tempfile.workspace = true
-verifier = { path = "../verifier" }

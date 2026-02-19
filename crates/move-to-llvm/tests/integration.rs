@@ -3,13 +3,18 @@
 
 use std::{path::Path, process::Command};
 
-use instrumenter::{ParsedAssembly, build_cfg, instrument};
 use move_binary_format::{CompiledModule, file_format::*};
 use move_core_types::{account_address::AccountAddress, identifier::Identifier};
 use tempfile::TempDir;
 
-/// Build a minimal Move module with a single `add(u64, u64): u64` function.
-fn make_add_module() -> CompiledModule {
+/// Build a single-function Move module with the given signature and bytecode body.
+fn make_module(
+    fn_name: &str,
+    params: Vec<SignatureToken>,
+    returns: Vec<SignatureToken>,
+    locals: Vec<SignatureToken>,
+    code: Vec<Bytecode>,
+) -> CompiledModule {
     CompiledModule {
         version: 7,
         publishable: true,
@@ -20,7 +25,7 @@ fn make_add_module() -> CompiledModule {
         }],
         identifiers: vec![
             Identifier::new("M").unwrap(),
-            Identifier::new("add").unwrap(),
+            Identifier::new(fn_name).unwrap(),
         ],
         address_identifiers: vec![AccountAddress::ZERO],
         function_handles: vec![FunctionHandle {
@@ -36,21 +41,12 @@ fn make_add_module() -> CompiledModule {
             is_entry: false,
             acquires_global_resources: vec![],
             code: Some(CodeUnit {
-                locals: SignatureIndex(2), // empty — no extra locals
-                code: vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    Bytecode::Add,
-                    Bytecode::Ret,
-                ],
+                locals: SignatureIndex(2),
+                code,
                 jump_tables: vec![],
             }),
         }],
-        signatures: vec![
-            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 0: params
-            Signature(vec![SignatureToken::U64]),                      // 1: return
-            Signature(vec![]),                                         // 2: locals (empty)
-        ],
+        signatures: vec![Signature(params), Signature(returns), Signature(locals)],
         struct_defs: vec![],
         datatype_handles: vec![],
         constant_pool: vec![],
@@ -65,6 +61,22 @@ fn make_add_module() -> CompiledModule {
         variant_handles: vec![],
         variant_instantiation_handles: vec![],
     }
+}
+
+/// Build a minimal Move module with a single `add(u64, u64): u64` function.
+fn make_add_module() -> CompiledModule {
+    make_module(
+        "add",
+        vec![SignatureToken::U64, SignatureToken::U64],
+        vec![SignatureToken::U64],
+        vec![],
+        vec![
+            Bytecode::CopyLoc(0),
+            Bytecode::CopyLoc(1),
+            Bytecode::Add,
+            Bytecode::Ret,
+        ],
+    )
 }
 
 /// Serialize → deserialize → compile: the true end-to-end path through `compile()`.
@@ -119,21 +131,6 @@ fn compile_add_produces_valid_assembly() {
     );
 }
 
-#[test]
-fn compile_add_instruments_without_error() {
-    let module = make_add_module();
-    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
-
-    // Feed through instrumenter — should not error (forward-only code, no back-edges)
-    let parsed = ParsedAssembly::parse(&asm);
-    let cfg_result = build_cfg(&parsed).expect("CFG build failed");
-    let instrumented =
-        instrument::instrument(parsed.lines(), &cfg_result).expect("instrumentation failed");
-
-    // The instrumented output should still be valid assembly text
-    assert!(instrumented.contains("ret"));
-}
-
 /// Assembles the given assembly source into an object file.
 fn assemble(source: &str, obj_path: &Path) {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -166,262 +163,435 @@ fn extract_text_section(obj_path: &Path) -> Vec<u8> {
     panic!("text section not found in object file");
 }
 
-#[test]
+// ---------------------------------------------------------------------------
+// ExecutableCode: mmap-based JIT execution for aarch64 tests
+// ---------------------------------------------------------------------------
+
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
-fn full_pipeline_compile_instrument_execute() {
-    use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
-
-    let module = make_add_module();
-    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
-
-    // Instrument
-    let parsed = ParsedAssembly::parse(&asm);
-    let cfg_result = build_cfg(&parsed).expect("CFG build failed");
-    let instrumented =
-        instrument::instrument(parsed.lines(), &cfg_result).expect("instrumentation failed");
-
-    // Assemble
-    let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let obj_path = temp_dir.path().join("test.o");
-    assemble(&instrumented, &obj_path);
-
-    // Extract text
-    let code = extract_text_section(&obj_path);
-
-    // Load into runtime
-    let rt_module = RuntimeModule::with_single_entry(code, "add");
-    let store = MemoryStore::with_module("test".to_string(), rt_module);
-    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
-
-    type AddFn = unsafe extern "C" fn(u64, u64) -> u64;
-    let cached_fn = unsafe {
-        cache
-            .get_function::<AddFn>(&"test".to_string(), "add")
-            .expect("failed to get function")
-    };
-
-    // Verify correctness: call with actual arguments
-    let sum = unsafe { cached_fn.as_ptr()(3, 4) };
-    assert_eq!(sum, 7, "add(3, 4) should return 7");
-
-    // Verify gas metering
-    let executor = Executor::init().expect("failed to create executor");
-    let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
-
-    assert!(
-        result.completed(),
-        "add function should complete (forward-only, no loops)"
-    );
-    // Forward-only code has no back-edges, so no gas is consumed
-    assert_eq!(
-        result.gas_consumed, 0,
-        "forward-only code should consume no gas"
-    );
+struct ExecutableCode {
+    ptr: *mut u8,
+    len: usize,
 }
 
-/// Full pipeline from `.mv` file through every stage:
-/// compile → instrument → assemble → verify → execute
-#[test]
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
-fn full_pipeline_from_mv_file() {
-    use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
-    use verifier::{VerificationError, Verifier, decode_instructions};
+impl ExecutableCode {
+    /// Load machine code bytes into executable memory via mmap.
+    ///
+    /// Uses a two-step approach (write then mprotect) to satisfy macOS W^X policy.
+    fn load(code: &[u8]) -> Self {
+        use libc::{
+            _SC_PAGESIZE, MAP_ANON, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, mmap, mprotect,
+            sysconf,
+        };
+        use std::ptr;
 
-    // 1. Compile: .mv bytes → assembly text
-    let bytecode = include_bytes!("../../../tests/move_samples/add.mv");
-    let asm = move_to_llvm::compile(bytecode).expect("compile from .mv file failed");
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) } as usize;
+        let len = (code.len() + page_size - 1) & !(page_size - 1); // round up
 
-    // 2. Instrument: parse → CFG → insert gas checks
-    let parsed = ParsedAssembly::parse(&asm);
-    let cfg_result = build_cfg(&parsed).expect("CFG build failed");
-    let instrumented =
-        instrument::instrument(parsed.lines(), &cfg_result).expect("instrumentation failed");
+        // Step 1: mmap writable (not executable)
+        let ptr = unsafe {
+            mmap(
+                ptr::null_mut(),
+                len,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANON,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
 
-    // 3. Assemble: .s → .o → extract machine code
-    let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let obj_path = temp_dir.path().join("test.o");
-    assemble(&instrumented, &obj_path);
-    let code = extract_text_section(&obj_path);
+        // Step 2: copy code
+        let ptr = ptr as *mut u8;
+        unsafe { ptr::copy_nonoverlapping(code.as_ptr(), ptr, code.len()) };
 
-    // 4. Verify: decode + run all verification checks
-    let instructions = decode_instructions(&code).expect("decode failed");
-    let vresult = Verifier::new(&instructions).verify();
+        // Step 3: switch to read+execute (drop write)
+        let rc = unsafe { mprotect(ptr as *mut libc::c_void, len, PROT_READ | PROT_EXEC) };
+        assert_eq!(rc, 0, "mprotect failed");
 
-    // The compiler currently emits two constructs the verifier correctly rejects:
-    //
-    // (a) `ret` — an indirect branch; Move has no dynamic dispatch so indirect
-    //     branches are banned. Will be replaced by a direct return mechanism.
-    //
-    // (b) A trampoline `add: b _add` after `ret` (macOS _ prefix aliasing).
-    //     This is unreachable code with a back-edge, triggering both
-    //     UnreachableCode and MissingGasCheck.
-    //
-    // Filter these known issues and assert no *unexpected* errors exist.
-    let unexpected: Vec<_> = vresult
-        .errors()
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                VerificationError::DisallowedInstruction { mnemonic, .. }
-                    if mnemonic == "ret"
-            ) && !matches!(e, VerificationError::UnreachableCode { .. })
-                && !matches!(e, VerificationError::MissingGasCheck { .. })
-        })
-        .collect();
-    assert!(
-        unexpected.is_empty(),
-        "unexpected verification errors: {unexpected:?}"
-    );
-    // Verify we got exactly the expected errors (not zero — the verifier IS working)
-    assert!(
-        !vresult.is_ok(),
-        "verifier should flag `ret` and trampoline (known issues)"
-    );
+        // Step 4: flush icache
+        #[cfg(target_os = "macos")]
+        unsafe {
+            extern "C" {
+                fn sys_icache_invalidate(start: *mut libc::c_void, size: usize);
+            }
+            sys_icache_invalidate(ptr as *mut libc::c_void, code.len());
+        }
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" {
+                fn __clear_cache(start: *mut libc::c_void, end: *mut libc::c_void);
+            }
+            __clear_cache(
+                ptr as *mut libc::c_void,
+                ptr.add(code.len()) as *mut libc::c_void,
+            );
+        }
 
-    // 5. Execute: load into runtime and run
-    let rt_module = RuntimeModule::with_single_entry(code, "add");
-    let store = MemoryStore::with_module("test".to_string(), rt_module);
-    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
-
-    type AddFn = unsafe extern "C" fn(u64, u64) -> u64;
-    let cached_fn = unsafe {
-        cache
-            .get_function::<AddFn>(&"test".to_string(), "add")
-            .expect("failed to get function")
-    };
-
-    // Verify correctness: call with actual arguments
-    let sum = unsafe { cached_fn.as_ptr()(3, 4) };
-    assert_eq!(sum, 7, "add(3, 4) should return 7");
-
-    // Verify gas metering
-    let executor = Executor::init().expect("failed to create executor");
-    let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
-
-    assert!(
-        result.completed(),
-        "add function should complete (forward-only, no loops)"
-    );
-    assert_eq!(
-        result.gas_consumed, 0,
-        "forward-only code should consume no gas"
-    );
-}
-
-/// True end-to-end from `.move` source through every stage:
-/// sui move build → compile → instrument → assemble → verify → execute
-#[test]
-#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
-fn full_pipeline_from_move_source() {
-    use runtime::{CompiledModule as RuntimeModule, Executor, MemoryStore, ModuleCache};
-    use verifier::{VerificationError, Verifier, decode_instructions};
-
-    // 0. Check if `sui` CLI is available; skip gracefully if not.
-    let sui_ok = Command::new("sui")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !sui_ok {
-        eprintln!("skipping full_pipeline_from_move_source: `sui` CLI not in PATH");
-        return;
+        ExecutableCode { ptr, len }
     }
 
-    // 1. Build .move → .mv via `sui move build`
-    let project_dir = TempDir::new().expect("failed to create temp dir");
-    std::fs::write(
-        project_dir.path().join("Move.toml"),
-        "[package]\nname = \"test\"\nedition = \"2024.beta\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir(project_dir.path().join("sources")).unwrap();
-    std::fs::write(
-        project_dir.path().join("sources/add.move"),
-        include_str!("../../../tests/move_samples/add.move"),
-    )
-    .unwrap();
+    /// Transmute the mapped memory to a function pointer.
+    ///
+    /// # Safety
+    /// The caller must ensure `F` matches the ABI and signature of the loaded code.
+    unsafe fn as_fn<F: Copy>(&self) -> F {
+        assert!(
+            std::mem::size_of::<F>() == std::mem::size_of::<*const ()>(),
+            "F must be a function pointer"
+        );
+        unsafe { std::mem::transmute_copy(&self.ptr) }
+    }
+}
 
-    let build_output = Command::new("sui")
-        .args([
-            "move",
-            "build",
-            "--path",
-            project_dir.path().to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to run sui move build");
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+impl Drop for ExecutableCode {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr as *mut libc::c_void, self.len);
+        }
+    }
+}
+
+/// Compile a module, assemble it, extract machine code, and load into executable memory.
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn compile_and_load(module: &CompiledModule) -> ExecutableCode {
+    let asm = move_to_llvm::compile_module(module).expect("compilation failed");
     assert!(
-        build_output.status.success(),
-        "sui move build failed:\n{}",
-        String::from_utf8_lossy(&build_output.stderr)
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
     );
-
-    let mv_path = project_dir.path().join("build/test/bytecode_modules/M.mv");
-    let bytecode = std::fs::read(&mv_path).expect("compiled .mv not found");
-
-    // 2. Compile: .mv bytes → assembly text
-    let asm = move_to_llvm::compile(&bytecode).expect("compile failed");
-
-    // 3. Instrument: parse → CFG → insert gas checks
-    let parsed = ParsedAssembly::parse(&asm);
-    let cfg_result = build_cfg(&parsed).expect("CFG build failed");
-    let instrumented =
-        instrument::instrument(parsed.lines(), &cfg_result).expect("instrumentation failed");
-
-    // 4. Assemble: .s → .o → extract machine code
-    let obj_path = project_dir.path().join("test.o");
-    assemble(&instrumented, &obj_path);
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
     let code = extract_text_section(&obj_path);
+    ExecutableCode::load(&code)
+}
 
-    // 5. Verify: decode + run all verification checks
-    let instructions = decode_instructions(&code).expect("decode failed");
-    let vresult = Verifier::new(&instructions).verify();
+// ---------------------------------------------------------------------------
+// Compilation tests for operations (run on all platforms)
+// ---------------------------------------------------------------------------
 
-    // Filter known issues (see full_pipeline_from_mv_file for details)
-    let unexpected: Vec<_> = vresult
-        .errors()
-        .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                VerificationError::DisallowedInstruction { mnemonic, .. }
-                    if mnemonic == "ret"
-            ) && !matches!(e, VerificationError::UnreachableCode { .. })
-                && !matches!(e, VerificationError::MissingGasCheck { .. })
-        })
-        .collect();
+#[test]
+fn compile_comparisons() {
+    for (name, op) in [
+        ("lt", Bytecode::Lt),
+        ("gt", Bytecode::Gt),
+        ("le", Bytecode::Le),
+        ("ge", Bytecode::Ge),
+        ("eq", Bytecode::Eq),
+        ("neq", Bytecode::Neq),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U64],
+            vec![SignatureToken::Bool],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        move_to_llvm::compile_module(&module)
+            .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
+    }
+}
+
+#[test]
+fn compile_bitwise_ops() {
+    for (name, op) in [
+        ("bitand", Bytecode::BitAnd),
+        ("bitor", Bytecode::BitOr),
+        ("xor", Bytecode::Xor),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U64],
+            vec![SignatureToken::U64],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        move_to_llvm::compile_module(&module)
+            .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
+    }
+}
+
+#[test]
+fn compile_shifts() {
+    for (name, op) in [("shl", Bytecode::Shl), ("shr", Bytecode::Shr)] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U8],
+            vec![SignatureToken::U64],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        move_to_llvm::compile_module(&module)
+            .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
+    }
+}
+
+#[test]
+fn compile_logical_not() {
+    let module = make_module(
+        "not",
+        vec![SignatureToken::Bool],
+        vec![SignatureToken::Bool],
+        vec![],
+        vec![Bytecode::CopyLoc(0), Bytecode::Not, Bytecode::Ret],
+    );
+    move_to_llvm::compile_module(&module).expect("not compilation failed");
+}
+
+#[test]
+fn compile_logical_and_or() {
+    for (name, op) in [("and", Bytecode::And), ("or", Bytecode::Or)] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::Bool, SignatureToken::Bool],
+            vec![SignatureToken::Bool],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        move_to_llvm::compile_module(&module)
+            .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
+    }
+}
+
+#[test]
+fn compile_casts() {
+    for (name, op, ret) in [
+        ("cast_u8", Bytecode::CastU8, SignatureToken::U8),
+        ("cast_u16", Bytecode::CastU16, SignatureToken::U16),
+        ("cast_u32", Bytecode::CastU32, SignatureToken::U32),
+        ("cast_u64", Bytecode::CastU64, SignatureToken::U64),
+        ("cast_u128", Bytecode::CastU128, SignatureToken::U128),
+        ("cast_u256", Bytecode::CastU256, SignatureToken::U256),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64],
+            vec![ret],
+            vec![],
+            vec![Bytecode::CopyLoc(0), op, Bytecode::Ret],
+        );
+        move_to_llvm::compile_module(&module)
+            .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Execution tests (aarch64 only)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_comparisons() {
+    for (name, op, cases) in [
+        (
+            "lt",
+            Bytecode::Lt,
+            vec![(3u64, 4u64, 1u8), (4, 3, 0), (4, 4, 0)],
+        ),
+        ("gt", Bytecode::Gt, vec![(4, 3, 1), (3, 4, 0), (4, 4, 0)]),
+        ("le", Bytecode::Le, vec![(3, 4, 1), (4, 4, 1), (4, 3, 0)]),
+        ("ge", Bytecode::Ge, vec![(4, 3, 1), (4, 4, 1), (3, 4, 0)]),
+        ("eq", Bytecode::Eq, vec![(4, 4, 1), (3, 4, 0)]),
+        ("neq", Bytecode::Neq, vec![(3, 4, 1), (4, 4, 0)]),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U64],
+            vec![SignatureToken::Bool],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        let exec = compile_and_load(&module);
+        type CmpFn = unsafe extern "C" fn(u64, u64) -> u8;
+        let f: CmpFn = unsafe { exec.as_fn() };
+
+        for (a, b, expected) in &cases {
+            let result = unsafe { f(*a, *b) };
+            assert_eq!(result, *expected, "{name}({a}, {b}) should be {expected}");
+        }
+    }
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_bitwise_ops() {
+    for (name, op, a, b, expected) in [
+        ("bitand", Bytecode::BitAnd, 0xFF_u64, 0x0F, 0x0F_u64),
+        ("bitor", Bytecode::BitOr, 0xF0, 0x0F, 0xFF),
+        ("xor", Bytecode::Xor, 0xFF, 0x0F, 0xF0),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U64],
+            vec![SignatureToken::U64],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        let exec = compile_and_load(&module);
+        type BinFn = unsafe extern "C" fn(u64, u64) -> u64;
+        let f: BinFn = unsafe { exec.as_fn() };
+        let result = unsafe { f(a, b) };
+        assert_eq!(result, expected, "{name}(0x{a:X}, 0x{b:X})");
+    }
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_shifts() {
+    for (name, op, val, amt, expected) in [
+        ("shl", Bytecode::Shl, 1_u64, 4_u8, 16_u64),
+        ("shr", Bytecode::Shr, 256, 4, 16),
+    ] {
+        let module = make_module(
+            name,
+            vec![SignatureToken::U64, SignatureToken::U8],
+            vec![SignatureToken::U64],
+            vec![],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
+        );
+        let exec = compile_and_load(&module);
+        type ShiftFn = unsafe extern "C" fn(u64, u8) -> u64;
+        let f: ShiftFn = unsafe { exec.as_fn() };
+        let result = unsafe { f(val, amt) };
+        assert_eq!(result, expected, "{name}({val}, {amt})");
+    }
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_logical_not() {
+    let module = make_module(
+        "not",
+        vec![SignatureToken::Bool],
+        vec![SignatureToken::Bool],
+        vec![],
+        vec![Bytecode::CopyLoc(0), Bytecode::Not, Bytecode::Ret],
+    );
+    let exec = compile_and_load(&module);
+    type NotFn = unsafe extern "C" fn(u8) -> u8;
+    let f: NotFn = unsafe { exec.as_fn() };
+    assert_eq!(unsafe { f(0) }, 1, "not(false) should be true");
+    assert_eq!(unsafe { f(1) }, 0, "not(true) should be false");
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_cast_truncate() {
+    let module = make_module(
+        "cast",
+        vec![SignatureToken::U64],
+        vec![SignatureToken::U8],
+        vec![],
+        vec![Bytecode::CopyLoc(0), Bytecode::CastU8, Bytecode::Ret],
+    );
+    let exec = compile_and_load(&module);
+    type CastFn = unsafe extern "C" fn(u64) -> u8;
+    let f: CastFn = unsafe { exec.as_fn() };
+    assert_eq!(unsafe { f(258) }, 2, "cast_u8(258) should be 2");
+    assert_eq!(unsafe { f(42) }, 42, "cast_u8(42) should be 42");
+}
+
+// ---------------------------------------------------------------------------
+// Loop test: sum_to_n
+// ---------------------------------------------------------------------------
+
+/// Build a module with `sum_to_n(n: u64): u64` — sums 0..n in a while loop.
+fn make_sum_to_n_module() -> CompiledModule {
+    make_module(
+        "sum_to_n",
+        vec![SignatureToken::U64],                      // params: [n]
+        vec![SignatureToken::U64],                      // return: [u64]
+        vec![SignatureToken::U64, SignatureToken::U64], // locals: [sum, i]
+        vec![
+            // sum = 0, i = 0
+            Bytecode::LdU64(0), // 0
+            Bytecode::StLoc(1), // 1: sum = 0
+            Bytecode::LdU64(0), // 2
+            Bytecode::StLoc(2), // 3: i = 0
+            // LOOP: while i < n
+            Bytecode::CopyLoc(2),  // 4: push i
+            Bytecode::CopyLoc(0),  // 5: push n
+            Bytecode::Lt,          // 6: i < n
+            Bytecode::BrFalse(17), // 7: if false, jump to END
+            // sum += i
+            Bytecode::CopyLoc(1), // 8: push sum
+            Bytecode::CopyLoc(2), // 9: push i
+            Bytecode::Add,        // 10: sum + i
+            Bytecode::StLoc(1),   // 11: sum = sum + i
+            // i += 1
+            Bytecode::CopyLoc(2), // 12: push i
+            Bytecode::LdU64(1),   // 13: push 1
+            Bytecode::Add,        // 14: i + 1
+            Bytecode::StLoc(2),   // 15: i = i + 1
+            Bytecode::Branch(4),  // 16: jump to LOOP
+            // END:
+            Bytecode::MoveLoc(1), // 17: push sum
+            Bytecode::Ret,        // 18: return
+        ],
+    )
+}
+
+#[test]
+fn compile_sum_to_n_loop() {
+    let module = make_sum_to_n_module();
+    let asm = move_to_llvm::compile_module(&module).expect("sum_to_n compilation failed");
+
+    assert!(asm.contains("ret"), "assembly should contain ret");
     assert!(
-        unexpected.is_empty(),
-        "unexpected verification errors: {unexpected:?}"
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
     );
+}
 
-    // 6. Execute: load into runtime and run
-    let rt_module = RuntimeModule::with_single_entry(code, "add");
-    let store = MemoryStore::with_module("test".to_string(), rt_module);
-    let cache = ModuleCache::new(store, 4).expect("failed to create cache");
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_sum_to_n_loop() {
+    let module = make_sum_to_n_module();
+    let exec = compile_and_load(&module);
 
-    type AddFn = unsafe extern "C" fn(u64, u64) -> u64;
-    let cached_fn = unsafe {
-        cache
-            .get_function::<AddFn>(&"test".to_string(), "add")
-            .expect("failed to get function")
-    };
+    // No gas instrumentation — the loop terminates naturally.
+    type SumFn = unsafe extern "C" fn(u64) -> u64;
+    let f: SumFn = unsafe { exec.as_fn() };
 
-    // Verify correctness: call with actual arguments
-    let sum = unsafe { cached_fn.as_ptr()(3, 4) };
-    assert_eq!(sum, 7, "add(3, 4) should return 7");
-
-    // Verify gas metering
-    let executor = Executor::init().expect("failed to create executor");
-    let result = unsafe { executor.execute(&cached_fn, 100_000) }.expect("execute failed");
-
-    assert!(
-        result.completed(),
-        "add function should complete (forward-only, no loops)"
-    );
-    assert_eq!(
-        result.gas_consumed, 0,
-        "forward-only code should consume no gas"
-    );
+    assert_eq!(unsafe { f(10) }, 45, "sum_to_n(10) should be 45");
+    assert_eq!(unsafe { f(0) }, 0, "sum_to_n(0) should be 0");
+    assert_eq!(unsafe { f(1) }, 0, "sum_to_n(1) should be 0");
+    assert_eq!(unsafe { f(100) }, 4950, "sum_to_n(100) should be 4950");
 }

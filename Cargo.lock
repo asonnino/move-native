@@ -1484,16 +1484,14 @@ name = "move-to-llvm"
 version = "0.1.0"
 dependencies = [
  "inkwell",
- "instrumenter",
+ "libc",
  "move-binary-format",
  "move-core-types",
  "move-model",
  "move-stackless-bytecode",
  "object 0.38.1",
- "runtime",
  "tempfile",
  "thiserror 2.0.18",
- "verifier",
 ]
 
 [[package]]
