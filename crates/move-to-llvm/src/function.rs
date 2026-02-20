@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
+use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use move_model::model::FunctionEnv;
@@ -13,9 +14,11 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{
     AssignKind, Bytecode, Constant, Label, Operation,
 };
+use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use crate::context::LlvmContext;
 use crate::error::CompileError;
+use crate::mangle::{mangle_native_symbol, mangle_type_args};
 use crate::types::lower_model_type;
 
 /// A single local variable (param, local, or compiler-generated temp).
@@ -45,6 +48,8 @@ struct FunctionLowering<'a, 'ctx> {
     locals: Vec<Local<'ctx>>,
     /// Pre-created basic blocks for each Label in the bytecode.
     label_blocks: BTreeMap<Label, BasicBlock<'ctx>>,
+    /// Concrete types for the function's type parameters (empty for non-generic).
+    type_params: Vec<Type>,
 }
 
 impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
@@ -54,6 +59,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         function: FunctionValue<'ctx>,
         param_count: usize,
         func_data: &FunctionData,
+        type_params: Vec<Type>,
     ) -> Result<Self, CompileError> {
         let entry = ctx.context.append_basic_block(function, "entry");
         ctx.builder.position_at_end(entry);
@@ -61,10 +67,15 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         // Allocas for all locals
         let mut locals = Vec::with_capacity(func_data.local_types.len());
         for (i, mty) in func_data.local_types.iter().enumerate() {
-            let llvm_ty = lower_model_type(ctx, env, mty)?;
+            let mty = if type_params.is_empty() {
+                mty.clone()
+            } else {
+                mty.instantiate(&type_params)
+            };
+            let llvm_ty = lower_model_type(ctx, env, &mty)?;
             let alloca = ctx.builder.build_alloca(llvm_ty, &format!("t{i}")).unwrap();
             locals.push(Local {
-                mty: mty.clone(),
+                mty,
                 llvm_ty,
                 alloca,
             });
@@ -92,7 +103,21 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             env,
             locals,
             label_blocks,
+            type_params,
         })
+    }
+
+    /// Instantiate type_args through the current function's type parameters.
+    /// Returns the args unchanged for non-generic functions.
+    fn inst_types(&self, types: &[Type]) -> Vec<Type> {
+        if self.type_params.is_empty() {
+            types.to_vec()
+        } else {
+            types
+                .iter()
+                .map(|t| t.instantiate(&self.type_params))
+                .collect()
+        }
     }
 
     fn lower_code(&mut self, func_data: &FunctionData) -> Result<(), CompileError> {
@@ -359,18 +384,121 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
             // Function call: resolve callee and emit LLVM call
             Operation::Function(module_id, fun_id, type_args) => {
-                if !type_args.is_empty() {
-                    return Err(CompileError::UnsupportedOperation(
-                        "generic function calls not yet supported".to_string(),
-                    ));
-                }
                 let callee_env = self.env.get_module(*module_id).into_function(*fun_id);
-                let callee_name = callee_env.get_name_str();
-                let callee_fn = self.ctx.module.get_function(&callee_name).ok_or_else(|| {
-                    CompileError::UnsupportedOperation(format!(
-                        "callee not found (cross-module?): {callee_name}"
-                    ))
-                })?;
+
+                let (callee_fn, call_name) = if callee_env.is_native() {
+                    // Native function: declare as extern with monomorphized symbol
+                    let mangled = mangle_native_symbol(self.env, &callee_env, type_args);
+                    let f = match self.ctx.module.get_function(&mangled) {
+                        Some(f) => f,
+                        None => {
+                            let param_types: Vec<_> = callee_env
+                                .get_parameter_types()
+                                .iter()
+                                .map(|t| t.instantiate(type_args))
+                                .map(|t| {
+                                    lower_model_type(self.ctx, self.env, &t).map(|lt| lt.into())
+                                })
+                                .collect::<Result<_, _>>()?;
+                            let ret_types: Vec<Type> = callee_env
+                                .get_return_types()
+                                .iter()
+                                .map(|t| t.instantiate(type_args))
+                                .collect();
+                            let fn_type = if ret_types.is_empty() {
+                                self.ctx.context.void_type().fn_type(&param_types, false)
+                            } else {
+                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
+                                ret.fn_type(&param_types, false)
+                            };
+                            self.ctx
+                                .module
+                                .add_function(&mangled, fn_type, Some(Linkage::External))
+                        }
+                    };
+                    (f, mangled)
+                } else if !type_args.is_empty() {
+                    // Monomorphize: compile a specialized copy of the callee
+                    // with TypeParameters replaced by concrete types.
+                    let inst_args = self.inst_types(type_args);
+                    let callee_name = callee_env.get_name_str();
+                    let mangled =
+                        format!("{}${}", callee_name, mangle_type_args(self.env, &inst_args));
+                    let f = match self.ctx.module.get_function(&mangled) {
+                        Some(f) => f,
+                        None => {
+                            let param_types: Vec<_> = callee_env
+                                .get_parameter_types()
+                                .iter()
+                                .map(|t| t.instantiate(&inst_args))
+                                .map(|t| {
+                                    lower_model_type(self.ctx, self.env, &t).map(|lt| lt.into())
+                                })
+                                .collect::<Result<_, _>>()?;
+                            let ret_types: Vec<Type> = callee_env
+                                .get_return_types()
+                                .iter()
+                                .map(|t| t.instantiate(&inst_args))
+                                .collect();
+                            let fn_type = if ret_types.is_empty() {
+                                self.ctx.context.void_type().fn_type(&param_types, false)
+                            } else {
+                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
+                                ret.fn_type(&param_types, false)
+                            };
+                            let function = self.ctx.module.add_function(&mangled, fn_type, None);
+
+                            let saved_block = self.ctx.builder.get_insert_block().unwrap();
+
+                            let generator = StacklessBytecodeGenerator::new(&callee_env);
+                            let func_data = generator.generate_function();
+                            let param_count = callee_env.get_parameter_count();
+                            let mut callee_lowering = FunctionLowering::new(
+                                self.ctx,
+                                self.env,
+                                function,
+                                param_count,
+                                &func_data,
+                                inst_args,
+                            )?;
+                            callee_lowering.lower_code(&func_data)?;
+
+                            self.ctx.builder.position_at_end(saved_block);
+                            function
+                        }
+                    };
+                    (f, mangled)
+                } else {
+                    // Non-generic, non-native: look up in current LLVM module first
+                    // (intra-module calls declared in pass 1), then fall back to an
+                    // extern declaration for cross-module calls resolved at link time.
+                    let callee_name = callee_env.get_name_str();
+                    let f = match self.ctx.module.get_function(&callee_name) {
+                        Some(f) => f,
+                        None => {
+                            let param_types: Vec<_> = callee_env
+                                .get_parameter_types()
+                                .iter()
+                                .map(|t| {
+                                    lower_model_type(self.ctx, self.env, t).map(|lt| lt.into())
+                                })
+                                .collect::<Result<_, _>>()?;
+                            let ret_types = callee_env.get_return_types();
+                            let fn_type = if ret_types.is_empty() {
+                                self.ctx.context.void_type().fn_type(&param_types, false)
+                            } else {
+                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
+                                ret.fn_type(&param_types, false)
+                            };
+                            self.ctx.module.add_function(
+                                &callee_name,
+                                fn_type,
+                                Some(Linkage::External),
+                            )
+                        }
+                    };
+                    (f, callee_name)
+                };
 
                 let args: Vec<_> = srcs
                     .iter()
@@ -380,7 +508,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                 let call = self
                     .ctx
                     .builder
-                    .build_call(callee_fn, &args, &callee_name)
+                    .build_call(callee_fn, &args, &call_name)
                     .unwrap();
 
                 if !dsts.is_empty() {
@@ -395,13 +523,9 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
             // Pack: construct a struct from field values
             Operation::Pack(mid, did, type_args) => {
-                if !type_args.is_empty() {
-                    return Err(CompileError::UnsupportedOperation(
-                        "generic Pack not yet supported".to_string(),
-                    ));
-                }
+                let type_args = self.inst_types(type_args);
                 let struct_ty =
-                    lower_model_type(self.ctx, self.env, &Type::Datatype(*mid, *did, vec![]))?
+                    lower_model_type(self.ctx, self.env, &Type::Datatype(*mid, *did, type_args))?
                         .into_struct_type();
                 let mut agg = struct_ty.get_undef();
                 for (i, src) in srcs.iter().enumerate() {
@@ -418,12 +542,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             }
 
             // Unpack: destructure a struct into field values
-            Operation::Unpack(mid, did, type_args) => {
-                if !type_args.is_empty() {
-                    return Err(CompileError::UnsupportedOperation(
-                        "generic Unpack not yet supported".to_string(),
-                    ));
-                }
+            Operation::Unpack(mid, did, _type_args) => {
                 let struct_val = self.load_value(srcs[0])?.into_struct_value();
                 let struct_env = self.env.get_module(*mid).into_struct(*did);
                 let field_count = struct_env.get_fields().count();
@@ -448,14 +567,10 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
             // BorrowField: GEP into a struct through a reference → &Field
             Operation::BorrowField(mid, did, type_args, offset) => {
-                if !type_args.is_empty() {
-                    return Err(CompileError::UnsupportedOperation(
-                        "generic BorrowField not yet supported".to_string(),
-                    ));
-                }
                 let struct_ptr = self.load_value(srcs[0])?.into_pointer_value();
+                let type_args = self.inst_types(type_args);
                 let struct_ty =
-                    lower_model_type(self.ctx, self.env, &Type::Datatype(*mid, *did, vec![]))?;
+                    lower_model_type(self.ctx, self.env, &Type::Datatype(*mid, *did, type_args))?;
                 let field_ptr = self
                     .ctx
                     .builder
@@ -494,13 +609,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             }
 
             // GetField: extract a single field from a struct
-            Operation::GetField(mid, did, type_args, offset) => {
-                if !type_args.is_empty() {
-                    return Err(CompileError::UnsupportedOperation(
-                        "generic GetField not yet supported".to_string(),
-                    ));
-                }
-                let _ = (mid, did); // used only for type_args check
+            Operation::GetField(_mid, _did, _type_args, offset) => {
                 let struct_val = self.load_value(srcs[0])?.into_struct_value();
                 let field_val = self
                     .ctx
@@ -587,7 +696,8 @@ pub fn compile_function<'ctx>(
     func_data: &FunctionData,
 ) -> Result<(), CompileError> {
     let param_count = func_env.get_parameter_count();
-    let mut lowering = FunctionLowering::new(ctx, env, function, param_count, func_data)?;
+    let mut lowering =
+        FunctionLowering::new(ctx, env, function, param_count, func_data, Vec::new())?;
     lowering.lower_code(func_data)?;
     Ok(())
 }

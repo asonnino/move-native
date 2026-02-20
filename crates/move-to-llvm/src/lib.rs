@@ -5,6 +5,7 @@ pub mod codegen;
 pub mod context;
 pub mod error;
 pub mod function;
+pub mod mangle;
 pub mod types;
 
 use inkwell::context::Context;
@@ -29,17 +30,32 @@ pub fn compile(bytecode: &[u8]) -> Result<String, CompileError> {
 
 /// Compile an already-deserialized Move module to AArch64 assembly.
 pub fn compile_module(module: &CompiledModule) -> Result<String, CompileError> {
+    compile_module_with_deps(module, &[])
+}
+
+/// Compile a Move module to AArch64 assembly, with dependency modules visible
+/// for resolving cross-module (e.g. native) function signatures.
+///
+/// Dependencies are included in the model but only functions from the target
+/// module are compiled. Native functions in deps are declared as externs.
+pub fn compile_module_with_deps(
+    module: &CompiledModule,
+    deps: &[CompiledModule],
+) -> Result<String, CompileError> {
     let context = Context::create();
     let ctx = LlvmContext::new(&context, "move_module");
 
-    let env = move_model::run_bytecode_model_builder([module])
+    // Build model: deps first, then target module (last).
+    let all_modules: Vec<&CompiledModule> = deps.iter().chain(std::iter::once(module)).collect();
+    let env = move_model::run_bytecode_model_builder(all_modules)
         .map_err(|e| CompileError::ModelBuilder(e.to_string()))?;
 
-    // Collect all functions with their stackless bytecode data.
-    let funcs: Vec<_> = env
-        .get_modules()
-        .flat_map(|m| m.into_functions())
-        .filter(|f| !f.is_native())
+    // Only compile functions from the target module (the last one).
+    let target_module_env = env.get_modules().last().unwrap();
+
+    let funcs: Vec<_> = target_module_env
+        .into_functions()
+        .filter(|f| !f.is_native() && f.get_type_parameter_count() == 0)
         .map(|func_env| {
             let generator = StacklessBytecodeGenerator::new(&func_env);
             let func_data = generator.generate_function();

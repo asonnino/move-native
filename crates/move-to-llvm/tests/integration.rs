@@ -5,6 +5,8 @@ use std::{path::Path, process::Command};
 
 use move_binary_format::{CompiledModule, file_format::*};
 use move_core_types::{account_address::AccountAddress, identifier::Identifier};
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+use std::ffi::CString;
 use tempfile::TempDir;
 
 /// Build a single-function Move module with the given signature and bytecode body.
@@ -1260,5 +1262,779 @@ fn execute_ref_round_trip() {
         unsafe { f(100, 200) },
         300,
         "test_refs(100, 200) should be 300"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Vector / native function tests
+// ---------------------------------------------------------------------------
+
+/// Build a `0x1::vector` module stub with all native function declarations.
+fn make_vector_module_stub() -> CompiledModule {
+    let type_param = AbilitySet::EMPTY;
+
+    let t = SignatureToken::TypeParameter(0);
+    let vec_t = SignatureToken::Vector(Box::new(t.clone()));
+    let ref_vec_t = SignatureToken::Reference(Box::new(vec_t.clone()));
+    let mut_ref_vec_t = SignatureToken::MutableReference(Box::new(vec_t.clone()));
+    let ref_t = SignatureToken::Reference(Box::new(t.clone()));
+    let mut_ref_t = SignatureToken::MutableReference(Box::new(t.clone()));
+
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("vector").unwrap(),        // 0
+            Identifier::new("empty").unwrap(),         // 1
+            Identifier::new("length").unwrap(),        // 2
+            Identifier::new("push_back").unwrap(),     // 3
+            Identifier::new("pop_back").unwrap(),      // 4
+            Identifier::new("borrow").unwrap(),        // 5
+            Identifier::new("borrow_mut").unwrap(),    // 6
+            Identifier::new("swap").unwrap(),          // 7
+            Identifier::new("destroy_empty").unwrap(), // 8
+        ],
+        address_identifiers: vec![AccountAddress::ONE],
+        signatures: vec![
+            Signature(vec![]),                                 // 0: ()
+            Signature(vec![vec_t.clone()]),                    // 1: (vector<T>)
+            Signature(vec![mut_ref_vec_t.clone(), t.clone()]), // 2: (&mut vec<T>, T)
+            Signature(vec![t.clone()]),                        // 3: (T)
+            Signature(vec![ref_vec_t]),                        // 4: (&vector<T>)
+            Signature(vec![SignatureToken::U64]),              // 5: (u64)
+            Signature(vec![mut_ref_vec_t.clone()]),            // 6: (&mut vec<T>)
+            Signature(vec![
+                SignatureToken::Reference(Box::new(vec_t.clone())),
+                SignatureToken::U64,
+            ]), // 7: (&vec<T>, u64)
+            Signature(vec![ref_t]),                            // 8: (&T)
+            Signature(vec![mut_ref_vec_t.clone(), SignatureToken::U64]), // 9: (&mut vec<T>, u64)
+            Signature(vec![mut_ref_t]),                        // 10: (&mut T)
+            Signature(vec![
+                mut_ref_vec_t,
+                SignatureToken::U64,
+                SignatureToken::U64,
+            ]), // 11: (&mut vec<T>, u64, u64)
+        ],
+        function_handles: vec![
+            // 0: empty<T>(): vector<T>
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(1),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![type_param],
+            },
+            // 1: length<T>(&vector<T>): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(4),
+                return_: SignatureIndex(5),
+                type_parameters: vec![type_param],
+            },
+            // 2: push_back<T>(&mut vector<T>, T): void
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(3),
+                parameters: SignatureIndex(2),
+                return_: SignatureIndex(0),
+                type_parameters: vec![type_param],
+            },
+            // 3: pop_back<T>(&mut vector<T>): T
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(4),
+                parameters: SignatureIndex(6),
+                return_: SignatureIndex(3),
+                type_parameters: vec![type_param],
+            },
+            // 4: borrow<T>(&vector<T>, u64): &T
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(5),
+                parameters: SignatureIndex(7),
+                return_: SignatureIndex(8),
+                type_parameters: vec![type_param],
+            },
+            // 5: borrow_mut<T>(&mut vector<T>, u64): &mut T
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(6),
+                parameters: SignatureIndex(9),
+                return_: SignatureIndex(10),
+                type_parameters: vec![type_param],
+            },
+            // 6: swap<T>(&mut vector<T>, u64, u64): void
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(7),
+                parameters: SignatureIndex(11),
+                return_: SignatureIndex(0),
+                type_parameters: vec![type_param],
+            },
+            // 7: destroy_empty<T>(vector<T>): void
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(8),
+                parameters: SignatureIndex(1),
+                return_: SignatureIndex(0),
+                type_parameters: vec![type_param],
+            },
+        ],
+        function_defs: vec![
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(2),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(3),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(4),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(5),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(6),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+            FunctionDefinition {
+                function: FunctionHandleIndex(7),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: None,
+            },
+        ],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+/// Build a test module: `test_vec(a: u64, b: u64): u64`
+///
+/// Creates empty vector, pushes a and b, pops both, destroys empty, returns a + b.
+fn make_vec_test_module() -> CompiledModule {
+    // SignatureIndex(3) points to the element type [U64] for VecXxx bytecodes
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("test_vec").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        }],
+        function_defs: vec![FunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: SignatureIndex(2),
+                code: vec![
+                    // v = empty vector<u64>
+                    Bytecode::VecPack(SignatureIndex(3), 0),
+                    Bytecode::StLoc(2),
+                    // push_back(&mut v, a)
+                    Bytecode::MutBorrowLoc(2),
+                    Bytecode::CopyLoc(0),
+                    Bytecode::VecPushBack(SignatureIndex(3)),
+                    // push_back(&mut v, b)
+                    Bytecode::MutBorrowLoc(2),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::VecPushBack(SignatureIndex(3)),
+                    // y = pop_back(&mut v)  (pops b)
+                    Bytecode::MutBorrowLoc(2),
+                    Bytecode::VecPopBack(SignatureIndex(3)),
+                    Bytecode::StLoc(3),
+                    // x = pop_back(&mut v)  (pops a)
+                    Bytecode::MutBorrowLoc(2),
+                    Bytecode::VecPopBack(SignatureIndex(3)),
+                    Bytecode::StLoc(4),
+                    // destroy_empty(v)
+                    Bytecode::MoveLoc(2),
+                    Bytecode::VecUnpack(SignatureIndex(3), 0),
+                    // return x + y
+                    Bytecode::CopyLoc(4),
+                    Bytecode::CopyLoc(3),
+                    Bytecode::Add,
+                    Bytecode::Ret,
+                ],
+                jump_tables: vec![],
+            }),
+        }],
+        signatures: vec![
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 0: params
+            Signature(vec![SignatureToken::U64]),                      // 1: return
+            Signature(vec![
+                // 2: locals
+                SignatureToken::Vector(Box::new(SignatureToken::U64)),
+                SignatureToken::U64,
+                SignatureToken::U64,
+            ]),
+            Signature(vec![SignatureToken::U64]), // 3: element type for VecXxx
+        ],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_vec_ops() {
+    let vec_stub = make_vector_module_stub();
+    let test_module = make_vec_test_module();
+    let asm = move_to_llvm::compile_module_with_deps(&test_module, &[vec_stub])
+        .expect("vec ops compilation failed");
+
+    assert!(
+        asm.contains("__move_rt_0x1_vector_empty"),
+        "should call vector_empty\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_0x1_vector_push_back"),
+        "should call vector_push_back\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_0x1_vector_pop_back"),
+        "should call vector_pop_back\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_0x1_vector_destroy_empty"),
+        "should call vector_destroy_empty\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+/// Minimal C runtime implementing `0x1::vector` operations for u64.
+///
+/// Move's `&mut vector<T>` is a mutable reference: a pointer to the slot
+/// holding the vector pointer (ptr-to-ptr). So `push_back` and `pop_back`
+/// dereference `*vpp` to get the actual vector pointer. `empty` returns
+/// the vector pointer directly and `destroy_empty` takes it by value.
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+const VEC_RUNTIME_C: &str = r#"
+#include <stdlib.h>
+#include <stdint.h>
+
+typedef struct { uint64_t len; uint64_t cap; uint64_t* data; } Vec_u64;
+
+/* empty<u64>(): vector<u64>  — returns ptr by value */
+void* __move_rt_0x1_vector_empty$u64(void) {
+    Vec_u64* v = (Vec_u64*)malloc(sizeof(Vec_u64));
+    v->len = 0;
+    v->cap = 4;
+    v->data = (uint64_t*)malloc(4 * sizeof(uint64_t));
+    return v;
+}
+
+/* push_back<u64>(&mut vector<u64>, u64)  — first arg is ptr-to-ptr */
+void __move_rt_0x1_vector_push_back$u64(void** vpp, uint64_t val) {
+    Vec_u64* v = (Vec_u64*)*vpp;
+    if (v->len >= v->cap) {
+        v->cap *= 2;
+        v->data = (uint64_t*)realloc(v->data, v->cap * sizeof(uint64_t));
+    }
+    v->data[v->len++] = val;
+}
+
+/* pop_back<u64>(&mut vector<u64>): u64  — first arg is ptr-to-ptr */
+uint64_t __move_rt_0x1_vector_pop_back$u64(void** vpp) {
+    Vec_u64* v = (Vec_u64*)*vpp;
+    return v->data[--v->len];
+}
+
+/* destroy_empty<u64>(vector<u64>)  — takes ptr by value */
+void __move_rt_0x1_vector_destroy_empty$u64(void* vp) {
+    Vec_u64* v = (Vec_u64*)vp;
+    free(v->data);
+    free(v);
+}
+"#;
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_vec_round_trip() {
+    let vec_stub = make_vector_module_stub();
+    let test_module = make_vec_test_module();
+    let asm = move_to_llvm::compile_module_with_deps(&test_module, &[vec_stub])
+        .expect("vec ops compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let asm_path = temp_dir.path().join("move.s");
+    let runtime_path = temp_dir.path().join("runtime.c");
+    let dylib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let dylib_path = temp_dir.path().join(format!("test.{dylib_ext}"));
+
+    std::fs::write(&asm_path, &asm).expect("failed to write asm");
+    std::fs::write(&runtime_path, VEC_RUNTIME_C).expect("failed to write runtime");
+
+    let output = Command::new("cc")
+        .args([
+            "-shared",
+            "-o",
+            dylib_path.to_str().unwrap(),
+            asm_path.to_str().unwrap(),
+            runtime_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run cc");
+    assert!(
+        output.status.success(),
+        "cc failed to build shared library:\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    unsafe {
+        let lib_path = CString::new(dylib_path.to_str().unwrap()).unwrap();
+        let lib = libc::dlopen(lib_path.as_ptr(), libc::RTLD_NOW);
+        if lib.is_null() {
+            let err = std::ffi::CStr::from_ptr(libc::dlerror())
+                .to_str()
+                .unwrap_or("unknown error");
+            panic!("dlopen failed: {err}");
+        }
+
+        let sym_name = CString::new("test_vec").unwrap();
+        let sym = libc::dlsym(lib, sym_name.as_ptr());
+        if sym.is_null() {
+            let err = std::ffi::CStr::from_ptr(libc::dlerror())
+                .to_str()
+                .unwrap_or("unknown error");
+            libc::dlclose(lib);
+            panic!("dlsym failed: {err}");
+        }
+
+        let f: unsafe extern "C" fn(u64, u64) -> u64 = std::mem::transmute(sym);
+
+        assert_eq!(f(3, 7), 10, "test_vec(3, 7) should be 10");
+        assert_eq!(f(0, 0), 0, "test_vec(0, 0) should be 0");
+        assert_eq!(f(100, 200), 300, "test_vec(100, 200) should be 300");
+
+        libc::dlclose(lib);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-module function call tests
+// ---------------------------------------------------------------------------
+
+/// Build two modules for cross-module call testing:
+///   - `0x0::Dep`  with `double(x: u64): u64 { x + x }`
+///   - `0x0::Main` with `call_double(x: u64): u64 { Dep::double(x) }`
+fn make_cross_module_pair() -> (CompiledModule, CompiledModule) {
+    // --- Dep module: double(x: u64): u64 ---
+    let dep = make_module(
+        "double",
+        vec![SignatureToken::U64],
+        vec![SignatureToken::U64],
+        vec![],
+        vec![
+            Bytecode::CopyLoc(0),
+            Bytecode::CopyLoc(0),
+            Bytecode::Add,
+            Bytecode::Ret,
+        ],
+    );
+
+    // --- Main module: call_double(x: u64): u64 ---
+    // Must reference Dep's module handle and double's function handle.
+    let main = CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![
+            // 0: self (Main)
+            ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(0),
+            },
+            // 1: Dep
+            ModuleHandle {
+                address: AddressIdentifierIndex(0),
+                name: IdentifierIndex(1),
+            },
+        ],
+        identifiers: vec![
+            Identifier::new("Main").unwrap(),        // 0
+            Identifier::new("M").unwrap(),           // 1  (Dep's module name from make_module)
+            Identifier::new("call_double").unwrap(), // 2
+            Identifier::new("double").unwrap(),      // 3
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![
+            // 0: call_double (self)
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(0),
+                type_parameters: vec![],
+            },
+            // 1: double (from Dep)
+            FunctionHandle {
+                module: ModuleHandleIndex(1),
+                name: IdentifierIndex(3),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(0),
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // call_double(x: u64): u64 { Dep::double(x) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(1), // empty
+                    code: vec![
+                        Bytecode::CopyLoc(0),                   // push x
+                        Bytecode::Call(FunctionHandleIndex(1)), // Dep::double(x)
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::U64]), // 0: (u64) — params & return
+            Signature(vec![]),                    // 1: empty locals
+        ],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    };
+
+    (dep, main)
+}
+
+#[test]
+fn compile_cross_module_call() {
+    let (dep, main) = make_cross_module_pair();
+    let asm = move_to_llvm::compile_module_with_deps(&main, &[dep])
+        .expect("cross-module compilation failed");
+
+    assert!(
+        asm.contains("call_double"),
+        "assembly should contain 'call_double'\nassembly:\n{asm}"
+    );
+    // The call to Dep::double should appear as a `bl` instruction
+    assert!(
+        asm.contains("bl") && asm.contains("double"),
+        "assembly should contain a 'bl' to 'double'\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_cross_module_call() {
+    let (dep, main) = make_cross_module_pair();
+
+    // Compile both modules separately
+    let dep_asm = move_to_llvm::compile_module(&dep).expect("dep compilation failed");
+    let main_asm =
+        move_to_llvm::compile_module_with_deps(&main, &[dep]).expect("main compilation failed");
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let dep_asm_path = temp_dir.path().join("dep.s");
+    let main_asm_path = temp_dir.path().join("main.s");
+    let dylib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let dylib_path = temp_dir.path().join(format!("test.{dylib_ext}"));
+
+    std::fs::write(&dep_asm_path, &dep_asm).expect("failed to write dep asm");
+    std::fs::write(&main_asm_path, &main_asm).expect("failed to write main asm");
+
+    // Link both into one shared library
+    let output = Command::new("cc")
+        .args([
+            "-shared",
+            "-o",
+            dylib_path.to_str().unwrap(),
+            dep_asm_path.to_str().unwrap(),
+            main_asm_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run cc");
+    assert!(
+        output.status.success(),
+        "cc failed to link cross-module dylib:\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    unsafe {
+        let lib_path = CString::new(dylib_path.to_str().unwrap()).unwrap();
+        let lib = libc::dlopen(lib_path.as_ptr(), libc::RTLD_NOW);
+        if lib.is_null() {
+            let err = std::ffi::CStr::from_ptr(libc::dlerror())
+                .to_str()
+                .unwrap_or("unknown error");
+            panic!("dlopen failed: {err}");
+        }
+
+        let sym_name = CString::new("call_double").unwrap();
+        let sym = libc::dlsym(lib, sym_name.as_ptr());
+        if sym.is_null() {
+            let err = std::ffi::CStr::from_ptr(libc::dlerror())
+                .to_str()
+                .unwrap_or("unknown error");
+            libc::dlclose(lib);
+            panic!("dlsym failed: {err}");
+        }
+
+        let f: unsafe extern "C" fn(u64) -> u64 = std::mem::transmute(sym);
+
+        assert_eq!(f(5), 10, "call_double(5) should be 10");
+        assert_eq!(f(0), 0, "call_double(0) should be 0");
+        assert_eq!(f(100), 200, "call_double(100) should be 200");
+
+        libc::dlclose(lib);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic function call tests (monomorphization)
+// ---------------------------------------------------------------------------
+
+/// Build a module with:
+///   - `identity<T>(x: T): T { x }` — generic
+///   - `call_identity(x: u64): u64 { identity<u64>(x) }` — via CallGeneric
+fn make_generic_call_module() -> CompiledModule {
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),             // 0
+            Identifier::new("identity").unwrap(),      // 1
+            Identifier::new("call_identity").unwrap(), // 2
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![
+            // 0: identity<T>(x: T): T
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(1),
+                parameters: SignatureIndex(0), // (T)
+                return_: SignatureIndex(0),    // (T)
+                type_parameters: vec![AbilitySet::EMPTY],
+            },
+            // 1: call_identity(x: u64): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(1), // (u64)
+                return_: SignatureIndex(1),    // (u64)
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // identity<T>(x: T): T { x }
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(2), // empty
+                    code: vec![Bytecode::MoveLoc(0), Bytecode::Ret],
+                    jump_tables: vec![],
+                }),
+            },
+            // call_identity(x: u64): u64 { identity<u64>(x) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(2), // empty
+                    code: vec![
+                        Bytecode::CopyLoc(0),
+                        Bytecode::CallGeneric(FunctionInstantiationIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::TypeParameter(0)]), // 0: (T)
+            Signature(vec![SignatureToken::U64]),              // 1: (u64)
+            Signature(vec![]),                                 // 2: empty locals
+            Signature(vec![SignatureToken::U64]),              // 3: instantiation [U64]
+        ],
+        function_instantiations: vec![FunctionInstantiation {
+            handle: FunctionHandleIndex(0),
+            type_parameters: SignatureIndex(3), // [U64]
+        }],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_generic_call() {
+    let module = make_generic_call_module();
+    let asm = move_to_llvm::compile_module(&module).expect("generic call compilation failed");
+
+    assert!(
+        asm.contains("identity"),
+        "assembly should contain monomorphized 'identity' symbol\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("call_identity"),
+        "assembly should contain 'call_identity' symbol\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_generic_call() {
+    let module = make_generic_call_module();
+    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
+
+    let call_identity_offset = find_symbol_offset(&obj_path, "call_identity");
+
+    let code = extract_text_section(&obj_path);
+    let exec = ExecutableCode::load(&code);
+
+    type IdentityFn = unsafe extern "C" fn(u64) -> u64;
+    let f: IdentityFn = unsafe { exec.as_fn_at(call_identity_offset as usize) };
+
+    assert_eq!(unsafe { f(42) }, 42, "call_identity(42) should be 42");
+    assert_eq!(unsafe { f(0) }, 0, "call_identity(0) should be 0");
+    assert_eq!(
+        unsafe { f(u64::MAX) },
+        u64::MAX,
+        "call_identity(MAX) should be MAX"
     );
 }
