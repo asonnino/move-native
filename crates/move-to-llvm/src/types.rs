@@ -23,6 +23,8 @@ pub fn lower_model_type<'ctx>(
         Type::Primitive(PrimitiveType::U128) => Ok(ctx.i128_type.into()),
         Type::Primitive(PrimitiveType::U256) => Ok(ctx.i256_type.into()),
         Type::Primitive(PrimitiveType::Bool) => Ok(ctx.i8_type.into()),
+        Type::Primitive(PrimitiveType::Address) => Ok(ctx.i256_type.into()),
+        Type::Primitive(PrimitiveType::Signer) => Ok(ctx.i256_type.into()),
         Type::Reference(_, _) => Ok(ctx.ptr_type.into()),
         Type::Vector(_) => Ok(ctx.ptr_type.into()),
         Type::Datatype(mid, did, type_args) => {

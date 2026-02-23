@@ -14,11 +14,13 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+ethnum = "1"
 inkwell.workspace = true
 move-binary-format.workspace = true
 move-core-types.workspace = true
 move-model.workspace = true
 move-stackless-bytecode.workspace = true
+num-bigint = "0.4"
 thiserror.workspace = true
 
 [dev-dependencies]

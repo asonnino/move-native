@@ -1483,12 +1483,14 @@ dependencies = [
 name = "move-to-llvm"
 version = "0.1.0"
 dependencies = [
+ "ethnum",
  "inkwell",
  "libc",
  "move-binary-format",
  "move-core-types",
  "move-model",
  "move-stackless-bytecode",
+ "num-bigint",
  "object 0.38.1",
  "tempfile",
  "thiserror 2.0.18",

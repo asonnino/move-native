@@ -2038,3 +2038,700 @@ fn execute_generic_call() {
         "call_identity(MAX) should be MAX"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Address and U256 constant tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_address_constant() {
+    // load_addr(): address { let a = @0x42; a }
+    // Address constant: 32 bytes, big-endian, 0x42 in the last byte
+    let mut addr_bytes = [0u8; 32];
+    addr_bytes[31] = 0x42;
+    let mut module = make_module(
+        "load_addr",
+        vec![],
+        vec![SignatureToken::Address],
+        vec![SignatureToken::Address],
+        vec![
+            Bytecode::LdConst(ConstantPoolIndex(0)),
+            Bytecode::StLoc(0),
+            Bytecode::MoveLoc(0),
+            Bytecode::Ret,
+        ],
+    );
+    module
+        .constant_pool
+        .push(move_binary_format::file_format::Constant {
+            type_: SignatureToken::Address,
+            data: addr_bytes.to_vec(), // BCS of AccountAddress = raw 32 bytes
+        });
+    let asm = move_to_llvm::compile_module(&module).expect("address constant compilation failed");
+    assert!(
+        asm.contains("load_addr"),
+        "assembly should contain 'load_addr'\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+fn compile_u256_constant() {
+    // load_u256(): u256 { let x: u256 = 1000; x }
+    // U256 constant: 32 bytes, little-endian
+    let val: u64 = 1000;
+    let mut u256_bytes = [0u8; 32];
+    u256_bytes[..8].copy_from_slice(&val.to_le_bytes());
+    let mut module = make_module(
+        "load_u256",
+        vec![],
+        vec![SignatureToken::U256],
+        vec![SignatureToken::U256],
+        vec![
+            Bytecode::LdConst(ConstantPoolIndex(0)),
+            Bytecode::StLoc(0),
+            Bytecode::MoveLoc(0),
+            Bytecode::Ret,
+        ],
+    );
+    module
+        .constant_pool
+        .push(move_binary_format::file_format::Constant {
+            type_: SignatureToken::U256,
+            data: u256_bytes.to_vec(), // BCS of U256 = 32 bytes LE
+        });
+    let asm = move_to_llvm::compile_module(&module).expect("u256 constant compilation failed");
+    assert!(
+        asm.contains("load_u256"),
+        "assembly should contain 'load_u256'\nassembly:\n{asm}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Address and Signer type tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_address_type() {
+    // identity_addr(a: address): address { a }
+    let module = make_module(
+        "identity_addr",
+        vec![SignatureToken::Address],
+        vec![SignatureToken::Address],
+        vec![],
+        vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+    );
+    let asm = move_to_llvm::compile_module(&module).expect("address compilation failed");
+    assert!(
+        asm.contains("identity_addr"),
+        "assembly should contain 'identity_addr'\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+fn compile_signer_type() {
+    // identity_signer(s: signer): signer { s }
+    let module = make_module(
+        "identity_signer",
+        vec![SignatureToken::Signer],
+        vec![SignatureToken::Signer],
+        vec![],
+        vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+    );
+    let asm = move_to_llvm::compile_module(&module).expect("signer compilation failed");
+    assert!(
+        asm.contains("identity_signer"),
+        "assembly should contain 'identity_signer'\nassembly:\n{asm}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Abort with error code test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_abort_with_code() {
+    // abort_42(): never { abort 42 }
+    let module = make_module(
+        "abort_42",
+        vec![],
+        vec![],
+        vec![SignatureToken::U64],
+        vec![
+            Bytecode::LdU64(42),
+            Bytecode::StLoc(0),
+            Bytecode::MoveLoc(0),
+            Bytecode::Abort,
+        ],
+    );
+    let asm = move_to_llvm::compile_module(&module).expect("abort compilation failed");
+    assert!(
+        asm.contains("__move_rt_abort"),
+        "assembly should contain '__move_rt_abort' call\nassembly:\n{asm}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Global storage operation tests
+// ---------------------------------------------------------------------------
+
+/// Build a module with a struct `Coin { value: u64 }` and storage operations.
+fn make_storage_ops_module() -> CompiledModule {
+    use move_binary_format::file_format::{
+        AbilitySet, DatatypeHandle, DatatypeHandleIndex, FieldDefinition, StructDefinition,
+        StructDefinitionIndex, StructFieldInformation, TypeSignature,
+    };
+
+    use move_binary_format::file_format::Ability;
+    // Coin has key ability (required for global storage)
+    let coin_abilities = AbilitySet::EMPTY | Ability::Key;
+
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),            // 0
+            Identifier::new("Coin").unwrap(),         // 1
+            Identifier::new("check_exists").unwrap(), // 2
+            Identifier::new("take_coin").unwrap(),    // 3
+            Identifier::new("publish_coin").unwrap(), // 4
+            Identifier::new("borrow_coin").unwrap(),  // 5
+            Identifier::new("value").unwrap(),        // 6
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        datatype_handles: vec![DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            abilities: coin_abilities,
+            type_parameters: vec![],
+        }],
+        struct_defs: vec![StructDefinition {
+            struct_handle: DatatypeHandleIndex(0),
+            field_information: StructFieldInformation::Declared(vec![FieldDefinition {
+                name: IdentifierIndex(6),
+                signature: TypeSignature(SignatureToken::U64),
+            }]),
+        }],
+        function_handles: vec![
+            // 0: check_exists(addr: address): bool
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![],
+            },
+            // 1: take_coin(addr: address): Coin
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(3),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(2),
+                type_parameters: vec![],
+            },
+            // 2: publish_coin(coin: Coin, signer: signer)
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(4),
+                parameters: SignatureIndex(3),
+                return_: SignatureIndex(4),
+                type_parameters: vec![],
+            },
+            // 3: borrow_coin(addr: address): &Coin
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(5),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(5),
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // check_exists(addr: address): bool { exists<Coin>(addr) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(6),
+                    code: vec![
+                        Bytecode::CopyLoc(0),
+                        Bytecode::ExistsDeprecated(StructDefinitionIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // take_coin(addr: address): Coin { move_from<Coin>(addr) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![StructDefinitionIndex(0)],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(6),
+                    code: vec![
+                        Bytecode::CopyLoc(0),
+                        Bytecode::MoveFromDeprecated(StructDefinitionIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // publish_coin(coin: Coin, signer: signer) { move_to<Coin>(signer, coin) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(2),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(6),
+                    code: vec![
+                        Bytecode::MoveLoc(1), // push signer
+                        Bytecode::MoveLoc(0), // push coin
+                        Bytecode::MoveToDeprecated(StructDefinitionIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // borrow_coin(addr: address): &Coin { borrow_global<Coin>(addr) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(3),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![StructDefinitionIndex(0)],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(6),
+                    code: vec![
+                        Bytecode::CopyLoc(0),
+                        Bytecode::ImmBorrowGlobalDeprecated(StructDefinitionIndex(0)),
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::Address]), // 0: (address)
+            Signature(vec![SignatureToken::Bool]),    // 1: (bool)
+            Signature(vec![SignatureToken::Datatype(DatatypeHandleIndex(0))]), // 2: (Coin)
+            Signature(vec![
+                SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                SignatureToken::Signer,
+            ]), // 3: (Coin, signer)
+            Signature(vec![]),                        // 4: ()
+            Signature(vec![SignatureToken::Reference(Box::new(
+                SignatureToken::Datatype(DatatypeHandleIndex(0)),
+            ))]), // 5: (&Coin)
+            Signature(vec![]),                        // 6: empty locals
+        ],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_global_storage_ops() {
+    let module = make_storage_ops_module();
+    let asm = move_to_llvm::compile_module(&module).expect("storage ops compilation failed");
+
+    assert!(
+        asm.contains("__move_rt_exists"),
+        "assembly should contain '__move_rt_exists'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_move_from"),
+        "assembly should contain '__move_rt_move_from'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_move_to"),
+        "assembly should contain '__move_rt_move_to'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("__move_rt_borrow_global"),
+        "assembly should contain '__move_rt_borrow_global'\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-return value tests
+// ---------------------------------------------------------------------------
+
+/// Build a module with `swap(a: u64, b: u64): (u64, u64)`.
+fn make_multi_return_module() -> CompiledModule {
+    make_module(
+        "swap",
+        vec![SignatureToken::U64, SignatureToken::U64],
+        vec![SignatureToken::U64, SignatureToken::U64],
+        vec![],
+        vec![
+            Bytecode::CopyLoc(1), // push b
+            Bytecode::CopyLoc(0), // push a
+            Bytecode::Ret,        // return (b, a)
+        ],
+    )
+}
+
+#[test]
+fn compile_multi_return() {
+    let module = make_multi_return_module();
+    let asm = move_to_llvm::compile_module(&module).expect("multi-return compilation failed");
+
+    assert!(
+        asm.contains("swap"),
+        "assembly should contain 'swap' symbol\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+/// Build a module that calls a multi-return function:
+///   - `swap(a: u64, b: u64): (u64, u64)` — returns (b, a)
+///   - `test_swap(a: u64, b: u64): u64` — calls swap, returns first element (b)
+fn make_multi_return_caller_module() -> CompiledModule {
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("swap").unwrap(),
+            Identifier::new("test_swap").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![
+            // 0: swap(u64, u64): (u64, u64)
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(1),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(0),
+                type_parameters: vec![],
+            },
+            // 1: test_swap(u64, u64): u64
+            FunctionHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(2),
+                parameters: SignatureIndex(0),
+                return_: SignatureIndex(1),
+                type_parameters: vec![],
+            },
+        ],
+        function_defs: vec![
+            // swap(a: u64, b: u64): (u64, u64) { (b, a) }
+            FunctionDefinition {
+                function: FunctionHandleIndex(0),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(2),
+                    code: vec![
+                        Bytecode::CopyLoc(1), // push b
+                        Bytecode::CopyLoc(0), // push a
+                        Bytecode::Ret,        // return (b, a)
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+            // test_swap(a: u64, b: u64): u64
+            // locals: [a, b, swapped_first, swapped_second]
+            FunctionDefinition {
+                function: FunctionHandleIndex(1),
+                visibility: Visibility::Public,
+                is_entry: false,
+                acquires_global_resources: vec![],
+                code: Some(CodeUnit {
+                    locals: SignatureIndex(0), // [u64, u64]
+                    code: vec![
+                        Bytecode::CopyLoc(0),                   // push a
+                        Bytecode::CopyLoc(1),                   // push b
+                        Bytecode::Call(FunctionHandleIndex(0)), // swap(a, b)
+                        Bytecode::StLoc(3),                     // swapped_second = a
+                        Bytecode::StLoc(2),                     // swapped_first = b
+                        Bytecode::MoveLoc(2),                   // push swapped_first
+                        Bytecode::Ret,
+                    ],
+                    jump_tables: vec![],
+                }),
+            },
+        ],
+        signatures: vec![
+            Signature(vec![SignatureToken::U64, SignatureToken::U64]), // 0: (u64, u64)
+            Signature(vec![SignatureToken::U64]),                      // 1: (u64)
+            Signature(vec![]),                                         // 2: empty locals
+        ],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        constant_pool: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_multi_return_caller() {
+    let module = make_multi_return_caller_module();
+    let asm =
+        move_to_llvm::compile_module(&module).expect("multi-return caller compilation failed");
+
+    assert!(
+        asm.contains("swap"),
+        "assembly should contain 'swap'\nassembly:\n{asm}"
+    );
+    assert!(
+        asm.contains("test_swap"),
+        "assembly should contain 'test_swap'\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+#[test]
+#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
+fn execute_multi_return() {
+    let module = make_multi_return_caller_module();
+    let asm = move_to_llvm::compile_module(&module).expect("compilation failed");
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let obj_path = temp_dir.path().join("test.o");
+    assemble(&asm, &obj_path);
+
+    let test_swap_offset = find_symbol_offset(&obj_path, "test_swap");
+
+    let code = extract_text_section(&obj_path);
+    let exec = ExecutableCode::load(&code);
+
+    type SwapFn = unsafe extern "C" fn(u64, u64) -> u64;
+    let f: SwapFn = unsafe { exec.as_fn_at(test_swap_offset as usize) };
+
+    // swap(10, 20) returns (20, 10); test_swap returns the first element (20)
+    assert_eq!(
+        unsafe { f(10, 20) },
+        20,
+        "test_swap(10, 20) should return 20 (first element of swapped result)"
+    );
+    assert_eq!(unsafe { f(0, 42) }, 42, "test_swap(0, 42) should return 42");
+    assert_eq!(
+        unsafe { f(100, 200) },
+        200,
+        "test_swap(100, 200) should return 200"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Vector constant tests
+// ---------------------------------------------------------------------------
+
+/// Build a module that loads a `vector<u8>` constant from the constant pool and returns it.
+///
+/// BCS encoding for `vector<u8>`: ULEB128 length prefix + raw bytes.
+fn make_byte_array_const_module() -> CompiledModule {
+    // BCS for vector<u8> [0x48, 0x65, 0x6C, 0x6C, 0x6F] = "Hello"
+    let hello: Vec<u8> = b"Hello".to_vec();
+    let mut bcs_data = Vec::new();
+    bcs_data.push(hello.len() as u8); // ULEB128 length (5 fits in one byte)
+    bcs_data.extend_from_slice(&hello);
+
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("get_bytes").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        }],
+        function_defs: vec![FunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: SignatureIndex(2),
+                code: vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+                jump_tables: vec![],
+            }),
+        }],
+        signatures: vec![
+            Signature(vec![]), // 0: params ()
+            Signature(vec![SignatureToken::Vector(Box::new(SignatureToken::U8))]), // 1: return
+            Signature(vec![SignatureToken::Vector(Box::new(SignatureToken::U8))]), // 2: locals
+        ],
+        constant_pool: vec![move_binary_format::file_format::Constant {
+            type_: SignatureToken::Vector(Box::new(SignatureToken::U8)),
+            data: bcs_data,
+        }],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_byte_array_constant() {
+    let module = make_byte_array_const_module();
+    let asm =
+        move_to_llvm::compile_module(&module).expect("byte array constant compilation failed");
+
+    assert!(
+        asm.contains("__move_rt_const_vec_u8"),
+        "assembly should call __move_rt_const_vec_u8\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}
+
+/// Build a module that loads a `vector<u64>` constant from the constant pool.
+///
+/// BCS encoding for `vector<u64>`: ULEB128 count + little-endian u64 elements.
+fn make_vector_u64_const_module() -> CompiledModule {
+    // vector<u64> [10, 20, 30]
+    let elems: Vec<u64> = vec![10, 20, 30];
+    let mut bcs_data = Vec::new();
+    bcs_data.push(elems.len() as u8); // ULEB128 count
+    for e in &elems {
+        bcs_data.extend_from_slice(&e.to_le_bytes());
+    }
+
+    CompiledModule {
+        version: 7,
+        publishable: true,
+        self_module_handle_idx: ModuleHandleIndex(0),
+        module_handles: vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }],
+        identifiers: vec![
+            Identifier::new("M").unwrap(),
+            Identifier::new("get_vec").unwrap(),
+        ],
+        address_identifiers: vec![AccountAddress::ZERO],
+        function_handles: vec![FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: IdentifierIndex(1),
+            parameters: SignatureIndex(0),
+            return_: SignatureIndex(1),
+            type_parameters: vec![],
+        }],
+        function_defs: vec![FunctionDefinition {
+            function: FunctionHandleIndex(0),
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: SignatureIndex(2),
+                code: vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+                jump_tables: vec![],
+            }),
+        }],
+        signatures: vec![
+            Signature(vec![]), // 0: params ()
+            Signature(vec![SignatureToken::Vector(Box::new(SignatureToken::U64))]), // 1: return
+            Signature(vec![SignatureToken::Vector(Box::new(SignatureToken::U64))]), // 2: locals
+        ],
+        constant_pool: vec![move_binary_format::file_format::Constant {
+            type_: SignatureToken::Vector(Box::new(SignatureToken::U64)),
+            data: bcs_data,
+        }],
+        struct_defs: vec![],
+        datatype_handles: vec![],
+        metadata: vec![],
+        field_handles: vec![],
+        friend_decls: vec![],
+        struct_def_instantiations: vec![],
+        function_instantiations: vec![],
+        field_instantiations: vec![],
+        enum_defs: vec![],
+        enum_def_instantiations: vec![],
+        variant_handles: vec![],
+        variant_instantiation_handles: vec![],
+    }
+}
+
+#[test]
+fn compile_vector_u64_constant() {
+    let module = make_vector_u64_const_module();
+    let asm =
+        move_to_llvm::compile_module(&module).expect("vector<u64> constant compilation failed");
+
+    assert!(
+        asm.contains("__move_rt_const_vec"),
+        "assembly should call __move_rt_const_vec\nassembly:\n{asm}"
+    );
+    assert!(
+        !asm.contains("x23"),
+        "compiler should not emit x23 (reserved register)\nassembly:\n{asm}"
+    );
+}

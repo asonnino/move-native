@@ -18,7 +18,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use crate::context::LlvmContext;
 use crate::error::CompileError;
-use crate::mangle::{mangle_native_symbol, mangle_type_args};
+use crate::mangle::{mangle_native_symbol, mangle_type, mangle_type_args};
 use crate::types::lower_model_type;
 
 /// A single local variable (param, local, or compiler-generated temp).
@@ -50,6 +50,8 @@ struct FunctionLowering<'a, 'ctx> {
     label_blocks: BTreeMap<Label, BasicBlock<'ctx>>,
     /// Concrete types for the function's type parameters (empty for non-generic).
     type_params: Vec<Type>,
+    /// Counter for unique global constant names.
+    const_counter: usize,
 }
 
 impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
@@ -104,6 +106,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             locals,
             label_blocks,
             type_params,
+            const_counter: 0,
         })
     }
 
@@ -143,7 +146,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             }
             Bytecode::Load(_, dst, constant) => {
                 let val = self.lower_constant(constant)?;
-                self.store(*dst, val.into());
+                self.store(*dst, val);
             }
             Bytecode::Call(_, dsts, op, srcs, _) => {
                 self.lower_operation(dsts, op, srcs)?;
@@ -151,9 +154,27 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             Bytecode::Ret(_, rets) => {
                 if rets.is_empty() {
                     self.ctx.builder.build_return(None).unwrap();
-                } else {
+                } else if rets.len() == 1 {
                     let val = self.load_value(rets[0])?;
                     self.ctx.builder.build_return(Some(&val)).unwrap();
+                } else {
+                    // Multi-return: pack values into an anonymous struct
+                    let ret_types: Vec<BasicTypeEnum<'ctx>> = rets
+                        .iter()
+                        .map(|r| Ok(self.locals[*r].llvm_ty))
+                        .collect::<Result<_, CompileError>>()?;
+                    let ret_struct_ty = self.ctx.context.struct_type(&ret_types, false);
+                    let mut agg = ret_struct_ty.get_undef();
+                    for (i, r) in rets.iter().enumerate() {
+                        let val = self.load_value(*r)?;
+                        agg = self
+                            .ctx
+                            .builder
+                            .build_insert_value(agg, val, i as u32, &format!("ret_{i}"))
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    self.ctx.builder.build_return(Some(&agg)).unwrap();
                 }
             }
             Bytecode::Label(_, label) => {
@@ -184,7 +205,13 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                     .build_conditional_branch(cmp, then_block, else_block)
                     .unwrap();
             }
-            Bytecode::Abort(_, _) => {
+            Bytecode::Abort(_, code_idx) => {
+                let code = self.load_value(*code_idx)?;
+                let abort_fn = self.get_or_declare_abort_fn();
+                self.ctx
+                    .builder
+                    .build_call(abort_fn, &[code.into()], "abort")
+                    .unwrap();
                 self.ctx.builder.build_unreachable().unwrap();
             }
             Bytecode::Nop(_) => {}
@@ -229,21 +256,171 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         }
     }
 
-    fn lower_constant(&self, constant: &Constant) -> Result<IntValue<'ctx>, CompileError> {
+    fn lower_constant(
+        &mut self,
+        constant: &Constant,
+    ) -> Result<BasicValueEnum<'ctx>, CompileError> {
         match constant {
-            Constant::Bool(v) => Ok(self.ctx.i8_type.const_int(*v as u64, false)),
-            Constant::U8(v) => Ok(self.ctx.i8_type.const_int(*v as u64, false)),
-            Constant::U16(v) => Ok(self.ctx.i16_type.const_int(*v as u64, false)),
-            Constant::U32(v) => Ok(self.ctx.i32_type.const_int(*v as u64, false)),
-            Constant::U64(v) => Ok(self.ctx.i64_type.const_int(*v, false)),
+            Constant::Bool(v) => Ok(self.ctx.i8_type.const_int(*v as u64, false).into()),
+            Constant::U8(v) => Ok(self.ctx.i8_type.const_int(*v as u64, false).into()),
+            Constant::U16(v) => Ok(self.ctx.i16_type.const_int(*v as u64, false).into()),
+            Constant::U32(v) => Ok(self.ctx.i32_type.const_int(*v as u64, false).into()),
+            Constant::U64(v) => Ok(self.ctx.i64_type.const_int(*v, false).into()),
             Constant::U128(v) => {
                 let words = [*v as u64, (*v >> 64) as u64];
-                Ok(self.ctx.i128_type.const_int_arbitrary_precision(&words))
+                Ok(self
+                    .ctx
+                    .i128_type
+                    .const_int_arbitrary_precision(&words)
+                    .into())
             }
-            other => Err(CompileError::UnsupportedOperation(format!(
-                "constant: {:?}",
-                other
-            ))),
+            Constant::Address(big) => {
+                let bytes = big.to_bytes_le();
+                let mut buf = [0u8; 32];
+                let len = bytes.len().min(32);
+                buf[..len].copy_from_slice(&bytes[..len]);
+                let words: [u64; 4] = [
+                    u64::from_le_bytes(buf[0..8].try_into().unwrap()),
+                    u64::from_le_bytes(buf[8..16].try_into().unwrap()),
+                    u64::from_le_bytes(buf[16..24].try_into().unwrap()),
+                    u64::from_le_bytes(buf[24..32].try_into().unwrap()),
+                ];
+                Ok(self
+                    .ctx
+                    .i256_type
+                    .const_int_arbitrary_precision(&words)
+                    .into())
+            }
+            Constant::U256(v) => {
+                let (hi, lo) = v.into_words();
+                let words: [u64; 4] = [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64];
+                Ok(self
+                    .ctx
+                    .i256_type
+                    .const_int_arbitrary_precision(&words)
+                    .into())
+            }
+            Constant::ByteArray(bytes) => {
+                let id = self.next_const_id();
+                let global = self.emit_const_global(&format!("const_bytes_{id}"), bytes);
+                let func = self.get_or_declare_runtime_fn(
+                    "__move_rt_const_vec_u8",
+                    self.ctx
+                        .ptr_type
+                        .fn_type(&[self.ctx.ptr_type.into(), self.ctx.i64_type.into()], false),
+                );
+                let ptr = global.as_pointer_value();
+                let len = self.ctx.i64_type.const_int(bytes.len() as u64, false);
+                let call = self
+                    .ctx
+                    .builder
+                    .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")
+                    .unwrap();
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => unreachable!("const vec runtime function must return a value"),
+                }
+            }
+            Constant::AddressArray(addrs) => {
+                let id = self.next_const_id();
+                let buf = serialize_address_array(addrs);
+                let global = self.emit_const_global(&format!("const_addrs_{id}"), &buf);
+                let func = self.get_or_declare_runtime_fn(
+                    "__move_rt_const_vec_address",
+                    self.ctx
+                        .ptr_type
+                        .fn_type(&[self.ctx.ptr_type.into(), self.ctx.i64_type.into()], false),
+                );
+                let ptr = global.as_pointer_value();
+                let count = self.ctx.i64_type.const_int(addrs.len() as u64, false);
+                let call = self
+                    .ctx
+                    .builder
+                    .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")
+                    .unwrap();
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => unreachable!("const vec runtime function must return a value"),
+                }
+            }
+            Constant::Vector(elems) => {
+                let fn_type = self.ctx.ptr_type.fn_type(
+                    &[
+                        self.ctx.ptr_type.into(),
+                        self.ctx.i64_type.into(),
+                        self.ctx.i64_type.into(),
+                    ],
+                    false,
+                );
+                if elems.is_empty() {
+                    let func = self.get_or_declare_runtime_fn("__move_rt_const_vec", fn_type);
+                    let null = self.ctx.ptr_type.const_null();
+                    let zero = self.ctx.i64_type.const_zero();
+                    let call = self
+                        .ctx
+                        .builder
+                        .build_call(
+                            func,
+                            &[null.into(), zero.into(), zero.into()],
+                            "const_vec_empty",
+                        )
+                        .unwrap();
+                    return match call.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(v) => Ok(v),
+                        _ => unreachable!("const vec runtime function must return a value"),
+                    };
+                }
+                let (elem_size, buf) = serialize_scalar_vector(elems)?;
+                let id = self.next_const_id();
+                let global = self.emit_const_global(&format!("const_vec_{id}"), &buf);
+                let func = self.get_or_declare_runtime_fn("__move_rt_const_vec", fn_type);
+                let ptr = global.as_pointer_value();
+                let count = self.ctx.i64_type.const_int(elems.len() as u64, false);
+                let esz = self.ctx.i64_type.const_int(elem_size as u64, false);
+                let call = self
+                    .ctx
+                    .builder
+                    .build_call(func, &[ptr.into(), count.into(), esz.into()], "const_vec")
+                    .unwrap();
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => unreachable!("const vec runtime function must return a value"),
+                }
+            }
+        }
+    }
+
+    /// Allocate a unique ID for global constant names.
+    fn next_const_id(&mut self) -> usize {
+        let id = self.const_counter;
+        self.const_counter += 1;
+        id
+    }
+
+    /// Emit a private constant global containing the given bytes.
+    fn emit_const_global(&self, name: &str, data: &[u8]) -> inkwell::values::GlobalValue<'ctx> {
+        let arr_ty = self.ctx.i8_type.array_type(data.len() as u32);
+        let arr_val = self.ctx.context.const_string(data, false);
+        let global = self.ctx.module.add_global(arr_ty, None, name);
+        global.set_initializer(&arr_val);
+        global.set_constant(true);
+        global.set_linkage(Linkage::Private);
+        global.set_unnamed_addr(true);
+        global
+    }
+
+    /// Get or declare an external runtime function.
+    fn get_or_declare_runtime_fn(
+        &self,
+        symbol: &str,
+        fn_type: inkwell::types::FunctionType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        match self.ctx.module.get_function(symbol) {
+            Some(f) => f,
+            None => self
+                .ctx
+                .module
+                .add_function(symbol, fn_type, Some(Linkage::External)),
         }
     }
 
@@ -405,12 +582,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                                 .iter()
                                 .map(|t| t.instantiate(type_args))
                                 .collect();
-                            let fn_type = if ret_types.is_empty() {
-                                self.ctx.context.void_type().fn_type(&param_types, false)
-                            } else {
-                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
-                                ret.fn_type(&param_types, false)
-                            };
+                            let fn_type =
+                                build_fn_type(self.ctx, self.env, &ret_types, &param_types)?;
                             self.ctx
                                 .module
                                 .add_function(&mangled, fn_type, Some(Linkage::External))
@@ -440,12 +613,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                                 .iter()
                                 .map(|t| t.instantiate(&inst_args))
                                 .collect();
-                            let fn_type = if ret_types.is_empty() {
-                                self.ctx.context.void_type().fn_type(&param_types, false)
-                            } else {
-                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
-                                ret.fn_type(&param_types, false)
-                            };
+                            let fn_type =
+                                build_fn_type(self.ctx, self.env, &ret_types, &param_types)?;
                             let function = self.ctx.module.add_function(&mangled, fn_type, None);
 
                             let saved_block = self.ctx.builder.get_insert_block().unwrap();
@@ -484,12 +653,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                                 })
                                 .collect::<Result<_, _>>()?;
                             let ret_types = callee_env.get_return_types();
-                            let fn_type = if ret_types.is_empty() {
-                                self.ctx.context.void_type().fn_type(&param_types, false)
-                            } else {
-                                let ret = lower_model_type(self.ctx, self.env, &ret_types[0])?;
-                                ret.fn_type(&param_types, false)
-                            };
+                            let fn_type =
+                                build_fn_type(self.ctx, self.env, &ret_types, &param_types)?;
                             self.ctx.module.add_function(
                                 &callee_name,
                                 fn_type,
@@ -516,7 +681,20 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                         inkwell::values::ValueKind::Basic(v) => v,
                         _ => panic!("expected non-void return from callee"),
                     };
-                    self.store(dsts[0], ret_val);
+                    if dsts.len() == 1 {
+                        self.store(dsts[0], ret_val);
+                    } else {
+                        // Multi-return: unpack struct into individual destinations
+                        let struct_val = ret_val.into_struct_value();
+                        for (i, dst) in dsts.iter().enumerate() {
+                            let field = self
+                                .ctx
+                                .builder
+                                .build_extract_value(struct_val, i as u32, &format!("call_ret_{i}"))
+                                .unwrap();
+                            self.store(*dst, field);
+                        }
+                    }
                 }
                 return Ok(());
             }
@@ -620,12 +798,160 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                 return Ok(());
             }
 
+            // Global storage operations: emit calls to __move_rt_* externs
+            Operation::MoveTo(mid, did, type_args) => {
+                return self.lower_storage_op(
+                    "move_to",
+                    *mid,
+                    *did,
+                    type_args,
+                    dsts,
+                    srcs,
+                    |this, dt_ty, _| {
+                        let val_ty = lower_model_type(this.ctx, this.env, &dt_ty)?.into();
+                        Ok(this
+                            .ctx
+                            .context
+                            .void_type()
+                            .fn_type(&[val_ty, this.ctx.i256_type.into()], false))
+                    },
+                );
+            }
+            Operation::MoveFrom(mid, did, type_args) => {
+                return self.lower_storage_op(
+                    "move_from",
+                    *mid,
+                    *did,
+                    type_args,
+                    dsts,
+                    srcs,
+                    |this, dt_ty, _| {
+                        let ret_ty = lower_model_type(this.ctx, this.env, &dt_ty)?;
+                        Ok(ret_ty.fn_type(&[this.ctx.i256_type.into()], false))
+                    },
+                );
+            }
+            Operation::Exists(mid, did, type_args) => {
+                return self.lower_storage_op(
+                    "exists",
+                    *mid,
+                    *did,
+                    type_args,
+                    dsts,
+                    srcs,
+                    |this, _, _| {
+                        Ok(this
+                            .ctx
+                            .i8_type
+                            .fn_type(&[this.ctx.i256_type.into()], false))
+                    },
+                );
+            }
+            Operation::BorrowGlobal(mid, did, type_args) => {
+                return self.lower_storage_op(
+                    "borrow_global",
+                    *mid,
+                    *did,
+                    type_args,
+                    dsts,
+                    srcs,
+                    |this, _, _| {
+                        Ok(this
+                            .ctx
+                            .ptr_type
+                            .fn_type(&[this.ctx.i256_type.into()], false))
+                    },
+                );
+            }
+            Operation::GetGlobal(mid, did, type_args) => {
+                return self.lower_storage_op(
+                    "get_global",
+                    *mid,
+                    *did,
+                    type_args,
+                    dsts,
+                    srcs,
+                    |this, dt_ty, _| {
+                        let ret_ty = lower_model_type(this.ctx, this.env, &dt_ty)?;
+                        Ok(ret_ty.fn_type(&[this.ctx.i256_type.into()], false))
+                    },
+                );
+            }
+
+            // Destroy (Pop): no-op — LLVM manages alloca lifetimes
+            Operation::Destroy => return Ok(()),
+
             other => {
                 return Err(CompileError::UnsupportedOperation(format!("{:?}", other)));
             }
         };
         self.store(dsts[0], result.into());
         Ok(())
+    }
+
+    /// Emit a call to a `__move_rt_<op_name>$<mangled_type>` extern for a
+    /// global storage operation (MoveTo, MoveFrom, Exists, BorrowGlobal, GetGlobal).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_storage_op(
+        &self,
+        op_name: &str,
+        mid: move_model::model::ModuleId,
+        did: move_model::model::DatatypeId,
+        type_args: &[Type],
+        dsts: &[usize],
+        srcs: &[usize],
+        build_fn_type: impl FnOnce(
+            &Self,
+            Type,
+            &str,
+        ) -> Result<inkwell::types::FunctionType<'ctx>, CompileError>,
+    ) -> Result<(), CompileError> {
+        let inst_args = self.inst_types(type_args);
+        let dt_ty = Type::Datatype(mid, did, inst_args);
+        let mangled = mangle_type(self.env, &dt_ty);
+        let symbol = format!("__move_rt_{op_name}${mangled}");
+
+        let func = match self.ctx.module.get_function(&symbol) {
+            Some(f) => f,
+            None => {
+                let fn_type = build_fn_type(self, dt_ty, &symbol)?;
+                self.ctx
+                    .module
+                    .add_function(&symbol, fn_type, Some(Linkage::External))
+            }
+        };
+
+        let args: Vec<_> = srcs
+            .iter()
+            .map(|s| self.load_value(*s).map(|v| v.into()))
+            .collect::<Result<_, _>>()?;
+
+        let call = self.ctx.builder.build_call(func, &args, &symbol).unwrap();
+
+        if !dsts.is_empty() {
+            let ret_val = match call.try_as_basic_value() {
+                inkwell::values::ValueKind::Basic(v) => v,
+                _ => panic!("expected non-void return from {symbol}"),
+            };
+            self.store(dsts[0], ret_val);
+        }
+        Ok(())
+    }
+
+    fn get_or_declare_abort_fn(&self) -> FunctionValue<'ctx> {
+        match self.ctx.module.get_function("__move_rt_abort") {
+            Some(f) => f,
+            None => {
+                let fn_type = self
+                    .ctx
+                    .context
+                    .void_type()
+                    .fn_type(&[self.ctx.i64_type.into()], false);
+                self.ctx
+                    .module
+                    .add_function("__move_rt_abort", fn_type, Some(Linkage::External))
+            }
+        }
     }
 
     fn lower_cast(
@@ -652,6 +978,98 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     }
 }
 
+/// Serialize an `AddressArray` into a flat buffer of 32-byte little-endian addresses.
+///
+/// Uses little-endian to match the LLVM i256 representation used for
+/// `Constant::Address` in `lower_constant`.
+fn serialize_address_array(addrs: &[num_bigint::BigUint]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(addrs.len() * 32);
+    for addr in addrs {
+        let bytes = addr.to_bytes_le();
+        let mut padded = [0u8; 32];
+        let len = bytes.len().min(32);
+        padded[..len].copy_from_slice(&bytes[..len]);
+        buf.extend_from_slice(&padded);
+    }
+    buf
+}
+
+/// Serialize a `Vector` of scalar constants into a flat byte buffer.
+///
+/// Returns `(element_size, serialized_bytes)`. Only handles scalar element types
+/// (Bool, U8..U256, Address). Nested vectors are not supported.
+fn serialize_scalar_vector(elems: &[Constant]) -> Result<(usize, Vec<u8>), CompileError> {
+    let elem_size = match &elems[0] {
+        Constant::Bool(_) | Constant::U8(_) => 1,
+        Constant::U16(_) => 2,
+        Constant::U32(_) => 4,
+        Constant::U64(_) => 8,
+        Constant::U128(_) => 16,
+        Constant::U256(_) | Constant::Address(_) => 32,
+        other => {
+            return Err(CompileError::UnsupportedOperation(format!(
+                "vector constant with non-scalar element: {:?}",
+                other
+            )));
+        }
+    };
+
+    let mut buf = Vec::with_capacity(elems.len() * elem_size);
+    for elem in elems {
+        match elem {
+            Constant::Bool(v) => buf.push(*v as u8),
+            Constant::U8(v) => buf.push(*v),
+            Constant::U16(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Constant::U32(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Constant::U64(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Constant::U128(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Constant::U256(v) => {
+                let (hi, lo) = v.into_words();
+                buf.extend_from_slice(&lo.to_le_bytes());
+                buf.extend_from_slice(&hi.to_le_bytes());
+            }
+            Constant::Address(big) => {
+                let bytes = big.to_bytes_le();
+                let mut padded = [0u8; 32];
+                let len = bytes.len().min(32);
+                padded[..len].copy_from_slice(&bytes[..len]);
+                buf.extend_from_slice(&padded);
+            }
+            other => {
+                return Err(CompileError::UnsupportedOperation(format!(
+                    "vector constant with non-scalar element: {:?}",
+                    other
+                )));
+            }
+        }
+    }
+    Ok((elem_size, buf))
+}
+
+/// Build an LLVM function type from Move return types and LLVM param types.
+///
+/// For zero returns → void, one return → that type, multiple returns → anonymous struct.
+fn build_fn_type<'ctx>(
+    ctx: &LlvmContext<'ctx>,
+    env: &move_model::model::GlobalEnv,
+    ret_types: &[Type],
+    param_types: &[inkwell::types::BasicMetadataTypeEnum<'ctx>],
+) -> Result<inkwell::types::FunctionType<'ctx>, CompileError> {
+    Ok(if ret_types.is_empty() {
+        ctx.context.void_type().fn_type(param_types, false)
+    } else if ret_types.len() == 1 {
+        let ret = lower_model_type(ctx, env, &ret_types[0])?;
+        ret.fn_type(param_types, false)
+    } else {
+        let llvm_ret_types: Vec<BasicTypeEnum<'ctx>> = ret_types
+            .iter()
+            .map(|t| lower_model_type(ctx, env, t))
+            .collect::<Result<_, _>>()?;
+        let ret_struct = ctx.context.struct_type(&llvm_ret_types, false);
+        ret_struct.fn_type(param_types, false)
+    })
+}
+
 /// Declare an LLVM function (signature only, no body) for the given Move function.
 pub fn declare_function<'ctx>(
     ctx: &LlvmContext<'ctx>,
@@ -673,16 +1091,7 @@ pub fn declare_function<'ctx>(
         .collect::<Result<_, _>>()?;
 
     // Build LLVM function type
-    let fn_type = if func_data.return_types.is_empty() {
-        ctx.context.void_type().fn_type(&param_llvm_types, false)
-    } else if func_data.return_types.len() == 1 {
-        let ret_type = lower_model_type(ctx, env, &func_data.return_types[0])?;
-        ret_type.fn_type(&param_llvm_types, false)
-    } else {
-        return Err(CompileError::UnsupportedType(
-            "multi-value return".to_string(),
-        ));
-    };
+    let fn_type = build_fn_type(ctx, env, &func_data.return_types, &param_llvm_types)?;
 
     Ok(ctx.module.add_function(&name, fn_type, None))
 }
