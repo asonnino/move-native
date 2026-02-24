@@ -23,8 +23,8 @@ pub enum CompileError {
     #[error("failed to create target machine: {0}")]
     TargetMachine(String),
 
-    #[error("codegen failed: {0}")]
-    Codegen(String),
+    #[error("code generation failed: {0}")]
+    CodeGeneration(String),
 
     #[error("failed to deserialize module: {0}")]
     Deserialize(String),
@@ -35,3 +35,6 @@ pub enum CompileError {
     #[error("model builder failed: {0}")]
     ModelBuilder(String),
 }
+
+/// Convenience alias used throughout the crate.
+pub type CompileResult<T> = Result<T, CompileError>;

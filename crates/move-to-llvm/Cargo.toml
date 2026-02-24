@@ -24,6 +24,7 @@ num-bigint = "0.4"
 thiserror.workspace = true
 
 [dev-dependencies]
+indoc = "2"
 libc = "0.2"
 move-binary-format.workspace = true
 move-core-types.workspace = true

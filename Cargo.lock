@@ -1484,6 +1484,7 @@ name = "move-to-llvm"
 version = "0.1.0"
 dependencies = [
  "ethnum",
+ "indoc",
  "inkwell",
  "libc",
  "move-binary-format",

@@ -8,18 +8,18 @@ use inkwell::module::Module;
 use inkwell::types::{IntType, PointerType};
 
 /// Wraps the LLVM Context, Module, and Builder for a single compilation unit.
-pub struct LlvmContext<'ctx> {
-    pub context: &'ctx Context,
-    pub module: Module<'ctx>,
-    pub builder: Builder<'ctx>,
+pub(crate) struct LlvmContext<'ctx> {
+    pub(crate) context: &'ctx Context,
+    pub(crate) module: Module<'ctx>,
+    pub(crate) builder: Builder<'ctx>,
     // Cached integer types
-    pub i8_type: IntType<'ctx>,
-    pub i16_type: IntType<'ctx>,
-    pub i32_type: IntType<'ctx>,
-    pub i64_type: IntType<'ctx>,
-    pub i128_type: IntType<'ctx>,
-    pub i256_type: IntType<'ctx>,
-    pub ptr_type: PointerType<'ctx>,
+    pub(crate) i8_type: IntType<'ctx>,
+    pub(crate) i16_type: IntType<'ctx>,
+    pub(crate) i32_type: IntType<'ctx>,
+    pub(crate) i64_type: IntType<'ctx>,
+    pub(crate) i128_type: IntType<'ctx>,
+    pub(crate) i256_type: IntType<'ctx>,
+    pub(crate) ptr_type: PointerType<'ctx>,
 }
 
 impl<'ctx> LlvmContext<'ctx> {
