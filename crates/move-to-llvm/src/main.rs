@@ -25,7 +25,7 @@ fn main() {
         }
     };
 
-    match move_to_llvm::compile(&bytecode) {
+    match move_to_llvm::compile(&move_to_llvm::Target::AArch64, &bytecode) {
         Ok(asm) => print!("{asm}"),
         Err(e) => {
             eprintln!("Compilation error: {e}");

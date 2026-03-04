@@ -6,23 +6,12 @@ use std::{fmt, ops::Deref};
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
-};
+use inkwell::targets::{CodeModel, FileType, RelocMode, TargetMachine, TargetTriple};
 
 use crate::error::{CompileError, CompileResult};
+use crate::target::{CPU, FEATURES, Target};
 
-const CPU: &str = "generic";
-/// Reserve x23 so LLVM never allocates the gas register.
-const FEATURES: &str = "+reserve-x23";
-
-/// LLVM target triple for the host platform.
-#[cfg(target_os = "macos")]
-const HOST_TRIPLE: &str = "aarch64-apple-darwin";
-#[cfg(not(target_os = "macos"))]
-const HOST_TRIPLE: &str = "aarch64-unknown-linux-gnu";
-
-/// AArch64 assembly output from the compiler.
+/// Assembly output from the compiler.
 pub struct Assembly(String);
 
 impl Assembly {
@@ -110,14 +99,14 @@ pub(crate) struct AssemblyBuilder {
 }
 
 impl AssemblyBuilder {
-    pub fn new() -> CompileResult<Self> {
-        Target::initialize_aarch64(&InitializationConfig::default());
+    pub fn new(target: &Target) -> CompileResult<Self> {
+        target.initialize();
 
-        let triple = TargetTriple::create(HOST_TRIPLE);
-        let target =
-            Target::from_triple(&triple).map_err(|e| CompileError::TargetInit(e.to_string()))?;
+        let triple = TargetTriple::create(target.triple());
+        let llvm_target = inkwell::targets::Target::from_triple(&triple)
+            .map_err(|e| CompileError::TargetInit(e.to_string()))?;
 
-        let machine = target
+        let machine = llvm_target
             .create_target_machine(
                 &triple,
                 CPU,
@@ -142,8 +131,8 @@ impl AssemblyBuilder {
             .map_err(|e| CompileError::Llvm(e.to_string()))
     }
 
-    /// Emit the module as AArch64 assembly text.
-    pub fn emit_assembly(&self, module: &Module<'_>) -> CompileResult<Assembly> {
+    /// Emit the module as assembly text.
+    pub fn build(&self, module: &Module<'_>) -> CompileResult<Assembly> {
         let buf = self
             .machine
             .write_to_memory_buffer(module, FileType::Assembly)

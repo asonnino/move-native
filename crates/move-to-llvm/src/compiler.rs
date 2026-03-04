@@ -13,6 +13,7 @@ use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
 use crate::function::FunctionLowering;
 use crate::mangle::Mangler;
+use crate::target::Target;
 use crate::types::TypeLowering;
 
 /// Top-level compiler that owns the full Move -> AArch64 pipeline.
@@ -28,38 +29,31 @@ pub struct Compiler<'ctx> {
 
 impl<'ctx> Compiler<'ctx> {
     /// Compile serialized Move bytecode to assembly.
-    pub fn compile(bytecode: &[u8]) -> CompileResult<Assembly> {
+    pub fn compile(target: &Target, bytecode: &[u8]) -> CompileResult<Assembly> {
         let module = CompiledModule::deserialize_with_defaults(bytecode)
             .map_err(|e| CompileError::Deserialize(e.to_string()))?;
-        Self::compile_module(&module)
+        Self::compile_module(target, &module)
     }
 
     /// Compile an already-deserialized Move module to assembly.
-    pub fn compile_module(module: &CompiledModule) -> CompileResult<Assembly> {
-        Self::compile_module_with_dependencies(module, &[])
+    pub fn compile_module(target: &Target, module: &CompiledModule) -> CompileResult<Assembly> {
+        Self::compile_module_with_dependencies(target, module, &[])
     }
 
     /// Compile a Move module to assembly, with dependency modules
     /// visible for resolving cross-module function signatures.
     pub fn compile_module_with_dependencies(
+        target: &Target,
         module: &CompiledModule,
         dependencies: &[CompiledModule],
     ) -> CompileResult<Assembly> {
         let context = Context::create();
-        Self::compile_with_dependencies_and_context(module, dependencies, &context)
-    }
-
-    /// Compile using an externally-owned LLVM context.
-    fn compile_with_dependencies_and_context(
-        module: &CompiledModule,
-        dependencies: &[CompiledModule],
-        context: &Context,
-    ) -> CompileResult<Assembly> {
-        let compiler = Compiler::new(context, module, dependencies)?;
+        let compiler = Compiler::new(target, &context, module, dependencies)?;
         compiler.emit()
     }
 
     fn new(
+        target: &Target,
         context: &'ctx Context,
         module: &CompiledModule,
         dependencies: &[CompiledModule],
@@ -67,7 +61,7 @@ impl<'ctx> Compiler<'ctx> {
         let mangler = Mangler::new(module, dependencies)?;
         let module_name = mangler.target_module().get_full_name_str();
         let ctx = LlvmContext::new(context, &module_name);
-        let asm_builder = AssemblyBuilder::new()?;
+        let asm_builder = AssemblyBuilder::new(target)?;
 
         Ok(Self {
             ctx,
@@ -105,7 +99,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         self.asm_builder.optimize(&self.ctx.module)?;
-        let mut asm = self.asm_builder.emit_assembly(&self.ctx.module)?;
+        let mut asm = self.asm_builder.build(&self.ctx.module)?;
         asm.add_symbol_aliases();
         Ok(asm)
     }

@@ -7,33 +7,39 @@ pub(crate) mod context;
 pub mod error;
 pub(crate) mod function;
 mod mangle;
+pub mod target;
 mod types;
 
 pub use assembly::Assembly;
 pub use compiler::Compiler;
 pub use error::{CompileError, CompileResult};
+pub use target::Target;
 
-/// Compile serialized Move bytecode to AArch64 assembly.
+/// Compile serialized Move bytecode to assembly.
 ///
 /// Convenience wrapper around [`Compiler::compile`].
-pub fn compile(bytecode: &[u8]) -> CompileResult<Assembly> {
-    Compiler::compile(bytecode)
+pub fn compile(target: &Target, bytecode: &[u8]) -> CompileResult<Assembly> {
+    Compiler::compile(target, bytecode)
 }
 
-/// Compile an already-deserialized Move module to AArch64 assembly.
+/// Compile an already-deserialized Move module to assembly.
 ///
 /// Convenience wrapper around [`Compiler::compile_module`].
-pub fn compile_module(module: &move_binary_format::CompiledModule) -> CompileResult<Assembly> {
-    Compiler::compile_module(module)
+pub fn compile_module(
+    target: &Target,
+    module: &move_binary_format::CompiledModule,
+) -> CompileResult<Assembly> {
+    Compiler::compile_module(target, module)
 }
 
 /// Compile a Move module with dependency modules visible for resolving
 /// cross-module function signatures.
 ///
-/// Convenience wrapper around [`Compiler::compile_module_with_deps`].
+/// Convenience wrapper around [`Compiler::compile_module_with_dependencies`].
 pub fn compile_module_with_deps(
+    target: &Target,
     module: &move_binary_format::CompiledModule,
     deps: &[move_binary_format::CompiledModule],
 ) -> CompileResult<Assembly> {
-    Compiler::compile_module_with_dependencies(module, deps)
+    Compiler::compile_module_with_dependencies(target, module, deps)
 }

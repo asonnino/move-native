@@ -1,5 +1,6 @@
 {
   "cSpell.words": [
+    "allocas",
     "armv",
     "asdfghjkl",
     "blra",
@@ -19,6 +20,7 @@
     "ERET",
     "ERETAA",
     "ERETAB",
+    "instcombine",
     "instrumenter",
     "Lalias",
     "Lback",
@@ -59,6 +61,7 @@
     "sigemptyset",
     "SIGINFO",
     "SIGTRAP",
+    "simplifycfg",
     "Stackless",
     "startproc",
     "tbnz",
