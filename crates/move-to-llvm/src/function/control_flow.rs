@@ -53,7 +53,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 let current = llvm
                     .builder
                     .get_insert_block()
-                    .ok_or(CompileError::Llvm("no insert block".into()))?;
+                    .ok_or(CompileError::llvm("no insert block"))?;
                 if current.get_terminator().is_none() {
                     llvm.builder.build_unconditional_branch(block)?;
                 }

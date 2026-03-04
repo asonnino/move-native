@@ -44,7 +44,7 @@ impl<'ctx> LlvmContext<'ctx> {
         let all_modules: Vec<&CompiledModule> =
             dependencies.iter().chain(std::iter::once(module)).collect();
         let env = move_model::run_bytecode_model_builder(all_modules)
-            .map_err(|e| CompileError::ModelBuilder(e.to_string()))?;
+            .map_err(|e| CompileError::model_builder(e.to_string()))?;
         let module_name = env
             .get_modules()
             .last()

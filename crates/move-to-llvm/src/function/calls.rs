@@ -131,7 +131,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 let saved_block = llvm
                     .builder
                     .get_insert_block()
-                    .ok_or(CompileError::Llvm("no insert block".into()))?;
+                    .ok_or(CompileError::llvm("no insert block"))?;
 
                 let generator = StacklessBytecodeGenerator::new(callee_env);
                 let func_data = generator.generate_function();

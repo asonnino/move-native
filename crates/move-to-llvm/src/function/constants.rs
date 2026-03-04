@@ -158,7 +158,7 @@ pub(super) fn serialize_scalar_vector(elems: &[Constant]) -> CompileResult<(usiz
         Constant::U128(_) => 16,
         Constant::U256(_) | Constant::Address(_) => 32,
         other => {
-            return Err(CompileError::UnsupportedConstant(other.clone()));
+            return Err(CompileError::unsupported_constant(other.clone()));
         }
     };
 
@@ -184,7 +184,7 @@ pub(super) fn serialize_scalar_vector(elems: &[Constant]) -> CompileResult<(usiz
                 buf.extend_from_slice(&padded);
             }
             other => {
-                return Err(CompileError::UnsupportedConstant(other.clone()));
+                return Err(CompileError::unsupported_constant(other.clone()));
             }
         }
     }

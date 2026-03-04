@@ -42,7 +42,7 @@ impl<'a> Mangler<'a> {
             Type::Reference(false, inner) => Ok(format!("ref${}", self.mangle_type(inner)?)),
             Type::Reference(true, inner) => Ok(format!("mut${}", self.mangle_type(inner)?)),
             Type::TypeParameter(idx) => Ok(format!("T{idx}")),
-            other => Err(CompileError::UnsupportedType(other.clone())),
+            other => Err(CompileError::unsupported_type(other.clone())),
         }
     }
 

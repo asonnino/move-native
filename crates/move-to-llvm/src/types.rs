@@ -67,7 +67,7 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
                 struct_type.set_body(&field_types, false);
                 Ok(struct_type.into())
             }
-            other => Err(CompileError::UnsupportedType(other.clone())),
+            other => Err(CompileError::unsupported_type(other.clone())),
         }
     }
 

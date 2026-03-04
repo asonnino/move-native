@@ -144,7 +144,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         let locals = self.locals.borrow();
         match &locals[idx].mty {
             Type::Reference(_, inner) => self.lower_type(inner),
-            other => Err(CompileError::UnsupportedType(other.clone())),
+            other => Err(CompileError::unsupported_type(other.clone())),
         }
     }
 

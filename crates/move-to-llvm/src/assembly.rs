@@ -104,7 +104,7 @@ impl AssemblyBuilder {
 
         let triple = TargetTriple::create(target.triple());
         let llvm_target = inkwell::targets::Target::from_triple(&triple)
-            .map_err(|e| CompileError::TargetInit(e.to_string()))?;
+            .map_err(|e| CompileError::target_init(e.to_string()))?;
 
         let machine = llvm_target
             .create_target_machine(
@@ -115,7 +115,7 @@ impl AssemblyBuilder {
                 RelocMode::PIC,
                 CodeModel::Default,
             )
-            .ok_or_else(|| CompileError::TargetMachine("failed to create target machine".into()))?;
+            .ok_or_else(|| CompileError::target_machine("failed to create target machine"))?;
 
         Ok(Self { machine })
     }
@@ -128,7 +128,7 @@ impl AssemblyBuilder {
         let options = PassBuilderOptions::create();
         module
             .run_passes("mem2reg,instcombine,simplifycfg", &self.machine, options)
-            .map_err(|e| CompileError::Llvm(e.to_string()))
+            .map_err(|e| CompileError::llvm(e.to_string()))
     }
 
     /// Emit the module as assembly text.
@@ -136,10 +136,10 @@ impl AssemblyBuilder {
         let buf = self
             .machine
             .write_to_memory_buffer(module, FileType::Assembly)
-            .map_err(|e| CompileError::CodeGeneration(e.to_string()))?;
+            .map_err(|e| CompileError::codegen(e.to_string()))?;
 
         let asm = std::str::from_utf8(buf.as_slice())
-            .map_err(|e| CompileError::CodeGeneration(e.to_string()))?
+            .map_err(|e| CompileError::codegen(e.to_string()))?
             .to_string();
 
         Ok(Assembly(asm))

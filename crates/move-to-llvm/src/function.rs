@@ -72,7 +72,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
             let parameter = function
                 .get_nth_param(i as u32)
-                .ok_or(CompileError::Llvm("missing parameter".into()))?;
+                .ok_or(CompileError::llvm("missing parameter"))?;
             ctx.builder.build_store(local.alloca, parameter)?;
         }
 
@@ -118,7 +118,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Bytecode::Branch(..)
             | Bytecode::Abort(..) => ControlFlowEmitter::new(&self.state).emit(byte_code)?,
             other => {
-                return Err(CompileError::UnsupportedBytecode(other.clone()));
+                return Err(CompileError::unsupported_bytecode(other.clone()));
             }
         }
         Ok(())
@@ -199,7 +199,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             )
             .emit_get_global(*module_id, *datatype_id, type_args, destinations, sources),
 
-            other => Err(CompileError::UnsupportedOperation(other.clone())),
+            other => Err(CompileError::unsupported_operation(other.clone())),
         }
     }
 }

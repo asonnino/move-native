@@ -29,7 +29,7 @@ impl<'ctx> Compiler<'ctx> {
     /// Compile serialized Move bytecode to assembly.
     pub fn compile(target: &Target, bytecode: &[u8]) -> CompileResult<Assembly> {
         let module = CompiledModule::deserialize_with_defaults(bytecode)
-            .map_err(|e| CompileError::Deserialize(e.to_string()))?;
+            .map_err(|e| CompileError::deserialize(e.to_string()))?;
         Self::compile_module(target, &module)
     }
 

@@ -5,19 +5,19 @@ use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Constant, Operation};
 use thiserror::Error;
 
+/// Convenience alias used throughout the crate.
+pub type CompileResult<T> = Result<T, CompileError>;
+
 #[derive(Debug, Error)]
 pub enum CompileError {
     #[error("unsupported bytecode: {0:?}")]
-    UnsupportedBytecode(Bytecode),
+    UnsupportedBytecode(Box<Bytecode>),
 
     #[error("unsupported type: {0:?}")]
-    UnsupportedType(Type),
+    UnsupportedType(Box<Type>),
 
     #[error("unsupported constant: {0:?}")]
-    UnsupportedConstant(Constant),
-
-    #[error("function has no code unit")]
-    NoCode,
+    UnsupportedConstant(Box<Constant>),
 
     #[error("LLVM builder error: {0}")]
     Builder(#[from] inkwell::builder::BuilderError),
@@ -38,11 +38,50 @@ pub enum CompileError {
     Deserialize(String),
 
     #[error("unsupported operation: {0:?}")]
-    UnsupportedOperation(Operation),
+    UnsupportedOperation(Box<Operation>),
 
     #[error("model builder failed: {0}")]
     ModelBuilder(String),
 }
 
-/// Convenience alias used throughout the crate.
-pub type CompileResult<T> = Result<T, CompileError>;
+impl CompileError {
+    pub fn unsupported_bytecode(bc: Bytecode) -> Self {
+        Self::UnsupportedBytecode(Box::new(bc))
+    }
+
+    pub fn unsupported_type(ty: Type) -> Self {
+        Self::UnsupportedType(Box::new(ty))
+    }
+
+    pub fn unsupported_constant(c: Constant) -> Self {
+        Self::UnsupportedConstant(Box::new(c))
+    }
+
+    pub fn unsupported_operation(op: Operation) -> Self {
+        Self::UnsupportedOperation(Box::new(op))
+    }
+
+    pub fn llvm(msg: impl Into<String>) -> Self {
+        Self::Llvm(msg.into())
+    }
+
+    pub fn target_init(msg: impl Into<String>) -> Self {
+        Self::TargetInit(msg.into())
+    }
+
+    pub fn target_machine(msg: impl Into<String>) -> Self {
+        Self::TargetMachine(msg.into())
+    }
+
+    pub fn codegen(msg: impl Into<String>) -> Self {
+        Self::CodeGeneration(msg.into())
+    }
+
+    pub fn deserialize(msg: impl Into<String>) -> Self {
+        Self::Deserialize(msg.into())
+    }
+
+    pub fn model_builder(msg: impl Into<String>) -> Self {
+        Self::ModelBuilder(msg.into())
+    }
+}
