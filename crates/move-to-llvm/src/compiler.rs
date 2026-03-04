@@ -2,12 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use inkwell::context::Context;
-use inkwell::module::Linkage;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::FunctionValue;
 use move_binary_format::CompiledModule;
 use move_model::model::FunctionEnv;
-use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
@@ -30,84 +27,81 @@ pub struct Compiler<'ctx> {
 }
 
 impl<'ctx> Compiler<'ctx> {
-    /// Compile serialized Move bytecode to AArch64 assembly.
+    /// Compile serialized Move bytecode to assembly.
     pub fn compile(bytecode: &[u8]) -> CompileResult<Assembly> {
         let module = CompiledModule::deserialize_with_defaults(bytecode)
             .map_err(|e| CompileError::Deserialize(e.to_string()))?;
         Self::compile_module(&module)
     }
 
-    /// Compile an already-deserialized Move module to AArch64 assembly.
+    /// Compile an already-deserialized Move module to assembly.
     pub fn compile_module(module: &CompiledModule) -> CompileResult<Assembly> {
-        Self::compile_module_with_deps(module, &[])
+        Self::compile_module_with_dependencies(module, &[])
     }
 
-    /// Compile a Move module to AArch64 assembly, with dependency modules
+    /// Compile a Move module to assembly, with dependency modules
     /// visible for resolving cross-module function signatures.
-    pub fn compile_module_with_deps(
+    pub fn compile_module_with_dependencies(
         module: &CompiledModule,
-        deps: &[CompiledModule],
+        dependencies: &[CompiledModule],
     ) -> CompileResult<Assembly> {
         let context = Context::create();
-        Self::compile_with_context(&context, module, deps)
+        Self::compile_with_dependencies_and_context(module, dependencies, &context)
     }
 
     /// Compile using an externally-owned LLVM context.
-    ///
-    /// This separate method lets the static entry points create the `Context`
-    /// on their stack frame so that `Compiler<'ctx>` can borrow it without
-    /// lifetime issues.
-    fn compile_with_context(
-        context: &Context,
+    fn compile_with_dependencies_and_context(
         module: &CompiledModule,
-        deps: &[CompiledModule],
+        dependencies: &[CompiledModule],
+        context: &Context,
     ) -> CompileResult<Assembly> {
-        let compiler = Compiler::new(context, module, deps)?;
-        compiler.run()
+        let compiler = Compiler::new(context, module, dependencies)?;
+        compiler.emit()
     }
 
     fn new(
         context: &'ctx Context,
         module: &CompiledModule,
-        deps: &[CompiledModule],
+        dependencies: &[CompiledModule],
     ) -> CompileResult<Self> {
-        let ctx = LlvmContext::new(context, "move_module");
+        let mangler = Mangler::new(module, dependencies)?;
+        let module_name = mangler.target_module().get_full_name_str();
+        let ctx = LlvmContext::new(context, &module_name);
         let asm_builder = AssemblyBuilder::new()?;
-
-        let all_modules: Vec<&CompiledModule> =
-            deps.iter().chain(std::iter::once(module)).collect();
-        let env = move_model::run_bytecode_model_builder(all_modules)
-            .map_err(|e| CompileError::ModelBuilder(e.to_string()))?;
 
         Ok(Self {
             ctx,
-            mangler: Mangler::new(env),
+            mangler,
             asm_builder,
         })
     }
 
-    fn run(&self) -> CompileResult<Assembly> {
-        let target_module_env = self.mangler.env().get_modules().last().unwrap();
+    fn emit(&self) -> CompileResult<Assembly> {
+        let target_module_env = self.mangler.target_module();
 
-        let funcs: Vec<_> = target_module_env
+        // Collect non-generic, non-native functions — the ones we compile
+        // directly. Natives are implemented in Rust; generics are monomorphized
+        // on demand at call sites (see CallEmitter::emit_generic).
+        let targets: Vec<_> = target_module_env
             .into_functions()
-            .filter(|f| !f.is_native() && f.get_type_parameter_count() == 0)
-            .map(|func_env| {
-                let generator = StacklessBytecodeGenerator::new(&func_env);
-                let func_data = generator.generate_function();
-                (func_env, func_data)
+            .filter(|t| !t.is_native() && t.get_type_parameter_count() == 0)
+            .map(|function_env| {
+                let generator = StacklessBytecodeGenerator::new(&function_env);
+                let function_data = generator.generate_function();
+                (function_env, function_data)
             })
             .collect();
 
         // Pass 1: declare all functions (so callees are visible).
-        let declarations: Vec<_> = funcs
+        let declarations: Vec<_> = targets
             .iter()
-            .map(|(func_env, func_data)| self.declare_function(func_env, func_data))
+            .map(|(function_env, _)| self.declare_function(function_env))
             .collect::<Result<_, _>>()?;
 
         // Pass 2: compile function bodies.
-        for ((func_env, func_data), function) in funcs.iter().zip(declarations) {
-            self.compile_function(function, func_env, func_data)?;
+        // Emits IR into `self.ctx.module` via LLVM's interior-mutable FFI.
+        for ((function_env, function_data), declaration) in targets.iter().zip(declarations) {
+            self.compile_function(declaration, function_env, function_data)?;
         }
 
         self.asm_builder.optimize(&self.ctx.module)?;
@@ -117,90 +111,33 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Declare an LLVM function (signature only, no body) for the given Move function.
-    pub(crate) fn declare_function(
+    fn declare_function(
         &self,
-        func_env: &FunctionEnv<'_>,
-        func_data: &FunctionData,
+        function_env: &FunctionEnv<'_>,
     ) -> CompileResult<FunctionValue<'ctx>> {
-        let name = func_env
-            .module_env
-            .env
-            .symbol_pool()
-            .string(func_env.get_name());
-        let param_count = func_env.get_parameter_count();
-
-        let param_llvm_types: Vec<_> = func_data.local_types[..param_count]
-            .iter()
-            .map(|ty| self.lower_type(ty).map(|t| t.into()))
-            .collect::<Result<_, _>>()?;
-
-        let fn_type = self.build_fn_type(&func_data.return_types, &param_llvm_types)?;
-        Ok(self.ctx.module.add_function(&name, fn_type, None))
+        let name = function_env.get_name_str();
+        let function_type = TypeLowering::new(&self.ctx, &self.mangler).lower_function_type(
+            &function_env.get_parameter_types(),
+            &function_env.get_return_types(),
+        )?;
+        Ok(self.ctx.add_function(&name, function_type))
     }
 
     /// Compile the body of an already-declared LLVM function.
-    pub(crate) fn compile_function(
+    fn compile_function(
         &self,
-        function: FunctionValue<'ctx>,
-        func_env: &FunctionEnv<'_>,
-        func_data: &FunctionData,
+        declaration: FunctionValue<'ctx>,
+        function_env: &FunctionEnv<'_>,
+        function_data: &FunctionData,
     ) -> CompileResult<()> {
-        let param_count = func_env.get_parameter_count();
-        let lowering = FunctionLowering::new(self, function, param_count, func_data, Vec::new())?;
-        lowering.lower_code(func_data)?;
-        Ok(())
-    }
-
-    /// Create a `TypeLowering` view for this compiler.
-    pub(crate) fn types(&self) -> TypeLowering<'_, 'ctx> {
-        TypeLowering::new(&self.ctx, &self.mangler)
-    }
-
-    /// Convenience: lower a Move type to an LLVM type.
-    pub(crate) fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
-        self.types().lower_type(ty)
-    }
-
-    /// Convenience: build an LLVM function type from Move return types and LLVM param types.
-    pub(crate) fn build_fn_type(
-        &self,
-        ret_types: &[Type],
-        param_types: &[BasicMetadataTypeEnum<'ctx>],
-    ) -> CompileResult<inkwell::types::FunctionType<'ctx>> {
-        self.types().build_fn_type(ret_types, param_types)
-    }
-
-    /// Convenience: mangle a Move type.
-    pub(crate) fn mangle_type(&self, ty: &Type) -> String {
-        self.mangler.mangle_type(ty)
-    }
-
-    /// Convenience: mangle type arguments.
-    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> String {
-        self.mangler.mangle_type_args(type_args)
-    }
-
-    /// Convenience: mangle a native symbol.
-    pub(crate) fn mangle_native_symbol(
-        &self,
-        callee_env: &FunctionEnv<'_>,
-        type_args: &[Type],
-    ) -> String {
-        self.mangler.mangle_native_symbol(callee_env, type_args)
-    }
-
-    /// Get an existing function from the module, or declare it as an external.
-    pub(crate) fn get_or_declare_extern(
-        &self,
-        name: &str,
-        fn_type: inkwell::types::FunctionType<'ctx>,
-    ) -> FunctionValue<'ctx> {
-        match self.ctx.module.get_function(name) {
-            Some(f) => f,
-            None => self
-                .ctx
-                .module
-                .add_function(name, fn_type, Some(Linkage::External)),
-        }
+        FunctionLowering::new(
+            &self.ctx,
+            &self.mangler,
+            declaration,
+            function_env.get_parameter_count(),
+            function_data,
+            Vec::new(),
+        )?
+        .lower_function(function_data)
     }
 }

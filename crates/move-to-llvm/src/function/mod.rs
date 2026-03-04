@@ -17,8 +17,10 @@ use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{AssignKind, Bytecode, Label, Operation};
 
-use crate::compiler::Compiler;
+use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
+use crate::mangle::Mangler;
+use crate::types::TypeLowering;
 
 use calls::CallEmitter;
 use constants::ConstantEmitter;
@@ -44,7 +46,8 @@ struct Local<'ctx> {
 /// an LLVM `alloca` in the entry block. LLVM's `mem2reg` pass later promotes
 /// these to SSA registers.
 pub(crate) struct FunctionLowering<'a, 'ctx> {
-    pub(crate) compiler: &'a Compiler<'ctx>,
+    pub(crate) ctx: &'a LlvmContext<'ctx>,
+    pub(crate) mangler: &'a Mangler,
     /// All locals (params + locals + compiler-generated temps).
     locals: RefCell<Vec<Local<'ctx>>>,
     /// Pre-created basic blocks for each Label in the bytecode.
@@ -57,15 +60,17 @@ pub(crate) struct FunctionLowering<'a, 'ctx> {
 
 impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     pub fn new(
-        compiler: &'a Compiler<'ctx>,
+        ctx: &'a LlvmContext<'ctx>,
+        mangler: &'a Mangler,
         function: FunctionValue<'ctx>,
         param_count: usize,
         func_data: &FunctionData,
         type_params: Vec<Type>,
     ) -> CompileResult<Self> {
-        let ctx = &compiler.ctx;
         let entry = ctx.context.append_basic_block(function, "entry");
         ctx.builder.position_at_end(entry);
+
+        let type_lowering = TypeLowering::new(ctx, mangler);
 
         // Allocas for all locals
         let mut locals = Vec::with_capacity(func_data.local_types.len());
@@ -75,7 +80,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             } else {
                 mty.instantiate(&type_params)
             };
-            let llvm_ty = compiler.lower_type(&mty)?;
+            let llvm_ty = type_lowering.lower_type(&mty)?;
             let alloca = ctx.builder.build_alloca(llvm_ty, &format!("t{i}")).unwrap();
             locals.push(Local {
                 mty,
@@ -102,7 +107,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         }
 
         Ok(Self {
-            compiler,
+            ctx,
+            mangler,
             locals: RefCell::new(locals),
             label_blocks,
             type_params,
@@ -123,7 +129,49 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         }
     }
 
-    pub fn lower_code(&self, func_data: &FunctionData) -> CompileResult<()> {
+    /// Lower a Move type to an LLVM type.
+    pub(crate) fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
+        TypeLowering::new(self.ctx, self.mangler).lower_type(ty)
+    }
+
+    /// Lower Move parameter and return types into an LLVM function type.
+    pub(crate) fn lower_function_type(
+        &self,
+        parameter_types: &[Type],
+        return_types: &[Type],
+    ) -> CompileResult<inkwell::types::FunctionType<'ctx>> {
+        TypeLowering::new(self.ctx, self.mangler).lower_function_type(parameter_types, return_types)
+    }
+
+    /// Get an existing function from the module, or declare it as an external.
+    pub(crate) fn get_or_declare_extern(
+        &self,
+        name: &str,
+        fn_type: inkwell::types::FunctionType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        self.ctx.get_or_declare_extern(name, fn_type)
+    }
+
+    /// Mangle a Move type.
+    pub(crate) fn mangle_type(&self, ty: &Type) -> String {
+        self.mangler.mangle_type(ty)
+    }
+
+    /// Mangle type arguments.
+    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> String {
+        self.mangler.mangle_type_args(type_args)
+    }
+
+    /// Mangle a native symbol.
+    pub(crate) fn mangle_native_symbol(
+        &self,
+        callee_env: &move_model::model::FunctionEnv<'_>,
+        type_args: &[Type],
+    ) -> String {
+        self.mangler.mangle_native_symbol(callee_env, type_args)
+    }
+
+    pub fn lower_function(&self, func_data: &FunctionData) -> CompileResult<()> {
         for bc in &func_data.code {
             self.lower_bytecode(bc)?;
         }
@@ -131,7 +179,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     }
 
     fn lower_bytecode(&self, bc: &Bytecode) -> CompileResult<()> {
-        let ctx = &self.compiler.ctx;
+        let ctx = self.ctx;
         match bc {
             Bytecode::Assign(_, dst, src, kind) => {
                 // Move-swap optimization: for Move of struct types, swap the
@@ -207,7 +255,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             }
             Bytecode::Abort(_, code_idx) => {
                 let code = self.load_value(*code_idx)?;
-                let abort_fn = self.compiler.get_or_declare_extern(
+                let abort_fn = self.get_or_declare_extern(
                     "__move_rt_abort",
                     ctx.context
                         .void_type()
@@ -231,7 +279,6 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         let locals = self.locals.borrow();
         let local = &locals[idx];
         Ok(self
-            .compiler
             .ctx
             .builder
             .build_load(local.llvm_ty, local.alloca, &format!("t{idx}"))
@@ -246,8 +293,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     /// Store a value into a local's alloca.
     pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) {
         let locals = self.locals.borrow();
-        self.compiler
-            .ctx
+        self.ctx
             .builder
             .build_store(locals[idx].alloca, val)
             .unwrap();
@@ -257,7 +303,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     pub(crate) fn pointee_type(&self, idx: usize) -> CompileResult<BasicTypeEnum<'ctx>> {
         let locals = self.locals.borrow();
         match &locals[idx].mty {
-            Type::Reference(_, inner) => self.compiler.lower_type(inner),
+            Type::Reference(_, inner) => self.lower_type(inner),
             other => Err(CompileError::UnsupportedType(format!(
                 "expected reference type, got {:?}",
                 other
@@ -278,7 +324,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         name: &str,
         data: &[u8],
     ) -> inkwell::values::GlobalValue<'ctx> {
-        let ctx = &self.compiler.ctx;
+        let ctx = &self.ctx;
         let arr_ty = ctx.i8_type.array_type(data.len() as u32);
         let arr_val = ctx.context.const_string(data, false);
         let global = ctx.module.add_global(arr_ty, None, name);
@@ -290,7 +336,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     }
 
     fn lower_operation(&self, dsts: &[usize], op: &Operation, srcs: &[usize]) -> CompileResult<()> {
-        let ctx = &self.compiler.ctx;
+        let ctx = &self.ctx;
         let result = match op {
             // Arithmetic: two same-type integers -> same type
             Operation::Add | Operation::Sub | Operation::Mul | Operation::Div | Operation::Mod => {
@@ -415,7 +461,6 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             Operation::Pack(mid, did, type_args) => {
                 let type_args = self.inst_types(type_args);
                 let struct_ty = self
-                    .compiler
                     .lower_type(&Type::Datatype(*mid, *did, type_args))?
                     .into_struct_type();
                 let mut agg = struct_ty.get_undef();
@@ -434,12 +479,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             // Unpack: destructure a struct into field values
             Operation::Unpack(mid, did, _type_args) => {
                 let struct_val = self.load_value(srcs[0])?.into_struct_value();
-                let struct_env = self
-                    .compiler
-                    .mangler
-                    .env()
-                    .get_module(*mid)
-                    .into_struct(*did);
+                let struct_env = self.mangler.env().get_module(*mid).into_struct(*did);
                 let field_count = struct_env.get_fields().count();
                 for (i, dst) in dsts.iter().enumerate().take(field_count) {
                     let field_val = ctx
@@ -462,9 +502,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             Operation::BorrowField(mid, did, type_args, offset) => {
                 let struct_ptr = self.load_value(srcs[0])?.into_pointer_value();
                 let type_args = self.inst_types(type_args);
-                let struct_ty = self
-                    .compiler
-                    .lower_type(&Type::Datatype(*mid, *did, type_args))?;
+                let struct_ty = self.lower_type(&Type::Datatype(*mid, *did, type_args))?;
                 let field_ptr = ctx
                     .builder
                     .build_struct_gep(struct_ty, struct_ptr, *offset as u32, "borrow_field")
@@ -539,7 +577,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     }
 
     fn lower_cast(&self, src: usize, target_ty: IntType<'ctx>) -> CompileResult<IntValue<'ctx>> {
-        let ctx = &self.compiler.ctx;
+        let ctx = &self.ctx;
         let val = self.load_int(src)?;
         let src_bits = val.get_type().get_bit_width();
         let dst_bits = target_ty.get_bit_width();

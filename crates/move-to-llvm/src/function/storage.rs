@@ -1,7 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use move_model::model::{DatatypeId, ModuleId};
 use move_model::ty::Type;
@@ -28,9 +27,9 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         self.emit_storage_call("move_to", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let val_ty = self.fl.compiler.lower_type(&dt_ty)?.into();
+            let val_ty = self.fl.lower_type(&dt_ty)?.into();
             Ok(ctx
                 .context
                 .void_type()
@@ -46,9 +45,9 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         self.emit_storage_call("move_from", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let ret_ty = self.fl.compiler.lower_type(&dt_ty)?;
+            let ret_ty = self.fl.lower_type(&dt_ty)?;
             Ok(ret_ty.fn_type(&[ctx.i256_type.into()], false))
         })
     }
@@ -61,7 +60,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         self.emit_storage_call("exists", mid, did, type_args, dsts, srcs, |_| {
             Ok(ctx.i8_type.fn_type(&[ctx.i256_type.into()], false))
         })
@@ -75,7 +74,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         self.emit_storage_call("borrow_global", mid, did, type_args, dsts, srcs, |_| {
             Ok(ctx.ptr_type.fn_type(&[ctx.i256_type.into()], false))
         })
@@ -89,9 +88,9 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         self.emit_storage_call("get_global", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let ret_ty = self.fl.compiler.lower_type(&dt_ty)?;
+            let ret_ty = self.fl.lower_type(&dt_ty)?;
             Ok(ret_ty.fn_type(&[ctx.i256_type.into()], false))
         })
     }
@@ -108,19 +107,15 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         srcs: &[usize],
         build_fn_type: impl FnOnce(Type) -> CompileResult<inkwell::types::FunctionType<'ctx>>,
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         let inst_args = self.fl.inst_types(type_args);
         let dt_ty = Type::Datatype(mid, did, inst_args);
-        let mangled = self.fl.compiler.mangle_type(&dt_ty);
+        let mangled = self.fl.mangle_type(&dt_ty);
         let symbol = format!("__move_rt_{op_name}${mangled}");
 
         let func = match ctx.module.get_function(&symbol) {
             Some(f) => f,
-            None => {
-                let fn_type = build_fn_type(dt_ty)?;
-                ctx.module
-                    .add_function(&symbol, fn_type, Some(Linkage::External))
-            }
+            None => ctx.declare_extern(&symbol, build_fn_type(dt_ty)?),
         };
 
         let args: Vec<_> = srcs

@@ -1,7 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use inkwell::module::Linkage;
 use inkwell::values::FunctionValue;
 use move_model::model::{FunId, ModuleId};
 use move_model::ty::Type;
@@ -31,10 +30,9 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         type_args: &[Type],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         let callee_env = self
             .fl
-            .compiler
             .mangler
             .env()
             .get_module(module_id)
@@ -86,25 +84,23 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         callee_env: &move_model::model::FunctionEnv<'_>,
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let ctx = &self.fl.compiler.ctx;
-        let mangled = self.fl.compiler.mangle_native_symbol(callee_env, type_args);
+        let ctx = &self.fl.ctx;
+        let mangled = self.fl.mangle_native_symbol(callee_env, type_args);
         let f = match ctx.module.get_function(&mangled) {
             Some(f) => f,
             None => {
-                let param_types: Vec<_> = callee_env
+                let inst_params: Vec<Type> = callee_env
                     .get_parameter_types()
                     .iter()
                     .map(|t: &Type| t.instantiate(type_args))
-                    .map(|t| self.fl.compiler.lower_type(&t).map(|lt| lt.into()))
-                    .collect::<Result<_, _>>()?;
-                let ret_types: Vec<Type> = callee_env
+                    .collect();
+                let inst_rets: Vec<Type> = callee_env
                     .get_return_types()
                     .iter()
                     .map(|t: &Type| t.instantiate(type_args))
                     .collect();
-                let fn_type = self.fl.compiler.build_fn_type(&ret_types, &param_types)?;
-                ctx.module
-                    .add_function(&mangled, fn_type, Some(Linkage::External))
+                let fn_type = self.fl.lower_function_type(&inst_params, &inst_rets)?;
+                ctx.declare_extern(&mangled, fn_type)
             }
         };
         Ok((f, mangled))
@@ -117,30 +113,25 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         callee_env: &move_model::model::FunctionEnv<'_>,
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         let inst_args = self.fl.inst_types(type_args);
         let callee_name = callee_env.get_name_str();
-        let mangled = format!(
-            "{}${}",
-            callee_name,
-            self.fl.compiler.mangle_type_args(&inst_args)
-        );
+        let mangled = format!("{}${}", callee_name, self.fl.mangle_type_args(&inst_args));
         let f = match ctx.module.get_function(&mangled) {
             Some(f) => f,
             None => {
-                let param_types: Vec<_> = callee_env
+                let inst_params: Vec<Type> = callee_env
                     .get_parameter_types()
                     .iter()
                     .map(|t: &Type| t.instantiate(&inst_args))
-                    .map(|t| self.fl.compiler.lower_type(&t).map(|lt| lt.into()))
-                    .collect::<Result<_, _>>()?;
-                let ret_types: Vec<Type> = callee_env
+                    .collect();
+                let inst_rets: Vec<Type> = callee_env
                     .get_return_types()
                     .iter()
                     .map(|t: &Type| t.instantiate(&inst_args))
                     .collect();
-                let fn_type = self.fl.compiler.build_fn_type(&ret_types, &param_types)?;
-                let function = ctx.module.add_function(&mangled, fn_type, None);
+                let fn_type = self.fl.lower_function_type(&inst_params, &inst_rets)?;
+                let function = ctx.add_function(&mangled, fn_type);
 
                 let saved_block = ctx.builder.get_insert_block().unwrap();
 
@@ -148,13 +139,14 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 let func_data = generator.generate_function();
                 let param_count = callee_env.get_parameter_count();
                 let callee_lowering = FunctionLowering::new(
-                    self.fl.compiler,
+                    self.fl.ctx,
+                    self.fl.mangler,
                     function,
                     param_count,
                     &func_data,
                     inst_args,
                 )?;
-                callee_lowering.lower_code(&func_data)?;
+                callee_lowering.lower_function(&func_data)?;
 
                 ctx.builder.position_at_end(saved_block);
                 function
@@ -170,20 +162,16 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         &self,
         callee_env: &move_model::model::FunctionEnv<'_>,
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         let callee_name = callee_env.get_name_str();
         let f = match ctx.module.get_function(&callee_name) {
             Some(f) => f,
             None => {
-                let param_types: Vec<_> = callee_env
-                    .get_parameter_types()
-                    .iter()
-                    .map(|t| self.fl.compiler.lower_type(t).map(|lt| lt.into()))
-                    .collect::<Result<_, _>>()?;
-                let ret_types = callee_env.get_return_types();
-                let fn_type = self.fl.compiler.build_fn_type(&ret_types, &param_types)?;
-                ctx.module
-                    .add_function(&callee_name, fn_type, Some(Linkage::External))
+                let fn_type = self.fl.lower_function_type(
+                    &callee_env.get_parameter_types(),
+                    &callee_env.get_return_types(),
+                )?;
+                ctx.declare_extern(&callee_name, fn_type)
             }
         };
         Ok((f, callee_name))

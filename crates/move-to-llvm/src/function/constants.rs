@@ -18,7 +18,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
     }
 
     pub fn lower(&self, constant: &Constant) -> CompileResult<BasicValueEnum<'ctx>> {
-        let ctx = &self.fl.compiler.ctx;
+        let ctx = &self.fl.ctx;
         match constant {
             Constant::Bool(v) => Ok(ctx.i8_type.const_int(*v as u64, false).into()),
             Constant::U8(v) => Ok(ctx.i8_type.const_int(*v as u64, false).into()),
@@ -52,7 +52,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let global = self
                     .fl
                     .emit_const_global(&format!("const_bytes_{id}"), bytes);
-                let func = self.fl.compiler.get_or_declare_extern(
+                let func = self.fl.get_or_declare_extern(
                     "__move_rt_const_vec_u8",
                     ctx.ptr_type
                         .fn_type(&[ctx.ptr_type.into(), ctx.i64_type.into()], false),
@@ -74,7 +74,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let global = self
                     .fl
                     .emit_const_global(&format!("const_addrs_{id}"), &buf);
-                let func = self.fl.compiler.get_or_declare_extern(
+                let func = self.fl.get_or_declare_extern(
                     "__move_rt_const_vec_address",
                     ctx.ptr_type
                         .fn_type(&[ctx.ptr_type.into(), ctx.i64_type.into()], false),
@@ -102,7 +102,6 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 if elems.is_empty() {
                     let func = self
                         .fl
-                        .compiler
                         .get_or_declare_extern("__move_rt_const_vec", fn_type);
                     let null = ctx.ptr_type.const_null();
                     let zero = ctx.i64_type.const_zero();
@@ -124,7 +123,6 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let global = self.fl.emit_const_global(&format!("const_vec_{id}"), &buf);
                 let func = self
                     .fl
-                    .compiler
                     .get_or_declare_extern("__move_rt_const_vec", fn_type);
                 let ptr = global.as_pointer_value();
                 let count = ctx.i64_type.const_int(elems.len() as u64, false);

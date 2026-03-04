@@ -1,8 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use move_model::model::{FunctionEnv, GlobalEnv};
+use move_binary_format::CompiledModule;
+use move_model::model::{FunctionEnv, GlobalEnv, ModuleEnv};
 use move_model::ty::{PrimitiveType, Type};
+
+use crate::error::{CompileError, CompileResult};
 
 /// Name mangling for Move types and native symbols.
 ///
@@ -13,12 +16,23 @@ pub(crate) struct Mangler {
 }
 
 impl Mangler {
-    pub fn new(env: GlobalEnv) -> Self {
-        Self { env }
+    /// Build a `GlobalEnv` from the target module and its dependencies,
+    /// then wrap it in a `Mangler`.
+    pub fn new(module: &CompiledModule, deps: &[CompiledModule]) -> CompileResult<Self> {
+        let all_modules: Vec<&CompiledModule> =
+            deps.iter().chain(std::iter::once(module)).collect();
+        let env = move_model::run_bytecode_model_builder(all_modules)
+            .map_err(|e| CompileError::ModelBuilder(e.to_string()))?;
+        Ok(Self { env })
     }
 
     pub fn env(&self) -> &GlobalEnv {
         &self.env
+    }
+
+    /// The module being compiled (always the last one added to the environment).
+    pub fn target_module(&self) -> ModuleEnv<'_> {
+        self.env.get_modules().last().unwrap()
     }
 
     /// Mangle a Move type into a deterministic, symbol-safe string.

@@ -59,6 +59,7 @@
     "sigemptyset",
     "SIGINFO",
     "SIGTRAP",
+    "Stackless",
     "startproc",
     "tbnz",
     "ucontext",

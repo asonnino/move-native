@@ -73,26 +73,31 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
         }
     }
 
-    /// Build an LLVM function type from Move return types and LLVM param types.
+    /// Lower Move parameter and return types into an LLVM function type.
     ///
     /// For zero returns -> void, one return -> that type, multiple returns -> anonymous struct.
-    pub fn build_fn_type(
+    pub fn lower_function_type(
         &self,
-        ret_types: &[Type],
-        param_types: &[BasicMetadataTypeEnum<'ctx>],
+        parameter_types: &[Type],
+        return_types: &[Type],
     ) -> CompileResult<inkwell::types::FunctionType<'ctx>> {
-        Ok(if ret_types.is_empty() {
-            self.ctx.context.void_type().fn_type(param_types, false)
-        } else if ret_types.len() == 1 {
-            let ret = self.lower_type(&ret_types[0])?;
-            ret.fn_type(param_types, false)
+        let params: Vec<BasicMetadataTypeEnum<'ctx>> = parameter_types
+            .iter()
+            .map(|ty| self.lower_type(ty).map(|t| t.into()))
+            .collect::<Result<_, _>>()?;
+
+        Ok(if return_types.is_empty() {
+            self.ctx.context.void_type().fn_type(&params, false)
+        } else if return_types.len() == 1 {
+            let ret = self.lower_type(&return_types[0])?;
+            ret.fn_type(&params, false)
         } else {
-            let llvm_ret_types: Vec<BasicTypeEnum<'ctx>> = ret_types
+            let llvm_ret_types: Vec<BasicTypeEnum<'ctx>> = return_types
                 .iter()
                 .map(|t| self.lower_type(t))
                 .collect::<Result<_, _>>()?;
             let ret_struct = self.ctx.context.struct_type(&llvm_ret_types, false);
-            ret_struct.fn_type(param_types, false)
+            ret_struct.fn_type(&params, false)
         })
     }
 }

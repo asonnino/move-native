@@ -4,8 +4,9 @@
 use inkwell::AddressSpace;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::types::{IntType, PointerType};
+use inkwell::module::{Linkage, Module};
+use inkwell::types::{FunctionType, IntType, PointerType};
+use inkwell::values::FunctionValue;
 
 /// Wraps the LLVM Context, Module, and Builder for a single compilation unit.
 pub(crate) struct LlvmContext<'ctx> {
@@ -38,6 +39,29 @@ impl<'ctx> LlvmContext<'ctx> {
             i128_type: context.i128_type(),
             i256_type: context.custom_width_int_type(256),
             ptr_type: context.ptr_type(AddressSpace::default()),
+        }
+    }
+
+    /// Add a function defined in this module.
+    pub fn add_function(&self, name: &str, fn_type: FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        self.module.add_function(name, fn_type, None)
+    }
+
+    /// Declare an external function (defined elsewhere, resolved at link time).
+    pub fn declare_extern(&self, name: &str, fn_type: FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        self.module
+            .add_function(name, fn_type, Some(Linkage::External))
+    }
+
+    /// Get an existing function or declare it as external.
+    pub fn get_or_declare_extern(
+        &self,
+        name: &str,
+        fn_type: FunctionType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        match self.module.get_function(name) {
+            Some(f) => f,
+            None => self.declare_extern(name, fn_type),
         }
     }
 }

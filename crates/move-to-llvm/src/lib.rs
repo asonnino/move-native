@@ -35,5 +35,5 @@ pub fn compile_module_with_deps(
     module: &move_binary_format::CompiledModule,
     deps: &[move_binary_format::CompiledModule],
 ) -> CompileResult<Assembly> {
-    Compiler::compile_module_with_deps(module, deps)
+    Compiler::compile_module_with_dependencies(module, deps)
 }
