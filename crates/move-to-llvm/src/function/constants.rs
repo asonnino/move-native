@@ -1,7 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use inkwell::values::BasicValueEnum;
 use move_stackless_bytecode::stackless_bytecode::Constant;
 
 use super::state::FunctionState;
@@ -17,17 +16,17 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
         Self { state }
     }
 
-    pub fn lower(&self, constant: &Constant) -> CompileResult<BasicValueEnum<'ctx>> {
+    pub fn emit(&self, destination: usize, constant: &Constant) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        match constant {
-            Constant::Bool(v) => Ok(llvm.i8_type.const_int(*v as u64, false).into()),
-            Constant::U8(v) => Ok(llvm.i8_type.const_int(*v as u64, false).into()),
-            Constant::U16(v) => Ok(llvm.i16_type.const_int(*v as u64, false).into()),
-            Constant::U32(v) => Ok(llvm.i32_type.const_int(*v as u64, false).into()),
-            Constant::U64(v) => Ok(llvm.i64_type.const_int(*v, false).into()),
+        let val = match constant {
+            Constant::Bool(v) => llvm.i8_type.const_int(*v as u64, false).into(),
+            Constant::U8(v) => llvm.i8_type.const_int(*v as u64, false).into(),
+            Constant::U16(v) => llvm.i16_type.const_int(*v as u64, false).into(),
+            Constant::U32(v) => llvm.i32_type.const_int(*v as u64, false).into(),
+            Constant::U64(v) => llvm.i64_type.const_int(*v, false).into(),
             Constant::U128(v) => {
                 let words = [*v as u64, (*v >> 64) as u64];
-                Ok(llvm.i128_type.const_int_arbitrary_precision(&words).into())
+                llvm.i128_type.const_int_arbitrary_precision(&words).into()
             }
             Constant::Address(big) => {
                 let bytes = big.to_bytes_le();
@@ -40,12 +39,12 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     u64::from_le_bytes(buf[16..24].try_into().unwrap()),
                     u64::from_le_bytes(buf[24..32].try_into().unwrap()),
                 ];
-                Ok(llvm.i256_type.const_int_arbitrary_precision(&words).into())
+                llvm.i256_type.const_int_arbitrary_precision(&words).into()
             }
             Constant::U256(v) => {
                 let (hi, lo) = v.into_words();
                 let words: [u64; 4] = [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64];
-                Ok(llvm.i256_type.const_int_arbitrary_precision(&words).into())
+                llvm.i256_type.const_int_arbitrary_precision(&words).into()
             }
             Constant::ByteArray(bytes) => {
                 let id = self.state.next_const_id();
@@ -63,7 +62,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     llvm.builder
                         .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")?;
                 match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    inkwell::values::ValueKind::Basic(v) => v,
                     _ => unreachable!("const vec runtime function must return a value"),
                 }
             }
@@ -84,7 +83,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     llvm.builder
                         .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")?;
                 match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    inkwell::values::ValueKind::Basic(v) => v,
                     _ => unreachable!("const vec runtime function must return a value"),
                 }
             }
@@ -106,10 +105,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         &[null.into(), zero.into(), zero.into()],
                         "const_vec_empty",
                     )?;
-                    return match call.try_as_basic_value() {
-                        inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    let v = match call.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(v) => v,
                         _ => unreachable!("const vec runtime function must return a value"),
                     };
+                    return self.state.store(destination, v);
                 }
                 let (elem_size, buf) = serialize_scalar_vector(elems)?;
                 let id = self.state.next_const_id();
@@ -126,11 +126,12 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     "const_vec",
                 )?;
                 match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    inkwell::values::ValueKind::Basic(v) => v,
                     _ => unreachable!("const vec runtime function must return a value"),
                 }
             }
-        }
+        };
+        self.state.store(destination, val)
     }
 }
 
@@ -157,10 +158,7 @@ pub(super) fn serialize_scalar_vector(elems: &[Constant]) -> CompileResult<(usiz
         Constant::U128(_) => 16,
         Constant::U256(_) | Constant::Address(_) => 32,
         other => {
-            return Err(CompileError::UnsupportedOperation(format!(
-                "vector constant with non-scalar element: {:?}",
-                other
-            )));
+            return Err(CompileError::UnsupportedConstant(other.clone()));
         }
     };
 
@@ -186,10 +184,7 @@ pub(super) fn serialize_scalar_vector(elems: &[Constant]) -> CompileResult<(usiz
                 buf.extend_from_slice(&padded);
             }
             other => {
-                return Err(CompileError::UnsupportedOperation(format!(
-                    "vector constant with non-scalar element: {:?}",
-                    other
-                )));
+                return Err(CompileError::UnsupportedConstant(other.clone()));
             }
         }
     }

@@ -21,22 +21,35 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         Self { state }
     }
 
-    pub fn emit(&self, dsts: &[usize], op: &Operation, srcs: &[usize]) -> CompileResult<()> {
-        match op {
-            Operation::Pack(mid, did, type_args) => {
-                self.emit_pack(*mid, *did, type_args, dsts, srcs)
+    pub fn emit(
+        &self,
+        destinations: &[usize],
+        operation: &Operation,
+        sources: &[usize],
+    ) -> CompileResult<()> {
+        match operation {
+            Operation::Pack(module_id, datatype_id, type_args) => {
+                self.emit_pack(*module_id, *datatype_id, type_args, destinations, sources)
             }
-            Operation::Unpack(mid, did, _type_args) => self.emit_unpack(*mid, *did, dsts, srcs),
-            Operation::BorrowLoc => self.emit_borrow_loc(dsts, srcs),
-            Operation::BorrowField(mid, did, type_args, offset) => {
-                self.emit_borrow_field(*mid, *did, type_args, *offset, dsts, srcs)
+            Operation::Unpack(module_id, datatype_id, _type_args) => {
+                self.emit_unpack(*module_id, *datatype_id, destinations, sources)
             }
-            Operation::GetField(_mid, _did, _type_args, offset) => {
-                self.emit_get_field(*offset, dsts, srcs)
+            Operation::BorrowLoc => self.emit_borrow_loc(destinations, sources),
+            Operation::BorrowField(module_id, datatype_id, type_args, offset) => self
+                .emit_borrow_field(
+                    *module_id,
+                    *datatype_id,
+                    type_args,
+                    *offset,
+                    destinations,
+                    sources,
+                ),
+            Operation::GetField(_module_id, _datatype_id, _type_args, offset) => {
+                self.emit_get_field(*offset, destinations, sources)
             }
-            Operation::ReadRef => self.emit_read_ref(dsts, srcs),
-            Operation::WriteRef => self.emit_write_ref(srcs),
-            Operation::FreezeRef => self.emit_freeze_ref(dsts, srcs),
+            Operation::ReadRef => self.emit_read_ref(destinations, sources),
+            Operation::WriteRef => self.emit_write_ref(sources),
+            Operation::FreezeRef => self.emit_freeze_ref(destinations, sources),
             Operation::Destroy => Ok(()),
             _ => unreachable!("StructEmitter::emit called with non-struct op"),
         }
@@ -44,108 +57,118 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
 
     fn emit_pack(
         &self,
-        mid: ModuleId,
-        did: DatatypeId,
+        module_id: ModuleId,
+        datatype_id: DatatypeId,
         type_args: &[Type],
-        dsts: &[usize],
-        srcs: &[usize],
+        destinations: &[usize],
+        sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
         let type_args = self.state.inst_types(type_args);
         let struct_ty = self
             .state
-            .lower_type(&Type::Datatype(mid, did, type_args))?
+            .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?
             .into_struct_type();
         let mut agg = struct_ty.get_undef();
-        for (i, src) in srcs.iter().enumerate() {
-            let field_val = self.state.load_value(*src)?;
+        for (i, source) in sources.iter().enumerate() {
+            let field_val = self.state.load_value(*source)?;
             agg = llvm
                 .builder
                 .build_insert_value(agg, field_val, i as u32, &format!("pack_{i}"))?
                 .into_struct_value();
         }
-        self.state.store(dsts[0], agg.into())?;
+        self.state.store(destinations[0], agg.into())?;
         Ok(())
     }
 
     fn emit_unpack(
         &self,
-        mid: ModuleId,
-        did: DatatypeId,
-        dsts: &[usize],
-        srcs: &[usize],
+        module_id: ModuleId,
+        datatype_id: DatatypeId,
+        destinations: &[usize],
+        sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let struct_val = self.state.load_value(srcs[0])?.into_struct_value();
-        let struct_env = self.state.ctx.env().get_module(mid).into_struct(did);
+        let struct_val = self.state.load_value(sources[0])?.into_struct_value();
+        let struct_env = self
+            .state
+            .ctx
+            .env()
+            .get_module(module_id)
+            .into_struct(datatype_id);
         let field_count = struct_env.get_fields().count();
-        for (i, dst) in dsts.iter().enumerate().take(field_count) {
+        for (i, destination) in destinations.iter().enumerate().take(field_count) {
             let field_val =
                 llvm.builder
                     .build_extract_value(struct_val, i as u32, &format!("unpack_{i}"))?;
-            self.state.store(*dst, field_val)?;
+            self.state.store(*destination, field_val)?;
         }
         Ok(())
     }
 
-    fn emit_borrow_loc(&self, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
-        let ptr = self.state.locals.borrow()[srcs[0]].alloca;
-        self.state.store(dsts[0], ptr.into())?;
+    fn emit_borrow_loc(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
+        let ptr = self.state.locals.borrow()[sources[0]].alloca;
+        self.state.store(destinations[0], ptr.into())?;
         Ok(())
     }
 
     fn emit_borrow_field(
         &self,
-        mid: ModuleId,
-        did: DatatypeId,
+        module_id: ModuleId,
+        datatype_id: DatatypeId,
         type_args: &[Type],
         offset: usize,
-        dsts: &[usize],
-        srcs: &[usize],
+        destinations: &[usize],
+        sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let struct_ptr = self.state.load_value(srcs[0])?.into_pointer_value();
+        let struct_ptr = self.state.load_value(sources[0])?.into_pointer_value();
         let type_args = self.state.inst_types(type_args);
-        let struct_ty = self
-            .state
-            .lower_type(&Type::Datatype(mid, did, type_args))?;
+        let struct_ty =
+            self.state
+                .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?;
         let field_ptr =
             llvm.builder
                 .build_struct_gep(struct_ty, struct_ptr, offset as u32, "borrow_field")?;
-        self.state.store(dsts[0], field_ptr.into())?;
+        self.state.store(destinations[0], field_ptr.into())?;
         Ok(())
     }
 
-    fn emit_get_field(&self, offset: usize, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
+    fn emit_get_field(
+        &self,
+        offset: usize,
+        destinations: &[usize],
+        sources: &[usize],
+    ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let struct_val = self.state.load_value(srcs[0])?.into_struct_value();
+        let struct_val = self.state.load_value(sources[0])?.into_struct_value();
         let field_val = llvm
             .builder
             .build_extract_value(struct_val, offset as u32, "getfield")?;
-        self.state.store(dsts[0], field_val)?;
+        self.state.store(destinations[0], field_val)?;
         Ok(())
     }
 
-    fn emit_read_ref(&self, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
+    fn emit_read_ref(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let ptr = self.state.load_value(srcs[0])?.into_pointer_value();
-        let pointee_ty = self.state.pointee_type(srcs[0])?;
+        let ptr = self.state.load_value(sources[0])?.into_pointer_value();
+        let pointee_ty = self.state.pointee_type(sources[0])?;
         let val = llvm.builder.build_load(pointee_ty, ptr, "read_ref")?;
-        self.state.store(dsts[0], val)?;
+        self.state.store(destinations[0], val)?;
         Ok(())
     }
 
-    fn emit_write_ref(&self, srcs: &[usize]) -> CompileResult<()> {
+    fn emit_write_ref(&self, sources: &[usize]) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let ptr = self.state.load_value(srcs[0])?.into_pointer_value();
-        let val = self.state.load_value(srcs[1])?;
+        let ptr = self.state.load_value(sources[0])?.into_pointer_value();
+        let val = self.state.load_value(sources[1])?;
         llvm.builder.build_store(ptr, val)?;
         Ok(())
     }
 
-    fn emit_freeze_ref(&self, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
-        let ptr = self.state.load_value(srcs[0])?;
-        self.state.store(dsts[0], ptr)?;
+    fn emit_freeze_ref(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
+        let ptr = self.state.load_value(sources[0])?;
+        self.state.store(destinations[0], ptr)?;
         Ok(())
     }
 }

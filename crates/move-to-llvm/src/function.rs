@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use inkwell::values::FunctionValue;
 use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
-use move_stackless_bytecode::stackless_bytecode::{AssignKind, Bytecode, Operation};
+use move_stackless_bytecode::stackless_bytecode::{Bytecode, Operation};
 
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
@@ -70,16 +70,16 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
         // Store function parameters into their allocas
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
-            let param = function
+            let parameter = function
                 .get_nth_param(i as u32)
                 .ok_or(CompileError::Llvm("missing parameter".into()))?;
-            ctx.builder.build_store(local.alloca, param)?;
+            ctx.builder.build_store(local.alloca, parameter)?;
         }
 
         // Pre-create basic blocks for all labels
         let mut label_blocks = BTreeMap::new();
-        for bc in &function_data.code {
-            if let Bytecode::Label(_, label) = bc {
+        for byte_code in &function_data.code {
+            if let Bytecode::Label(_, label) = byte_code {
                 let block = ctx
                     .context
                     .append_basic_block(function, &format!("L{}", label.as_usize()));
@@ -93,45 +93,44 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     }
 
     pub fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
-        for bc in &function_data.code {
-            self.lower_bytecode(bc)?;
+        for byte_code in &function_data.code {
+            self.lower_bytecode(byte_code)?;
         }
         Ok(())
     }
 
-    fn lower_bytecode(&self, bc: &Bytecode) -> CompileResult<()> {
-        match bc {
-            Bytecode::Assign(_, dst, src, kind) => {
-                // Move-swap optimization: for Move of struct types, swap the
-                // local slots instead of load+store. Move guarantees the source
-                // is dead after this point, so reusing its alloca is safe and
-                // avoids an unnecessary copy.
-                if matches!(kind, AssignKind::Move)
-                    && self.state.locals.borrow()[*src].mty.is_struct()
-                {
-                    let cloned = self.state.locals.borrow()[*src].clone();
-                    self.state.locals.borrow_mut()[*dst] = cloned;
-                } else {
-                    let val = self.state.load_value(*src)?;
-                    self.state.store(*dst, val)?;
-                }
+    fn lower_bytecode(&self, byte_code: &Bytecode) -> CompileResult<()> {
+        match byte_code {
+            Bytecode::Assign(_, destination, source, _kind) => {
+                let value = self.state.load_value(*source)?;
+                self.state.store(*destination, value)?;
             }
-            Bytecode::Load(_, dst, constant) => {
-                let val = ConstantEmitter::new(&self.state).lower(constant)?;
-                self.state.store(*dst, val)?;
+            Bytecode::Load(_, destination, constant) => {
+                ConstantEmitter::new(&self.state).emit(*destination, constant)?;
             }
-            Bytecode::Call(_, dsts, op, srcs, _) => {
-                self.lower_operation(dsts, op, srcs)?;
+            Bytecode::Call(_, destinations, operation, sources, _) => {
+                self.lower_operation(destinations, operation, sources)?;
             }
             Bytecode::Nop(_) => {}
-            // Control flow: Ret, Label, Jump, Branch, Abort (+ catch-all)
-            other => ControlFlowEmitter::new(&self.state).emit(other)?,
+            Bytecode::Ret(..)
+            | Bytecode::Label(..)
+            | Bytecode::Jump(..)
+            | Bytecode::Branch(..)
+            | Bytecode::Abort(..) => ControlFlowEmitter::new(&self.state).emit(byte_code)?,
+            other => {
+                return Err(CompileError::UnsupportedBytecode(other.clone()));
+            }
         }
         Ok(())
     }
 
-    fn lower_operation(&self, dsts: &[usize], op: &Operation, srcs: &[usize]) -> CompileResult<()> {
-        match op {
+    fn lower_operation(
+        &self,
+        destinations: &[usize],
+        operation: &Operation,
+        sources: &[usize],
+    ) -> CompileResult<()> {
+        match operation {
             // Arithmetic, comparisons, bitwise, shifts, logical, casts
             Operation::Add
             | Operation::Sub
@@ -157,7 +156,9 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Operation::CastU32
             | Operation::CastU64
             | Operation::CastU128
-            | Operation::CastU256 => ArithmeticEmitter::new(&self.state).emit(dsts, op, srcs),
+            | Operation::CastU256 => {
+                ArithmeticEmitter::new(&self.state).emit(destinations, operation, sources)
+            }
 
             // Struct and reference operations
             Operation::Pack(..)
@@ -168,30 +169,37 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Operation::ReadRef
             | Operation::WriteRef
             | Operation::FreezeRef
-            | Operation::Destroy => StructEmitter::new(&self.state).emit(dsts, op, srcs),
+            | Operation::Destroy => {
+                StructEmitter::new(&self.state).emit(destinations, operation, sources)
+            }
 
             // Function calls
-            Operation::Function(module_id, fun_id, type_args) => {
-                CallEmitter::new(&self.state).emit(dsts, *module_id, *fun_id, type_args, srcs)
-            }
+            Operation::Function(module_id, function_id, type_args) => CallEmitter::new(&self.state)
+                .emit(destinations, *module_id, *function_id, type_args, sources),
 
             // Global storage operations
-            Operation::MoveTo(mid, did, type_args) => {
-                StorageEmitter::new(&self.state).emit_move_to(*mid, *did, type_args, dsts, srcs)
-            }
-            Operation::MoveFrom(mid, did, type_args) => {
-                StorageEmitter::new(&self.state).emit_move_from(*mid, *did, type_args, dsts, srcs)
-            }
-            Operation::Exists(mid, did, type_args) => {
-                StorageEmitter::new(&self.state).emit_exists(*mid, *did, type_args, dsts, srcs)
-            }
-            Operation::BorrowGlobal(mid, did, type_args) => StorageEmitter::new(&self.state)
-                .emit_borrow_global(*mid, *did, type_args, dsts, srcs),
-            Operation::GetGlobal(mid, did, type_args) => {
-                StorageEmitter::new(&self.state).emit_get_global(*mid, *did, type_args, dsts, srcs)
-            }
+            Operation::MoveTo(module_id, datatype_id, type_args) => StorageEmitter::new(
+                &self.state,
+            )
+            .emit_move_to(*module_id, *datatype_id, type_args, destinations, sources),
+            Operation::MoveFrom(module_id, datatype_id, type_args) => StorageEmitter::new(
+                &self.state,
+            )
+            .emit_move_from(*module_id, *datatype_id, type_args, destinations, sources),
+            Operation::Exists(module_id, datatype_id, type_args) => StorageEmitter::new(
+                &self.state,
+            )
+            .emit_exists(*module_id, *datatype_id, type_args, destinations, sources),
+            Operation::BorrowGlobal(module_id, datatype_id, type_args) => StorageEmitter::new(
+                &self.state,
+            )
+            .emit_borrow_global(*module_id, *datatype_id, type_args, destinations, sources),
+            Operation::GetGlobal(module_id, datatype_id, type_args) => StorageEmitter::new(
+                &self.state,
+            )
+            .emit_get_global(*module_id, *datatype_id, type_args, destinations, sources),
 
-            other => Err(CompileError::UnsupportedOperation(format!("{:?}", other))),
+            other => Err(CompileError::UnsupportedOperation(other.clone())),
         }
     }
 }

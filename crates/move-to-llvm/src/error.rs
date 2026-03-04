@@ -1,18 +1,26 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use move_model::ty::Type;
+use move_stackless_bytecode::stackless_bytecode::{Bytecode, Constant, Operation};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CompileError {
-    #[error("unsupported bytecode: {0}")]
-    UnsupportedBytecode(String),
+    #[error("unsupported bytecode: {0:?}")]
+    UnsupportedBytecode(Bytecode),
 
-    #[error("unsupported type: {0}")]
-    UnsupportedType(String),
+    #[error("unsupported type: {0:?}")]
+    UnsupportedType(Type),
+
+    #[error("unsupported constant: {0:?}")]
+    UnsupportedConstant(Constant),
 
     #[error("function has no code unit")]
     NoCode,
+
+    #[error("LLVM builder error: {0}")]
+    Builder(#[from] inkwell::builder::BuilderError),
 
     #[error("LLVM error: {0}")]
     Llvm(String),
@@ -29,17 +37,11 @@ pub enum CompileError {
     #[error("failed to deserialize module: {0}")]
     Deserialize(String),
 
-    #[error("unsupported operation: {0}")]
-    UnsupportedOperation(String),
+    #[error("unsupported operation: {0:?}")]
+    UnsupportedOperation(Operation),
 
     #[error("model builder failed: {0}")]
     ModelBuilder(String),
-}
-
-impl From<inkwell::builder::BuilderError> for CompileError {
-    fn from(e: inkwell::builder::BuilderError) -> Self {
-        CompileError::Llvm(e.to_string())
-    }
 }
 
 /// Convenience alias used throughout the crate.

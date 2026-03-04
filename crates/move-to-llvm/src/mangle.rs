@@ -29,8 +29,8 @@ impl<'a> Mangler<'a> {
             Type::Primitive(PrimitiveType::Address) => Ok("address".to_string()),
             Type::Primitive(PrimitiveType::Signer) => Ok("signer".to_string()),
             Type::Vector(inner) => Ok(format!("vec${}", self.mangle_type(inner)?)),
-            Type::Datatype(mid, did, type_args) => {
-                let struct_env = self.env.get_module(*mid).into_struct(*did);
+            Type::Datatype(module_id, datatype_id, type_args) => {
+                let struct_env = self.env.get_module(*module_id).into_struct(*datatype_id);
                 let base = struct_env.get_full_name_str().replace("::", "_");
                 if type_args.is_empty() {
                     Ok(base)
@@ -42,7 +42,7 @@ impl<'a> Mangler<'a> {
             Type::Reference(false, inner) => Ok(format!("ref${}", self.mangle_type(inner)?)),
             Type::Reference(true, inner) => Ok(format!("mut${}", self.mangle_type(inner)?)),
             Type::TypeParameter(idx) => Ok(format!("T{idx}")),
-            other => Err(CompileError::UnsupportedType(format!("{other:?}"))),
+            other => Err(CompileError::UnsupportedType(other.clone())),
         }
     }
 

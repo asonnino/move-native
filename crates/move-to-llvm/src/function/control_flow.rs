@@ -85,9 +85,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 llvm.builder.build_call(abort_fn, &[code.into()], "abort")?;
                 llvm.builder.build_unreachable()?;
             }
-            other => {
-                return Err(CompileError::UnsupportedBytecode(format!("{:?}", other)));
-            }
+            _ => unreachable!("non-control-flow bytecode routed to ControlFlowEmitter"),
         }
         Ok(())
     }

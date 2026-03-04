@@ -25,11 +25,11 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
 
     pub fn emit(
         &self,
-        dsts: &[usize],
+        destinations: &[usize],
         module_id: ModuleId,
-        fun_id: FunId,
+        function_id: FunId,
         type_args: &[Type],
-        srcs: &[usize],
+        sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
         let callee_env = self
@@ -37,7 +37,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             .ctx
             .env()
             .get_module(module_id)
-            .into_function(fun_id);
+            .into_function(function_id);
 
         let (callee_fn, call_name) = if callee_env.is_native() {
             self.emit_native(&callee_env, type_args)?
@@ -47,30 +47,30 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             self.emit_non_generic(&callee_env)?
         };
 
-        let args: Vec<_> = srcs
+        let args: Vec<_> = sources
             .iter()
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
         let call = llvm.builder.build_call(callee_fn, &args, &call_name)?;
 
-        if !dsts.is_empty() {
+        if !destinations.is_empty() {
             let ret_val = match call.try_as_basic_value() {
                 inkwell::values::ValueKind::Basic(v) => v,
                 _ => panic!("expected non-void return from callee"),
             };
-            if dsts.len() == 1 {
-                self.state.store(dsts[0], ret_val)?;
+            if destinations.len() == 1 {
+                self.state.store(destinations[0], ret_val)?;
             } else {
                 // Multi-return: unpack struct into individual destinations
                 let struct_val = ret_val.into_struct_value();
-                for (i, dst) in dsts.iter().enumerate() {
+                for (i, destination) in destinations.iter().enumerate() {
                     let field = llvm.builder.build_extract_value(
                         struct_val,
                         i as u32,
                         &format!("call_ret_{i}"),
                     )?;
-                    self.state.store(*dst, field)?;
+                    self.state.store(*destination, field)?;
                 }
             }
         }
