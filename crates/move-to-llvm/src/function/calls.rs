@@ -8,7 +8,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use super::FunctionLowering;
 use super::state::FunctionState;
-use crate::error::CompileResult;
+use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM call instructions for Move function calls.
 ///
@@ -52,10 +52,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = llvm
-            .builder
-            .build_call(callee_fn, &args, &call_name)
-            .unwrap();
+        let call = llvm.builder.build_call(callee_fn, &args, &call_name)?;
 
         if !dsts.is_empty() {
             let ret_val = match call.try_as_basic_value() {
@@ -63,16 +60,17 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 _ => panic!("expected non-void return from callee"),
             };
             if dsts.len() == 1 {
-                self.state.store(dsts[0], ret_val);
+                self.state.store(dsts[0], ret_val)?;
             } else {
                 // Multi-return: unpack struct into individual destinations
                 let struct_val = ret_val.into_struct_value();
                 for (i, dst) in dsts.iter().enumerate() {
-                    let field = llvm
-                        .builder
-                        .build_extract_value(struct_val, i as u32, &format!("call_ret_{i}"))
-                        .unwrap();
-                    self.state.store(*dst, field);
+                    let field = llvm.builder.build_extract_value(
+                        struct_val,
+                        i as u32,
+                        &format!("call_ret_{i}"),
+                    )?;
+                    self.state.store(*dst, field)?;
                 }
             }
         }
@@ -130,7 +128,10 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 let fn_type = self.state.lower_function_type(&inst_params, &inst_rets)?;
                 let function = llvm.add_function(&mangled, fn_type);
 
-                let saved_block = llvm.builder.get_insert_block().unwrap();
+                let saved_block = llvm
+                    .builder
+                    .get_insert_block()
+                    .ok_or(CompileError::Llvm("no insert block".into()))?;
 
                 let generator = StacklessBytecodeGenerator::new(callee_env);
                 let func_data = generator.generate_function();

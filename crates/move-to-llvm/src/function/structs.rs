@@ -61,11 +61,10 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
             let field_val = self.state.load_value(*src)?;
             agg = llvm
                 .builder
-                .build_insert_value(agg, field_val, i as u32, &format!("pack_{i}"))
-                .unwrap()
+                .build_insert_value(agg, field_val, i as u32, &format!("pack_{i}"))?
                 .into_struct_value();
         }
-        self.state.store(dsts[0], agg.into());
+        self.state.store(dsts[0], agg.into())?;
         Ok(())
     }
 
@@ -81,18 +80,17 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let struct_env = self.state.ctx.env().get_module(mid).into_struct(did);
         let field_count = struct_env.get_fields().count();
         for (i, dst) in dsts.iter().enumerate().take(field_count) {
-            let field_val = llvm
-                .builder
-                .build_extract_value(struct_val, i as u32, &format!("unpack_{i}"))
-                .unwrap();
-            self.state.store(*dst, field_val);
+            let field_val =
+                llvm.builder
+                    .build_extract_value(struct_val, i as u32, &format!("unpack_{i}"))?;
+            self.state.store(*dst, field_val)?;
         }
         Ok(())
     }
 
     fn emit_borrow_loc(&self, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
         let ptr = self.state.locals.borrow()[srcs[0]].alloca;
-        self.state.store(dsts[0], ptr.into());
+        self.state.store(dsts[0], ptr.into())?;
         Ok(())
     }
 
@@ -111,11 +109,10 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let struct_ty = self
             .state
             .lower_type(&Type::Datatype(mid, did, type_args))?;
-        let field_ptr = llvm
-            .builder
-            .build_struct_gep(struct_ty, struct_ptr, offset as u32, "borrow_field")
-            .unwrap();
-        self.state.store(dsts[0], field_ptr.into());
+        let field_ptr =
+            llvm.builder
+                .build_struct_gep(struct_ty, struct_ptr, offset as u32, "borrow_field")?;
+        self.state.store(dsts[0], field_ptr.into())?;
         Ok(())
     }
 
@@ -124,9 +121,8 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let struct_val = self.state.load_value(srcs[0])?.into_struct_value();
         let field_val = llvm
             .builder
-            .build_extract_value(struct_val, offset as u32, "getfield")
-            .unwrap();
-        self.state.store(dsts[0], field_val);
+            .build_extract_value(struct_val, offset as u32, "getfield")?;
+        self.state.store(dsts[0], field_val)?;
         Ok(())
     }
 
@@ -134,11 +130,8 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let ptr = self.state.load_value(srcs[0])?.into_pointer_value();
         let pointee_ty = self.state.pointee_type(srcs[0])?;
-        let val = llvm
-            .builder
-            .build_load(pointee_ty, ptr, "read_ref")
-            .unwrap();
-        self.state.store(dsts[0], val);
+        let val = llvm.builder.build_load(pointee_ty, ptr, "read_ref")?;
+        self.state.store(dsts[0], val)?;
         Ok(())
     }
 
@@ -146,13 +139,13 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let ptr = self.state.load_value(srcs[0])?.into_pointer_value();
         let val = self.state.load_value(srcs[1])?;
-        llvm.builder.build_store(ptr, val).unwrap();
+        llvm.builder.build_store(ptr, val)?;
         Ok(())
     }
 
     fn emit_freeze_ref(&self, dsts: &[usize], srcs: &[usize]) -> CompileResult<()> {
         let ptr = self.state.load_value(srcs[0])?;
-        self.state.store(dsts[0], ptr);
+        self.state.store(dsts[0], ptr)?;
         Ok(())
     }
 }

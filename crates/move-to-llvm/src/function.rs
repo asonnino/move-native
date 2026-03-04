@@ -60,7 +60,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                 ty.instantiate(&type_params)
             };
             let llvm_ty = type_lowering.lower_type(&mty)?;
-            let alloca = ctx.builder.build_alloca(llvm_ty, &format!("t{i}")).unwrap();
+            let alloca = ctx.builder.build_alloca(llvm_ty, &format!("t{i}"))?;
             locals.push(Local {
                 mty,
                 llvm_ty,
@@ -70,8 +70,10 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
         // Store function parameters into their allocas
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
-            let param = function.get_nth_param(i as u32).unwrap();
-            ctx.builder.build_store(local.alloca, param).unwrap();
+            let param = function
+                .get_nth_param(i as u32)
+                .ok_or(CompileError::Llvm("missing parameter".into()))?;
+            ctx.builder.build_store(local.alloca, param)?;
         }
 
         // Pre-create basic blocks for all labels
@@ -111,12 +113,12 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                     self.state.locals.borrow_mut()[*dst] = cloned;
                 } else {
                     let val = self.state.load_value(*src)?;
-                    self.state.store(*dst, val);
+                    self.state.store(*dst, val)?;
                 }
             }
             Bytecode::Load(_, dst, constant) => {
                 let val = ConstantEmitter::new(&self.state).lower(constant)?;
-                self.state.store(*dst, val);
+                self.state.store(*dst, val)?;
             }
             Bytecode::Call(_, dsts, op, srcs, _) => {
                 self.lower_operation(dsts, op, srcs)?;

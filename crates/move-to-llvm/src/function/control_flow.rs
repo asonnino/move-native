@@ -24,10 +24,10 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
         match bc {
             Bytecode::Ret(_, rets) => {
                 if rets.is_empty() {
-                    llvm.builder.build_return(None).unwrap();
+                    llvm.builder.build_return(None)?;
                 } else if rets.len() == 1 {
                     let val = self.state.load_value(rets[0])?;
-                    llvm.builder.build_return(Some(&val)).unwrap();
+                    llvm.builder.build_return(Some(&val))?;
                 } else {
                     // Multi-return: pack values into an anonymous struct
                     let locals = self.state.locals.borrow();
@@ -41,38 +41,38 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                         let val = self.state.load_value(*r)?;
                         agg = llvm
                             .builder
-                            .build_insert_value(agg, val, i as u32, &format!("ret_{i}"))
-                            .unwrap()
+                            .build_insert_value(agg, val, i as u32, &format!("ret_{i}"))?
                             .into_struct_value();
                     }
-                    llvm.builder.build_return(Some(&agg)).unwrap();
+                    llvm.builder.build_return(Some(&agg))?;
                 }
             }
             Bytecode::Label(_, label) => {
                 let block = self.state.label_blocks[label];
                 // Add fallthrough branch if current block has no terminator
-                let current = llvm.builder.get_insert_block().unwrap();
+                let current = llvm
+                    .builder
+                    .get_insert_block()
+                    .ok_or(CompileError::Llvm("no insert block".into()))?;
                 if current.get_terminator().is_none() {
-                    llvm.builder.build_unconditional_branch(block).unwrap();
+                    llvm.builder.build_unconditional_branch(block)?;
                 }
                 llvm.builder.position_at_end(block);
             }
             Bytecode::Jump(_, label) => {
                 let block = self.state.label_blocks[label];
-                llvm.builder.build_unconditional_branch(block).unwrap();
+                llvm.builder.build_unconditional_branch(block)?;
             }
             Bytecode::Branch(_, then_label, else_label, cond) => {
                 let cond_val = self.state.load_int(*cond)?;
                 let zero = cond_val.get_type().const_zero();
-                let cmp = llvm
-                    .builder
-                    .build_int_compare(IntPredicate::NE, cond_val, zero, "cond")
-                    .unwrap();
+                let cmp =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::NE, cond_val, zero, "cond")?;
                 let then_block = self.state.label_blocks[then_label];
                 let else_block = self.state.label_blocks[else_label];
                 llvm.builder
-                    .build_conditional_branch(cmp, then_block, else_block)
-                    .unwrap();
+                    .build_conditional_branch(cmp, then_block, else_block)?;
             }
             Bytecode::Abort(_, code_idx) => {
                 let code = self.state.load_value(*code_idx)?;
@@ -82,10 +82,8 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                         .void_type()
                         .fn_type(&[llvm.i64_type.into()], false),
                 );
-                llvm.builder
-                    .build_call(abort_fn, &[code.into()], "abort")
-                    .unwrap();
-                llvm.builder.build_unreachable().unwrap();
+                llvm.builder.build_call(abort_fn, &[code.into()], "abort")?;
+                llvm.builder.build_unreachable()?;
             }
             other => {
                 return Err(CompileError::UnsupportedBytecode(format!("{:?}", other)));

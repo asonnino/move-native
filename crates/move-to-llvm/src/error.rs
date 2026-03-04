@@ -36,5 +36,11 @@ pub enum CompileError {
     ModelBuilder(String),
 }
 
+impl From<inkwell::builder::BuilderError> for CompileError {
+    fn from(e: inkwell::builder::BuilderError) -> Self {
+        CompileError::Llvm(e.to_string())
+    }
+}
+
 /// Convenience alias used throughout the crate.
 pub type CompileResult<T> = Result<T, CompileError>;

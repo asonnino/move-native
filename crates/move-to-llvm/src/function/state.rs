@@ -124,8 +124,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         Ok(self
             .ctx
             .builder
-            .build_load(local.llvm_ty, local.alloca, &format!("t{idx}"))
-            .unwrap())
+            .build_load(local.llvm_ty, local.alloca, &format!("t{idx}"))?)
     }
 
     /// Load a local as an `IntValue` (convenience for arithmetic/comparison ops).
@@ -134,12 +133,10 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     }
 
     /// Store a value into a local's alloca.
-    pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) {
+    pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) -> CompileResult<()> {
         let locals = self.locals.borrow();
-        self.ctx
-            .builder
-            .build_store(locals[idx].alloca, val)
-            .unwrap();
+        self.ctx.builder.build_store(locals[idx].alloca, val)?;
+        Ok(())
     }
 
     /// Resolve the pointee LLVM type for a local that holds a reference (`&T` or `&mut T`).

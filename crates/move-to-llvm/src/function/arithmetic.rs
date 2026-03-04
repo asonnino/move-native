@@ -55,7 +55,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
             _ => unreachable!("ArithmeticEmitter::emit called with non-arithmetic op"),
         };
-        self.state.store(dsts[0], result.into());
+        self.state.store(dsts[0], result.into())?;
         Ok(())
     }
 
@@ -64,17 +64,11 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_int(srcs[0])?;
         let rhs = self.state.load_int(srcs[1])?;
         Ok(match op {
-            Operation::Add => llvm.builder.build_int_add(lhs, rhs, "add").unwrap(),
-            Operation::Sub => llvm.builder.build_int_sub(lhs, rhs, "sub").unwrap(),
-            Operation::Mul => llvm.builder.build_int_mul(lhs, rhs, "mul").unwrap(),
-            Operation::Div => llvm
-                .builder
-                .build_int_unsigned_div(lhs, rhs, "div")
-                .unwrap(),
-            Operation::Mod => llvm
-                .builder
-                .build_int_unsigned_rem(lhs, rhs, "mod")
-                .unwrap(),
+            Operation::Add => llvm.builder.build_int_add(lhs, rhs, "add")?,
+            Operation::Sub => llvm.builder.build_int_sub(lhs, rhs, "sub")?,
+            Operation::Mul => llvm.builder.build_int_mul(lhs, rhs, "mul")?,
+            Operation::Div => llvm.builder.build_int_unsigned_div(lhs, rhs, "div")?,
+            Operation::Mod => llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?,
             _ => unreachable!(),
         })
     }
@@ -90,14 +84,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             Operation::Ge => IntPredicate::UGE,
             _ => unreachable!(),
         };
-        let cmp = llvm
-            .builder
-            .build_int_compare(pred, lhs, rhs, "cmp")
-            .unwrap();
+        let cmp = llvm.builder.build_int_compare(pred, lhs, rhs, "cmp")?;
         Ok(llvm
             .builder
-            .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")
-            .unwrap())
+            .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")?)
     }
 
     fn emit_eq_cmp(&self, op: &Operation, srcs: &[usize]) -> CompileResult<IntValue<'ctx>> {
@@ -109,14 +99,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         } else {
             IntPredicate::NE
         };
-        let cmp = llvm
-            .builder
-            .build_int_compare(pred, lhs, rhs, "cmp")
-            .unwrap();
+        let cmp = llvm.builder.build_int_compare(pred, lhs, rhs, "cmp")?;
         Ok(llvm
             .builder
-            .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")
-            .unwrap())
+            .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")?)
     }
 
     fn emit_bitwise(&self, op: &Operation, srcs: &[usize]) -> CompileResult<IntValue<'ctx>> {
@@ -124,9 +110,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_int(srcs[0])?;
         let rhs = self.state.load_int(srcs[1])?;
         Ok(match op {
-            Operation::BitAnd => llvm.builder.build_and(lhs, rhs, "and").unwrap(),
-            Operation::BitOr => llvm.builder.build_or(lhs, rhs, "or").unwrap(),
-            Operation::Xor => llvm.builder.build_xor(lhs, rhs, "xor").unwrap(),
+            Operation::BitAnd => llvm.builder.build_and(lhs, rhs, "and")?,
+            Operation::BitOr => llvm.builder.build_or(lhs, rhs, "or")?,
+            Operation::Xor => llvm.builder.build_xor(lhs, rhs, "xor")?,
             _ => unreachable!(),
         })
     }
@@ -137,17 +123,14 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let amt = self.state.load_int(srcs[1])?;
         let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
             llvm.builder
-                .build_int_z_extend(amt, val.get_type(), "shl_ext")
-                .unwrap()
+                .build_int_z_extend(amt, val.get_type(), "shl_ext")?
         } else {
             amt
         };
         Ok(if matches!(op, Operation::Shl) {
-            llvm.builder.build_left_shift(val, amt, "shl").unwrap()
+            llvm.builder.build_left_shift(val, amt, "shl")?
         } else {
-            llvm.builder
-                .build_right_shift(val, amt, false, "shr")
-                .unwrap()
+            llvm.builder.build_right_shift(val, amt, false, "shr")?
         })
     }
 
@@ -156,9 +139,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_int(srcs[0])?;
         let rhs = self.state.load_int(srcs[1])?;
         Ok(if matches!(op, Operation::And) {
-            llvm.builder.build_and(lhs, rhs, "land").unwrap()
+            llvm.builder.build_and(lhs, rhs, "land")?
         } else {
-            llvm.builder.build_or(lhs, rhs, "lor").unwrap()
+            llvm.builder.build_or(lhs, rhs, "lor")?
         })
     }
 
@@ -166,7 +149,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let src = self.state.load_int(srcs[0])?;
         let one = llvm.i8_type.const_int(1, false);
-        Ok(llvm.builder.build_xor(src, one, "not").unwrap())
+        Ok(llvm.builder.build_xor(src, one, "not")?)
     }
 
     fn lower_cast(&self, src: usize, target_ty: IntType<'ctx>) -> CompileResult<IntValue<'ctx>> {
@@ -175,13 +158,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let src_bits = val.get_type().get_bit_width();
         let dst_bits = target_ty.get_bit_width();
         Ok(if src_bits > dst_bits {
-            llvm.builder
-                .build_int_truncate(val, target_ty, "cast")
-                .unwrap()
+            llvm.builder.build_int_truncate(val, target_ty, "cast")?
         } else if src_bits < dst_bits {
-            llvm.builder
-                .build_int_z_extend(val, target_ty, "cast")
-                .unwrap()
+            llvm.builder.build_int_z_extend(val, target_ty, "cast")?
         } else {
             val
         })

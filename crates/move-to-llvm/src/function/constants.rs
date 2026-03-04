@@ -59,10 +59,9 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 );
                 let ptr = global.as_pointer_value();
                 let len = llvm.i64_type.const_int(bytes.len() as u64, false);
-                let call = llvm
-                    .builder
-                    .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")
-                    .unwrap();
+                let call =
+                    llvm.builder
+                        .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")?;
                 match call.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => unreachable!("const vec runtime function must return a value"),
@@ -81,10 +80,9 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 );
                 let ptr = global.as_pointer_value();
                 let count = llvm.i64_type.const_int(addrs.len() as u64, false);
-                let call = llvm
-                    .builder
-                    .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")
-                    .unwrap();
+                let call =
+                    llvm.builder
+                        .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")?;
                 match call.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => unreachable!("const vec runtime function must return a value"),
@@ -103,14 +101,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     let func = self.state.declare_external("__move_rt_const_vec", fn_type);
                     let null = llvm.ptr_type.const_null();
                     let zero = llvm.i64_type.const_zero();
-                    let call = llvm
-                        .builder
-                        .build_call(
-                            func,
-                            &[null.into(), zero.into(), zero.into()],
-                            "const_vec_empty",
-                        )
-                        .unwrap();
+                    let call = llvm.builder.build_call(
+                        func,
+                        &[null.into(), zero.into(), zero.into()],
+                        "const_vec_empty",
+                    )?;
                     return match call.try_as_basic_value() {
                         inkwell::values::ValueKind::Basic(v) => Ok(v),
                         _ => unreachable!("const vec runtime function must return a value"),
@@ -125,10 +120,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let ptr = global.as_pointer_value();
                 let count = llvm.i64_type.const_int(elems.len() as u64, false);
                 let esz = llvm.i64_type.const_int(elem_size as u64, false);
-                let call = llvm
-                    .builder
-                    .build_call(func, &[ptr.into(), count.into(), esz.into()], "const_vec")
-                    .unwrap();
+                let call = llvm.builder.build_call(
+                    func,
+                    &[ptr.into(), count.into(), esz.into()],
+                    "const_vec",
+                )?;
                 match call.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => unreachable!("const vec runtime function must return a value"),

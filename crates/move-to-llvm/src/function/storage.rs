@@ -121,14 +121,14 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = llvm.builder.build_call(func, &args, &symbol).unwrap();
+        let call = llvm.builder.build_call(func, &args, &symbol)?;
 
         if !dsts.is_empty() {
             let ret_val = match call.try_as_basic_value() {
                 inkwell::values::ValueKind::Basic(v) => v,
                 _ => panic!("expected non-void return from {symbol}"),
             };
-            self.state.store(dsts[0], ret_val);
+            self.state.store(dsts[0], ret_val)?;
         }
         Ok(())
     }
