@@ -93,7 +93,7 @@ fn end_to_end_from_serialized_bytecode() {
         .expect("serialization failed");
 
     // This is the public API entry point — bytes in, assembly out
-    let asm = move_to_llvm::compile(&move_to_llvm::Target::AArch64, &bytecode)
+    let asm = move_to_llvm::compile(&move_to_llvm::Target::Aarch64, &bytecode)
         .expect("compile from bytecode failed");
 
     assert!(asm.contains("add"), "assembly should contain 'add'");
@@ -109,7 +109,7 @@ fn end_to_end_from_serialized_bytecode() {
 fn end_to_end_from_mv_file() {
     let bytecode = include_bytes!("../../../tests/move_samples/add.mv");
 
-    let asm = move_to_llvm::compile(&move_to_llvm::Target::AArch64, bytecode)
+    let asm = move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
         .expect("compile from .mv file failed");
 
     assert!(asm.contains("add"), "assembly should contain 'add'");
@@ -119,7 +119,7 @@ fn end_to_end_from_mv_file() {
 #[test]
 fn compile_add_produces_valid_assembly() {
     let module = make_add_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
 
     // Should contain a global symbol for the function
@@ -261,7 +261,7 @@ impl Drop for ExecutableCode {
 /// Compile a module, assemble it, extract machine code, and load into executable memory.
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn compile_and_load(module: &CompiledModule) -> ExecutableCode {
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -300,7 +300,7 @@ fn compile_comparisons() {
                 Bytecode::Ret,
             ],
         );
-        move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+        move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
             .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
     }
 }
@@ -324,7 +324,7 @@ fn compile_bitwise_ops() {
                 Bytecode::Ret,
             ],
         );
-        move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+        move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
             .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
     }
 }
@@ -344,7 +344,7 @@ fn compile_shifts() {
                 Bytecode::Ret,
             ],
         );
-        move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+        move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
             .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
     }
 }
@@ -358,7 +358,7 @@ fn compile_logical_not() {
         vec![],
         vec![Bytecode::CopyLoc(0), Bytecode::Not, Bytecode::Ret],
     );
-    move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("not compilation failed");
 }
 
@@ -377,7 +377,7 @@ fn compile_logical_and_or() {
                 Bytecode::Ret,
             ],
         );
-        move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+        move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
             .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
     }
 }
@@ -399,7 +399,7 @@ fn compile_casts() {
             vec![],
             vec![Bytecode::CopyLoc(0), op, Bytecode::Ret],
         );
-        move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+        move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
             .unwrap_or_else(|e| panic!("{name} compilation failed: {e}"));
     }
 }
@@ -578,7 +578,7 @@ fn make_sum_to_n_module() -> CompiledModule {
 #[test]
 fn compile_sum_to_n_loop() {
     let module = make_sum_to_n_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("sum_to_n compilation failed");
 
     assert!(asm.contains("ret"), "assembly should contain ret");
@@ -710,7 +710,7 @@ fn make_caller_callee_module() -> CompiledModule {
 #[test]
 fn compile_function_call() {
     let module = make_caller_callee_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("function call compilation failed");
 
     assert!(
@@ -775,7 +775,7 @@ impl ExecutableCode {
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn execute_function_call() {
     let module = make_caller_callee_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -972,7 +972,7 @@ fn make_struct_module() -> CompiledModule {
 #[test]
 fn compile_struct_pack_unpack() {
     let module = make_struct_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("struct compilation failed");
 
     assert!(
@@ -997,7 +997,7 @@ fn compile_struct_pack_unpack() {
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn execute_struct_round_trip() {
     let module = make_struct_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -1227,7 +1227,7 @@ fn make_ref_module() -> CompiledModule {
 #[test]
 fn compile_ref_ops() {
     let module = make_ref_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("ref compilation failed");
 
     assert!(
@@ -1248,7 +1248,7 @@ fn compile_ref_ops() {
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn execute_ref_round_trip() {
     let module = make_ref_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -1569,7 +1569,7 @@ fn compile_vec_ops() {
     let vec_stub = make_vector_module_stub();
     let test_module = make_vec_test_module();
     let asm = move_to_llvm::compile_module_with_deps(
-        &move_to_llvm::Target::AArch64,
+        &move_to_llvm::Target::Aarch64,
         &test_module,
         &[vec_stub],
     )
@@ -1649,7 +1649,7 @@ fn execute_vec_round_trip() {
     let vec_stub = make_vector_module_stub();
     let test_module = make_vec_test_module();
     let asm = move_to_llvm::compile_module_with_deps(
-        &move_to_llvm::Target::AArch64,
+        &move_to_llvm::Target::Aarch64,
         &test_module,
         &[vec_stub],
     )
@@ -1826,7 +1826,7 @@ fn make_cross_module_pair() -> (CompiledModule, CompiledModule) {
 #[test]
 fn compile_cross_module_call() {
     let (dep, main) = make_cross_module_pair();
-    let asm = move_to_llvm::compile_module_with_deps(&move_to_llvm::Target::AArch64, &main, &[dep])
+    let asm = move_to_llvm::compile_module_with_deps(&move_to_llvm::Target::Aarch64, &main, &[dep])
         .expect("cross-module compilation failed");
 
     assert!(
@@ -1850,10 +1850,10 @@ fn execute_cross_module_call() {
     let (dep, main) = make_cross_module_pair();
 
     // Compile both modules separately
-    let dep_asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &dep)
+    let dep_asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &dep)
         .expect("dep compilation failed");
     let main_asm =
-        move_to_llvm::compile_module_with_deps(&move_to_llvm::Target::AArch64, &main, &[dep])
+        move_to_llvm::compile_module_with_deps(&move_to_llvm::Target::Aarch64, &main, &[dep])
             .expect("main compilation failed");
 
     let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -2014,7 +2014,7 @@ fn make_generic_call_module() -> CompiledModule {
 #[test]
 fn compile_generic_call() {
     let module = make_generic_call_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("generic call compilation failed");
 
     assert!(
@@ -2035,7 +2035,7 @@ fn compile_generic_call() {
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn execute_generic_call() {
     let module = make_generic_call_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -2091,7 +2091,7 @@ fn compile_address_constant() {
             type_: SignatureToken::Address,
             data: addr_bytes.to_vec(), // BCS of AccountAddress = raw 32 bytes
         });
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("address constant compilation failed");
     assert!(
         asm.contains("load_addr"),
@@ -2124,7 +2124,7 @@ fn compile_u256_constant() {
             type_: SignatureToken::U256,
             data: u256_bytes.to_vec(), // BCS of U256 = 32 bytes LE
         });
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("u256 constant compilation failed");
     assert!(
         asm.contains("load_u256"),
@@ -2146,7 +2146,7 @@ fn compile_address_type() {
         vec![],
         vec![Bytecode::CopyLoc(0), Bytecode::Ret],
     );
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("address compilation failed");
     assert!(
         asm.contains("identity_addr"),
@@ -2164,7 +2164,7 @@ fn compile_signer_type() {
         vec![],
         vec![Bytecode::CopyLoc(0), Bytecode::Ret],
     );
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("signer compilation failed");
     assert!(
         asm.contains("identity_signer"),
@@ -2191,7 +2191,7 @@ fn compile_abort_with_code() {
             Bytecode::Abort,
         ],
     );
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("abort compilation failed");
     assert!(
         asm.contains("__move_rt_abort"),
@@ -2377,7 +2377,7 @@ fn make_storage_ops_module() -> CompiledModule {
 #[test]
 fn compile_global_storage_ops() {
     let module = make_storage_ops_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("storage ops compilation failed");
 
     assert!(
@@ -2424,7 +2424,7 @@ fn make_multi_return_module() -> CompiledModule {
 #[test]
 fn compile_multi_return() {
     let module = make_multi_return_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("multi-return compilation failed");
 
     assert!(
@@ -2536,7 +2536,7 @@ fn make_multi_return_caller_module() -> CompiledModule {
 #[test]
 fn compile_multi_return_caller() {
     let module = make_multi_return_caller_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("multi-return caller compilation failed");
 
     assert!(
@@ -2557,7 +2557,7 @@ fn compile_multi_return_caller() {
 #[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))]
 fn execute_multi_return() {
     let module = make_multi_return_caller_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("compilation failed");
     assert!(
         !asm.contains("x23"),
@@ -2667,7 +2667,7 @@ fn make_byte_array_const_module() -> CompiledModule {
 #[test]
 fn compile_byte_array_constant() {
     let module = make_byte_array_const_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("byte array constant compilation failed");
 
     assert!(
@@ -2755,7 +2755,7 @@ fn make_vector_u64_const_module() -> CompiledModule {
 #[test]
 fn compile_vector_u64_constant() {
     let module = make_vector_u64_const_module();
-    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::AArch64, &module)
+    let asm = move_to_llvm::compile_module(&move_to_llvm::Target::Aarch64, &module)
         .expect("vector<u64> constant compilation failed");
 
     assert!(

@@ -8,16 +8,16 @@ pub(crate) const CPU: &str = "generic";
 pub(crate) const FEATURES: &str = "+reserve-x23";
 
 /// Target architecture for code generation.
+#[non_exhaustive]
 pub enum Target {
     /// AArch64 (Arm64).
-    AArch64,
-    // Future: X86_64,
+    Aarch64,
 }
 
 impl Target {
     pub(crate) fn triple(&self) -> &'static str {
         match self {
-            Self::AArch64 => {
+            Self::Aarch64 => {
                 #[cfg(target_os = "macos")]
                 {
                     "aarch64-apple-darwin"
@@ -34,7 +34,7 @@ impl Target {
     pub(crate) fn initialize(&self) {
         let config = InitializationConfig::default();
         match self {
-            Self::AArch64 => {
+            Self::Aarch64 => {
                 inkwell::targets::Target::initialize_aarch64(&config);
             }
         }

@@ -4,30 +4,30 @@
 use inkwell::values::BasicValueEnum;
 use move_stackless_bytecode::stackless_bytecode::Constant;
 
-use super::FunctionLowering;
+use super::state::FunctionState;
 use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM IR for Move constant values.
 pub(crate) struct ConstantEmitter<'a, 'b, 'ctx> {
-    fl: &'a FunctionLowering<'b, 'ctx>,
+    state: &'a FunctionState<'b, 'ctx>,
 }
 
 impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
-    pub fn new(fl: &'a FunctionLowering<'b, 'ctx>) -> Self {
-        Self { fl }
+    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+        Self { state }
     }
 
     pub fn lower(&self, constant: &Constant) -> CompileResult<BasicValueEnum<'ctx>> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         match constant {
-            Constant::Bool(v) => Ok(ctx.i8_type.const_int(*v as u64, false).into()),
-            Constant::U8(v) => Ok(ctx.i8_type.const_int(*v as u64, false).into()),
-            Constant::U16(v) => Ok(ctx.i16_type.const_int(*v as u64, false).into()),
-            Constant::U32(v) => Ok(ctx.i32_type.const_int(*v as u64, false).into()),
-            Constant::U64(v) => Ok(ctx.i64_type.const_int(*v, false).into()),
+            Constant::Bool(v) => Ok(llvm.i8_type.const_int(*v as u64, false).into()),
+            Constant::U8(v) => Ok(llvm.i8_type.const_int(*v as u64, false).into()),
+            Constant::U16(v) => Ok(llvm.i16_type.const_int(*v as u64, false).into()),
+            Constant::U32(v) => Ok(llvm.i32_type.const_int(*v as u64, false).into()),
+            Constant::U64(v) => Ok(llvm.i64_type.const_int(*v, false).into()),
             Constant::U128(v) => {
                 let words = [*v as u64, (*v >> 64) as u64];
-                Ok(ctx.i128_type.const_int_arbitrary_precision(&words).into())
+                Ok(llvm.i128_type.const_int_arbitrary_precision(&words).into())
             }
             Constant::Address(big) => {
                 let bytes = big.to_bytes_le();
@@ -40,26 +40,26 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     u64::from_le_bytes(buf[16..24].try_into().unwrap()),
                     u64::from_le_bytes(buf[24..32].try_into().unwrap()),
                 ];
-                Ok(ctx.i256_type.const_int_arbitrary_precision(&words).into())
+                Ok(llvm.i256_type.const_int_arbitrary_precision(&words).into())
             }
             Constant::U256(v) => {
                 let (hi, lo) = v.into_words();
                 let words: [u64; 4] = [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64];
-                Ok(ctx.i256_type.const_int_arbitrary_precision(&words).into())
+                Ok(llvm.i256_type.const_int_arbitrary_precision(&words).into())
             }
             Constant::ByteArray(bytes) => {
-                let id = self.fl.next_const_id();
+                let id = self.state.next_const_id();
                 let global = self
-                    .fl
+                    .state
                     .emit_const_global(&format!("const_bytes_{id}"), bytes);
-                let func = self.fl.get_or_declare_extern(
+                let func = self.state.declare_external(
                     "__move_rt_const_vec_u8",
-                    ctx.ptr_type
-                        .fn_type(&[ctx.ptr_type.into(), ctx.i64_type.into()], false),
+                    llvm.ptr_type
+                        .fn_type(&[llvm.ptr_type.into(), llvm.i64_type.into()], false),
                 );
                 let ptr = global.as_pointer_value();
-                let len = ctx.i64_type.const_int(bytes.len() as u64, false);
-                let call = ctx
+                let len = llvm.i64_type.const_int(bytes.len() as u64, false);
+                let call = llvm
                     .builder
                     .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")
                     .unwrap();
@@ -69,19 +69,19 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 }
             }
             Constant::AddressArray(addrs) => {
-                let id = self.fl.next_const_id();
+                let id = self.state.next_const_id();
                 let buf = serialize_address_array(addrs);
                 let global = self
-                    .fl
+                    .state
                     .emit_const_global(&format!("const_addrs_{id}"), &buf);
-                let func = self.fl.get_or_declare_extern(
+                let func = self.state.declare_external(
                     "__move_rt_const_vec_address",
-                    ctx.ptr_type
-                        .fn_type(&[ctx.ptr_type.into(), ctx.i64_type.into()], false),
+                    llvm.ptr_type
+                        .fn_type(&[llvm.ptr_type.into(), llvm.i64_type.into()], false),
                 );
                 let ptr = global.as_pointer_value();
-                let count = ctx.i64_type.const_int(addrs.len() as u64, false);
-                let call = ctx
+                let count = llvm.i64_type.const_int(addrs.len() as u64, false);
+                let call = llvm
                     .builder
                     .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")
                     .unwrap();
@@ -91,21 +91,19 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 }
             }
             Constant::Vector(elems) => {
-                let fn_type = ctx.ptr_type.fn_type(
+                let fn_type = llvm.ptr_type.fn_type(
                     &[
-                        ctx.ptr_type.into(),
-                        ctx.i64_type.into(),
-                        ctx.i64_type.into(),
+                        llvm.ptr_type.into(),
+                        llvm.i64_type.into(),
+                        llvm.i64_type.into(),
                     ],
                     false,
                 );
                 if elems.is_empty() {
-                    let func = self
-                        .fl
-                        .get_or_declare_extern("__move_rt_const_vec", fn_type);
-                    let null = ctx.ptr_type.const_null();
-                    let zero = ctx.i64_type.const_zero();
-                    let call = ctx
+                    let func = self.state.declare_external("__move_rt_const_vec", fn_type);
+                    let null = llvm.ptr_type.const_null();
+                    let zero = llvm.i64_type.const_zero();
+                    let call = llvm
                         .builder
                         .build_call(
                             func,
@@ -119,15 +117,15 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     };
                 }
                 let (elem_size, buf) = serialize_scalar_vector(elems)?;
-                let id = self.fl.next_const_id();
-                let global = self.fl.emit_const_global(&format!("const_vec_{id}"), &buf);
-                let func = self
-                    .fl
-                    .get_or_declare_extern("__move_rt_const_vec", fn_type);
+                let id = self.state.next_const_id();
+                let global = self
+                    .state
+                    .emit_const_global(&format!("const_vec_{id}"), &buf);
+                let func = self.state.declare_external("__move_rt_const_vec", fn_type);
                 let ptr = global.as_pointer_value();
-                let count = ctx.i64_type.const_int(elems.len() as u64, false);
-                let esz = ctx.i64_type.const_int(elem_size as u64, false);
-                let call = ctx
+                let count = llvm.i64_type.const_int(elems.len() as u64, false);
+                let esz = llvm.i64_type.const_int(elem_size as u64, false);
+                let call = llvm
                     .builder
                     .build_call(func, &[ptr.into(), count.into(), esz.into()], "const_vec")
                     .unwrap();

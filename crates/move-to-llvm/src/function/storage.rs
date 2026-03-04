@@ -5,18 +5,18 @@ use inkwell::types::BasicType;
 use move_model::model::{DatatypeId, ModuleId};
 use move_model::ty::Type;
 
-use super::FunctionLowering;
+use super::state::FunctionState;
 use crate::error::CompileResult;
 
 /// Emits LLVM calls for Move global storage operations
 /// (MoveTo, MoveFrom, Exists, BorrowGlobal, GetGlobal).
 pub(crate) struct StorageEmitter<'a, 'b, 'ctx> {
-    fl: &'a FunctionLowering<'b, 'ctx>,
+    state: &'a FunctionState<'b, 'ctx>,
 }
 
 impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
-    pub fn new(fl: &'a FunctionLowering<'b, 'ctx>) -> Self {
-        Self { fl }
+    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+        Self { state }
     }
 
     pub fn emit_move_to(
@@ -27,13 +27,13 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         self.emit_storage_call("move_to", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let val_ty = self.fl.lower_type(&dt_ty)?.into();
-            Ok(ctx
+            let val_ty = self.state.lower_type(&dt_ty)?.into();
+            Ok(llvm
                 .context
                 .void_type()
-                .fn_type(&[val_ty, ctx.i256_type.into()], false))
+                .fn_type(&[val_ty, llvm.i256_type.into()], false))
         })
     }
 
@@ -45,10 +45,10 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         self.emit_storage_call("move_from", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let ret_ty = self.fl.lower_type(&dt_ty)?;
-            Ok(ret_ty.fn_type(&[ctx.i256_type.into()], false))
+            let ret_ty = self.state.lower_type(&dt_ty)?;
+            Ok(ret_ty.fn_type(&[llvm.i256_type.into()], false))
         })
     }
 
@@ -60,9 +60,9 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         self.emit_storage_call("exists", mid, did, type_args, dsts, srcs, |_| {
-            Ok(ctx.i8_type.fn_type(&[ctx.i256_type.into()], false))
+            Ok(llvm.i8_type.fn_type(&[llvm.i256_type.into()], false))
         })
     }
 
@@ -74,9 +74,9 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         self.emit_storage_call("borrow_global", mid, did, type_args, dsts, srcs, |_| {
-            Ok(ctx.ptr_type.fn_type(&[ctx.i256_type.into()], false))
+            Ok(llvm.ptr_type.fn_type(&[llvm.i256_type.into()], false))
         })
     }
 
@@ -88,10 +88,10 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         dsts: &[usize],
         srcs: &[usize],
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
+        let llvm = &self.state.ctx;
         self.emit_storage_call("get_global", mid, did, type_args, dsts, srcs, |dt_ty| {
-            let ret_ty = self.fl.lower_type(&dt_ty)?;
-            Ok(ret_ty.fn_type(&[ctx.i256_type.into()], false))
+            let ret_ty = self.state.lower_type(&dt_ty)?;
+            Ok(ret_ty.fn_type(&[llvm.i256_type.into()], false))
         })
     }
 
@@ -107,30 +107,28 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         srcs: &[usize],
         build_fn_type: impl FnOnce(Type) -> CompileResult<inkwell::types::FunctionType<'ctx>>,
     ) -> CompileResult<()> {
-        let ctx = &self.fl.ctx;
-        let inst_args = self.fl.inst_types(type_args);
+        let llvm = &self.state.ctx;
+        let inst_args = self.state.inst_types(type_args);
         let dt_ty = Type::Datatype(mid, did, inst_args);
-        let mangled = self.fl.mangle_type(&dt_ty);
+        let mangled = self.state.mangle_type(&dt_ty)?;
         let symbol = format!("__move_rt_{op_name}${mangled}");
 
-        let func = match ctx.module.get_function(&symbol) {
-            Some(f) => f,
-            None => ctx.declare_extern(&symbol, build_fn_type(dt_ty)?),
-        };
+        let fn_type = build_fn_type(dt_ty)?;
+        let func = llvm.add_external_function(&symbol, fn_type);
 
         let args: Vec<_> = srcs
             .iter()
-            .map(|s| self.fl.load_value(*s).map(|v| v.into()))
+            .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = ctx.builder.build_call(func, &args, &symbol).unwrap();
+        let call = llvm.builder.build_call(func, &args, &symbol).unwrap();
 
         if !dsts.is_empty() {
             let ret_val = match call.try_as_basic_value() {
                 inkwell::values::ValueKind::Basic(v) => v,
                 _ => panic!("expected non-void return from {symbol}"),
             };
-            self.fl.store(dsts[0], ret_val);
+            self.state.store(dsts[0], ret_val);
         }
         Ok(())
     }

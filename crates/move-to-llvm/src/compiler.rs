@@ -12,18 +12,16 @@ use crate::assembly::{Assembly, AssemblyBuilder};
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
 use crate::function::FunctionLowering;
-use crate::mangle::Mangler;
 use crate::target::Target;
 use crate::types::TypeLowering;
 
 /// Top-level compiler that owns the full Move -> AArch64 pipeline.
 ///
-/// Bundles the LLVM context, the Move model environment (via `Mangler`),
+/// Bundles the LLVM context (which includes the Move `GlobalEnv`)
 /// and the code generator so that callers never need to thread
-/// `(ctx, env)` pairs through every function call.
+/// infrastructure through every function call.
 pub struct Compiler<'ctx> {
     pub(crate) ctx: LlvmContext<'ctx>,
-    pub(crate) mangler: Mangler,
     asm_builder: AssemblyBuilder,
 }
 
@@ -58,20 +56,14 @@ impl<'ctx> Compiler<'ctx> {
         module: &CompiledModule,
         dependencies: &[CompiledModule],
     ) -> CompileResult<Self> {
-        let mangler = Mangler::new(module, dependencies)?;
-        let module_name = mangler.target_module().get_full_name_str();
-        let ctx = LlvmContext::new(context, &module_name);
+        let ctx = LlvmContext::new(context, module, dependencies)?;
         let asm_builder = AssemblyBuilder::new(target)?;
 
-        Ok(Self {
-            ctx,
-            mangler,
-            asm_builder,
-        })
+        Ok(Self { ctx, asm_builder })
     }
 
     fn emit(&self) -> CompileResult<Assembly> {
-        let target_module_env = self.mangler.target_module();
+        let target_module_env = self.ctx.target_module();
 
         // Collect non-generic, non-native functions — the ones we compile
         // directly. Natives are implemented in Rust; generics are monomorphized
@@ -110,7 +102,7 @@ impl<'ctx> Compiler<'ctx> {
         function_env: &FunctionEnv<'_>,
     ) -> CompileResult<FunctionValue<'ctx>> {
         let name = function_env.get_name_str();
-        let function_type = TypeLowering::new(&self.ctx, &self.mangler).lower_function_type(
+        let function_type = TypeLowering::new(&self.ctx).lower_function_type(
             &function_env.get_parameter_types(),
             &function_env.get_return_types(),
         )?;
@@ -126,7 +118,6 @@ impl<'ctx> Compiler<'ctx> {
     ) -> CompileResult<()> {
         FunctionLowering::new(
             &self.ctx,
-            &self.mangler,
             declaration,
             function_env.get_parameter_count(),
             function_data,

@@ -6,20 +6,17 @@ use move_model::ty::{PrimitiveType, Type};
 
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
-use crate::mangle::Mangler;
 
 /// Lightweight view for lowering Move types to LLVM types.
 ///
-/// Created on the fly via `Compiler::types()` — borrows the LLVM context
-/// and mangler without owning them.
+/// Created on the fly — borrows the LLVM context (which owns the env).
 pub(crate) struct TypeLowering<'a, 'ctx> {
     ctx: &'a LlvmContext<'ctx>,
-    mangler: &'a Mangler,
 }
 
 impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
-    pub fn new(ctx: &'a LlvmContext<'ctx>, mangler: &'a Mangler) -> Self {
-        Self { ctx, mangler }
+    pub fn new(ctx: &'a LlvmContext<'ctx>) -> Self {
+        Self { ctx }
     }
 
     /// Lower a `move_model::ty::Type` to an LLVM type.
@@ -36,16 +33,17 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
             Type::Primitive(PrimitiveType::Signer) => Ok(self.ctx.i256_type.into()),
             Type::Reference(_, _) => Ok(self.ctx.ptr_type.into()),
             Type::Vector(_) => Ok(self.ctx.ptr_type.into()),
-            Type::Datatype(mid, did, type_args) => {
-                let struct_env = self.mangler.env().get_module(*mid).into_struct(*did);
+            Type::Datatype(module_id, datatype_id, type_args) => {
+                let struct_env = self
+                    .ctx
+                    .env()
+                    .get_module(*module_id)
+                    .into_struct(*datatype_id);
                 let name = if type_args.is_empty() {
                     struct_env.get_full_name_str()
                 } else {
-                    format!(
-                        "{}__{}",
-                        struct_env.get_full_name_str(),
-                        self.mangler.mangle_type_args(type_args)
-                    )
+                    let args = self.ctx.mangle_type_args(type_args)?;
+                    format!("{}__{}", struct_env.get_full_name_str(), args)
                 };
 
                 // Return cached struct type if already created
@@ -58,12 +56,12 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
                 let field_types: Vec<BasicTypeEnum<'ctx>> = struct_env
                     .get_fields()
                     .map(|f| {
-                        let ft = if type_args.is_empty() {
+                        let t = if type_args.is_empty() {
                             f.get_type()
                         } else {
                             f.get_type().instantiate(type_args)
                         };
-                        self.lower_type(&ft)
+                        self.lower_type(&t)
                     })
                     .collect::<Result<_, _>>()?;
                 struct_type.set_body(&field_types, false);
@@ -89,15 +87,15 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
         Ok(if return_types.is_empty() {
             self.ctx.context.void_type().fn_type(&params, false)
         } else if return_types.len() == 1 {
-            let ret = self.lower_type(&return_types[0])?;
-            ret.fn_type(&params, false)
+            let return_type = self.lower_type(&return_types[0])?;
+            return_type.fn_type(&params, false)
         } else {
-            let llvm_ret_types: Vec<BasicTypeEnum<'ctx>> = return_types
+            let llvm_return_types: Vec<BasicTypeEnum<'ctx>> = return_types
                 .iter()
                 .map(|t| self.lower_type(t))
                 .collect::<Result<_, _>>()?;
-            let ret_struct = self.ctx.context.struct_type(&llvm_ret_types, false);
-            ret_struct.fn_type(&params, false)
+            let return_struct = self.ctx.context.struct_type(&llvm_return_types, false);
+            return_struct.fn_type(&params, false)
         })
     }
 }
