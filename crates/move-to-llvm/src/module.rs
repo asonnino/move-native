@@ -4,6 +4,8 @@
 //! Builder for constructing Move `CompiledModule`s in tests.
 
 mod all_features;
+#[cfg(test)]
+mod fixtures;
 
 use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{

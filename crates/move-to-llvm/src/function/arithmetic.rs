@@ -208,10 +208,9 @@ mod tests {
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
-    /// Build a module with `op(a: T, b: T): T { a <op> b }`.
-    fn binary_operation_module(name: &str, ty: SignatureToken, op: Bytecode) -> String {
+    /// Build and compile `op(a: T, b: T) -> T { a <op> b }`.
+    fn binary_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> String {
         let module = CompiledModuleBuilder::new()
             .function(
                 name,
@@ -226,29 +225,68 @@ mod tests {
                 ],
             )
             .build();
-        Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string()
+        Compiler::compile_to_asm(&module)
+    }
+
+    /// Build and compile `op(a: T, b: T) -> Bool { a <op> b }`.
+    fn comparison_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> String {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                name,
+                vec![ty.clone(), ty],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    op,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        Compiler::compile_to_asm(&module)
+    }
+
+    /// Build and compile `op(a: In) -> Out { <op>(a) }`.
+    fn unary_op_asm(
+        name: &str,
+        input: SignatureToken,
+        output: SignatureToken,
+        op: Bytecode,
+    ) -> String {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                name,
+                vec![input],
+                vec![output],
+                vec![],
+                vec![Bytecode::CopyLoc(0), op, Bytecode::Ret],
+            )
+            .build();
+        Compiler::compile_to_asm(&module)
     }
 
     #[test]
     fn add_u64() {
-        let asm = binary_operation_module("add_fn", SignatureToken::U64, Bytecode::Add);
+        let asm = binary_op_asm("add_fn", SignatureToken::U64, Bytecode::Add);
         assert!(asm.contains("add_fn"), "missing symbol\n{asm}");
         assert!(asm.contains("\tadd\t"), "missing add instruction\n{asm}");
     }
 
     #[test]
     fn add_u256() {
-        let asm = binary_operation_module("add_u256", SignatureToken::U256, Bytecode::Add);
+        let asm = binary_op_asm("add_u256", SignatureToken::U256, Bytecode::Add);
         assert!(asm.contains("add_u256"), "missing symbol\n{asm}");
         // i256 add lowers to multi-word arithmetic with carry chain
-        assert!(asm.contains("\tadds\t"), "missing adds (carry chain) for u256 add\n{asm}");
+        assert!(
+            asm.contains("\tadds\t"),
+            "missing adds (carry chain) for u256 add\n{asm}"
+        );
     }
 
     #[test]
     fn sub_u64() {
-        let asm = binary_operation_module("sub_fn", SignatureToken::U64, Bytecode::Sub);
+        let asm = binary_op_asm("sub_fn", SignatureToken::U64, Bytecode::Sub);
         assert!(
             asm.contains("\tsub\t") || asm.contains("\tsubs\t"),
             "missing sub instruction\n{asm}"
@@ -257,19 +295,19 @@ mod tests {
 
     #[test]
     fn mul_u64() {
-        let asm = binary_operation_module("mul_fn", SignatureToken::U64, Bytecode::Mul);
+        let asm = binary_op_asm("mul_fn", SignatureToken::U64, Bytecode::Mul);
         assert!(asm.contains("\tmul\t"), "missing mul instruction\n{asm}");
     }
 
     #[test]
     fn div_unsigned() {
-        let asm = binary_operation_module("div_fn", SignatureToken::U64, Bytecode::Div);
+        let asm = binary_op_asm("div_fn", SignatureToken::U64, Bytecode::Div);
         assert!(asm.contains("\tudiv\t"), "missing udiv instruction\n{asm}");
     }
 
     #[test]
     fn mod_unsigned() {
-        let asm = binary_operation_module("mod_fn", SignatureToken::U64, Bytecode::Mod);
+        let asm = binary_op_asm("mod_fn", SignatureToken::U64, Bytecode::Mod);
         // ARM64 computes mod as: x - (x / y) * y, using udiv + msub
         assert!(asm.contains("\tudiv\t"), "missing udiv for mod\n{asm}");
         assert!(asm.contains("\tmsub\t"), "missing msub for mod\n{asm}");
@@ -277,46 +315,14 @@ mod tests {
 
     #[test]
     fn comparison_lt() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "lt_fn",
-                vec![SignatureToken::U64, SignatureToken::U64],
-                vec![SignatureToken::Bool],
-                vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    Bytecode::Lt,
-                    Bytecode::Ret,
-                ],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = comparison_op_asm("lt_fn", SignatureToken::U64, Bytecode::Lt);
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
         assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
     }
 
     #[test]
     fn comparison_eq() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "eq_fn",
-                vec![SignatureToken::U64, SignatureToken::U64],
-                vec![SignatureToken::Bool],
-                vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    Bytecode::Eq,
-                    Bytecode::Ret,
-                ],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = comparison_op_asm("eq_fn", SignatureToken::U64, Bytecode::Eq);
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
         assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
         assert!(asm.contains("eq"), "missing eq condition\n{asm}");
@@ -324,23 +330,7 @@ mod tests {
 
     #[test]
     fn comparison_neq() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "neq_fn",
-                vec![SignatureToken::U64, SignatureToken::U64],
-                vec![SignatureToken::Bool],
-                vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    Bytecode::Neq,
-                    Bytecode::Ret,
-                ],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = comparison_op_asm("neq_fn", SignatureToken::U64, Bytecode::Neq);
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
         assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
         assert!(asm.contains("ne"), "missing ne condition\n{asm}");
@@ -348,19 +338,19 @@ mod tests {
 
     #[test]
     fn bitwise_and() {
-        let asm = binary_operation_module("band_fn", SignatureToken::U64, Bytecode::BitAnd);
+        let asm = binary_op_asm("band_fn", SignatureToken::U64, Bytecode::BitAnd);
         assert!(asm.contains("\tand\t"), "missing and instruction\n{asm}");
     }
 
     #[test]
     fn bitwise_or() {
-        let asm = binary_operation_module("bor_fn", SignatureToken::U64, Bytecode::BitOr);
+        let asm = binary_op_asm("bor_fn", SignatureToken::U64, Bytecode::BitOr);
         assert!(asm.contains("\torr\t"), "missing orr instruction\n{asm}");
     }
 
     #[test]
     fn bitwise_xor() {
-        let asm = binary_operation_module("xor_fn", SignatureToken::U64, Bytecode::Xor);
+        let asm = binary_op_asm("xor_fn", SignatureToken::U64, Bytecode::Xor);
         assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
     }
 
@@ -381,9 +371,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
     }
 
@@ -404,78 +392,52 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
     }
 
     #[test]
     fn logical_not() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "not_fn",
-                vec![SignatureToken::Bool],
-                vec![SignatureToken::Bool],
-                vec![],
-                vec![Bytecode::CopyLoc(0), Bytecode::Not, Bytecode::Ret],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = unary_op_asm(
+            "not_fn",
+            SignatureToken::Bool,
+            SignatureToken::Bool,
+            Bytecode::Not,
+        );
         assert!(asm.contains("not_fn"), "missing symbol\n{asm}");
         assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
     }
 
     #[test]
     fn cast_truncate() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "trunc_fn",
-                vec![SignatureToken::U64],
-                vec![SignatureToken::U8],
-                vec![],
-                vec![Bytecode::CopyLoc(0), Bytecode::CastU8, Bytecode::Ret],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = unary_op_asm(
+            "trunc_fn",
+            SignatureToken::U64,
+            SignatureToken::U8,
+            Bytecode::CastU8,
+        );
         assert!(asm.contains("trunc_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn cast_extend() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "extend_fn",
-                vec![SignatureToken::U8],
-                vec![SignatureToken::U64],
-                vec![],
-                vec![Bytecode::CopyLoc(0), Bytecode::CastU64, Bytecode::Ret],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = unary_op_asm(
+            "extend_fn",
+            SignatureToken::U8,
+            SignatureToken::U64,
+            Bytecode::CastU64,
+        );
         assert!(asm.contains("extend_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn cast_same_width_noop() {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                "cast_noop",
-                vec![SignatureToken::U64],
-                vec![SignatureToken::U64],
-                vec![],
-                vec![Bytecode::CopyLoc(0), Bytecode::CastU64, Bytecode::Ret],
-            )
-            .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = unary_op_asm(
+            "cast_noop",
+            SignatureToken::U64,
+            SignatureToken::U64,
+            Bytecode::CastU64,
+        );
         assert!(asm.contains("cast_noop"), "missing symbol\n{asm}");
     }
 }

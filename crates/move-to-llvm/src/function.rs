@@ -164,35 +164,15 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 }
 
 #[cfg(test)]
-pub(crate) mod test_helpers {
-    use move_binary_format::file_format::{AbilitySet, DatatypeHandleIndex, SignatureToken};
-
-    use crate::module::CompiledModuleBuilder;
-
-    pub(crate) fn point_token() -> SignatureToken {
-        SignatureToken::Datatype(DatatypeHandleIndex(0))
-    }
-
-    pub(crate) fn point_module() -> CompiledModuleBuilder {
-        CompiledModuleBuilder::new().struct_definition(
-            "Point",
-            AbilitySet::PRIMITIVES,
-            vec![("x", SignatureToken::U64), ("y", SignatureToken::U64)],
-        )
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use move_binary_format::file_format::{
-        Bytecode, FieldHandleIndex, FunctionHandleIndex, SignatureToken, StructDefinitionIndex,
+        Bytecode, DatatypeHandleIndex, FieldHandleIndex, FunctionHandleIndex, SignatureToken,
+        StructDefinitionIndex,
     };
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
-
-    use super::test_helpers::{point_module, point_token};
 
     #[test]
     fn assign_copies_local() {
@@ -212,9 +192,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("copy_local"), "missing symbol\n{asm}");
         assert!(asm.contains("ret"), "missing ret\n{asm}");
     }
@@ -237,9 +215,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("forty_two"), "missing symbol\n{asm}");
         // 42 = 0x2A, should appear as a mov immediate
         assert!(asm.contains("#42"), "missing immediate #42\n{asm}");
@@ -263,22 +239,20 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("always_true"), "missing symbol\n{asm}");
         assert!(asm.contains("#1"), "missing #1 immediate for LdTrue\n{asm}");
     }
 
     #[test]
     fn arithmetic_on_struct_local_is_error() {
-        // f(p: Point): Point { p + p } — Add on a struct should fail in load_int
-        let module = point_module()
+        let pt = SignatureToken::Datatype(DatatypeHandleIndex(0));
+        let module = CompiledModuleBuilder::point()
             .function(
                 "bad_add",
-                vec![point_token()],
-                vec![point_token()],
-                vec![point_token()],
+                vec![pt.clone()],
+                vec![pt.clone()],
+                vec![pt],
                 vec![
                     Bytecode::CopyLoc(0),
                     Bytecode::CopyLoc(0),
@@ -306,8 +280,7 @@ mod tests {
 
     #[test]
     fn unpack_on_integer_local_is_error() {
-        // f(x: u64): u64 { Unpack(x) } — Unpack on an integer should fail in load_struct
-        let module = point_module()
+        let module = CompiledModuleBuilder::point()
             .function(
                 "bad_unpack",
                 vec![SignatureToken::U64],
@@ -339,8 +312,7 @@ mod tests {
 
     #[test]
     fn borrow_field_on_integer_local_is_error() {
-        // f(x: u64): u64 { ImmBorrowField(x) } — BorrowField on an integer should fail
-        let module = point_module()
+        let module = CompiledModuleBuilder::point()
             .field_handle(StructDefinitionIndex(0), 0)
             .function(
                 "bad_borrow_field",
@@ -372,9 +344,6 @@ mod tests {
 
     #[test]
     fn call_multi_return() {
-        // swap(a: u64, b: u64): (u64, u64) { b, a }
-        // call_swap(x: u64, y: u64): (u64, u64) { swap(x, y) }
-        // Tests the destinations.len() > 1 branch in CallEmitter::emit
         let module = CompiledModuleBuilder::new()
             .function(
                 "swap",
@@ -397,9 +366,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
         assert!(
             asm.contains("call_swap"),

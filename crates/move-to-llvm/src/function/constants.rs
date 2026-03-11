@@ -192,7 +192,6 @@ mod tests {
     use super::ConstantEmitter;
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn address_single() {
@@ -349,9 +348,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(
             asm.contains("__move_rt_const_vec_u8"),
             "missing runtime call\n{asm}"
@@ -380,9 +377,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(asm.contains("load_addr"), "missing symbol\n{asm}");
     }
 
@@ -416,9 +411,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_module(&Target::Aarch64, &module)
-            .unwrap()
-            .to_string();
+        let asm = Compiler::compile_to_asm(&module);
         assert!(
             asm.contains("__move_rt_const_vec"),
             "missing runtime call\n{asm}"

@@ -109,6 +109,14 @@ impl<'ctx> Compiler<'ctx> {
         Ok(self.ctx.add_function(&name, function_type))
     }
 
+    /// Compile a module to Aarch64 assembly text. Convenience for tests.
+    #[cfg(test)]
+    pub(crate) fn compile_to_asm(module: &CompiledModule) -> String {
+        Self::compile_module(&Target::Aarch64, module)
+            .unwrap()
+            .to_string()
+    }
+
     /// Compile the body of an already-declared LLVM function.
     fn compile_function(
         &self,
