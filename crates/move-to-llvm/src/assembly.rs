@@ -142,6 +142,11 @@ impl AssemblyBuilder {
             .map_err(|e| CompileError::codegen(e.to_string()))?
             .to_string();
 
+        debug_assert!(
+            !asm.contains("x23"),
+            "compiler emitted x23 (reserved for gas metering)\nassembly:\n{asm}"
+        );
+
         Ok(Assembly(asm))
     }
 }

@@ -161,12 +161,12 @@ move-native/
 │   │   │   └── gas_check.rs   # Verify gas instrumentation
 │   │   └── Cargo.toml
 │   │
-│   ├── native-runtime/        # Execution runtime
+│   ├── runtime/               # Execution runtime
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── entry.rs       # Entry point, gas setup
+│   │   │   ├── execute.rs     # Entry point, gas setup
 │   │   │   ├── signal.rs      # SIGTRAP handler
-│   │   │   └── natives.rs     # Native function implementations
+│   │   │   └── module.rs      # Native module loading
 │   │   └── Cargo.toml
 │   │
 │   └── move-native-cli/       # CLI tool for testing
@@ -216,13 +216,15 @@ native-verifier test.o  # should pass
 
 ### Phase 2: Runtime (1 week)
 
-**native-runtime crate:**
+**runtime crate:**
 
 - Signal handler setup for SIGTRAP
 - Entry point that sets x23 and calls native code
 - Out-of-gas detection and error return
 
 Test with hand-written instrumented assembly loaded via `dlopen`.
+
+**Note:** Execution tests (actually running compiled code) belong in the `runtime` crate's integration tests, not in `move-to-llvm`. The `move-to-llvm` integration tests should only verify assembly output.
 
 ### Phase 3: Move → LLVM (4-8 weeks)
 

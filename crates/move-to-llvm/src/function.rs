@@ -192,7 +192,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("copy_local"), "missing symbol\n{asm}");
         assert!(asm.contains("ret"), "missing ret\n{asm}");
     }
@@ -215,7 +215,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("forty_two"), "missing symbol\n{asm}");
         // 42 = 0x2A, should appear as a mov immediate
         assert!(asm.contains("#42"), "missing immediate #42\n{asm}");
@@ -239,7 +239,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("always_true"), "missing symbol\n{asm}");
         assert!(asm.contains("#1"), "missing #1 immediate for LdTrue\n{asm}");
     }
@@ -366,7 +366,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
         assert!(
             asm.contains("call_swap"),

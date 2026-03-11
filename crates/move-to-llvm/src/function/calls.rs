@@ -178,6 +178,7 @@ mod tests {
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
 
     #[test]
     fn call_non_generic() {
@@ -207,7 +208,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("double"), "missing 'double' symbol\n{asm}");
         assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
         assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
@@ -238,7 +239,7 @@ mod tests {
             .function_instantiation(FunctionHandleIndex(0), vec![SignatureToken::U64])
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("identity$u64"),
             "missing monomorphized 'identity$u64' symbol\n{asm}"
@@ -268,7 +269,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
         assert!(
             asm.contains("__move_rt_0x0_M_native_add"),

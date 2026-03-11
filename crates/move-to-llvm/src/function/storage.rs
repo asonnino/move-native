@@ -148,6 +148,7 @@ mod tests {
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
 
     #[test]
     fn exists_emits_runtime_call() {
@@ -165,7 +166,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("__move_rt_exists"),
             "missing __move_rt_exists call\n{asm}"
@@ -188,7 +189,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("__move_rt_move_from"),
             "missing __move_rt_move_from call\n{asm}"
@@ -215,7 +216,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("__move_rt_move_to"),
             "missing __move_rt_move_to call\n{asm}"
@@ -240,7 +241,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("__move_rt_borrow_global"),
             "missing __move_rt_borrow_global call\n{asm}"

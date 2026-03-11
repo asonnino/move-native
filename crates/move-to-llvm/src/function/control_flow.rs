@@ -96,6 +96,7 @@ mod tests {
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
 
     #[test]
     fn ret_void() {
@@ -103,7 +104,7 @@ mod tests {
             .function("noop", vec![], vec![], vec![], vec![Bytecode::Ret])
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("noop"), "missing 'noop' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
@@ -120,7 +121,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("identity"), "missing 'identity' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
@@ -137,7 +138,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
@@ -177,7 +178,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("sum_to_n"), "missing 'sum_to_n' symbol\n{asm}");
         assert!(asm.contains("b."), "missing conditional branch\n{asm}");
     }
@@ -199,7 +200,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("abort_42"), "missing 'abort_42' symbol\n{asm}");
         assert!(
             asm.contains("__move_rt_abort"),

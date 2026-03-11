@@ -178,6 +178,7 @@ mod tests {
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
 
     #[test]
     fn pack_struct() {
@@ -197,7 +198,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
             asm.contains("new_point"),
             "missing 'new_point' symbol\n{asm}"
@@ -224,7 +225,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("get_x"), "missing 'get_x' symbol\n{asm}");
     }
 
@@ -246,7 +247,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("copy_via_ref"), "missing symbol\n{asm}");
     }
 
@@ -272,7 +273,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("overwrite"), "missing symbol\n{asm}");
     }
 
@@ -305,7 +306,7 @@ mod tests {
             )
             .build();
 
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("get_x_via_ref"), "missing symbol\n{asm}");
     }
 }

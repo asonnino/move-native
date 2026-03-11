@@ -15,6 +15,22 @@ pub enum Target {
 }
 
 impl Target {
+    /// Returns the target matching the host architecture.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the host architecture is not supported.
+    pub fn host() -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Self::Aarch64
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            panic!("unsupported host architecture; only aarch64 is supported")
+        }
+    }
+
     pub(crate) fn triple(&self) -> &'static str {
         match self {
             Self::Aarch64 => {

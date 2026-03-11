@@ -1486,14 +1486,11 @@ dependencies = [
  "ethnum",
  "indoc",
  "inkwell",
- "libc",
  "move-binary-format",
  "move-core-types",
  "move-model",
  "move-stackless-bytecode",
  "num-bigint",
- "object 0.38.1",
- "tempfile",
  "thiserror 2.0.18",
 ]
 

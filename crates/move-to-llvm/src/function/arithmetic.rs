@@ -206,11 +206,11 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 mod tests {
     use move_binary_format::file_format::{Bytecode, SignatureToken};
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
+    use crate::{Assembly, compiler::Compiler, target::Target};
 
     /// Build and compile `op(a: T, b: T) -> T { a <op> b }`.
-    fn binary_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> String {
+    fn binary_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
         let module = CompiledModuleBuilder::new()
             .function(
                 name,
@@ -225,11 +225,11 @@ mod tests {
                 ],
             )
             .build();
-        Compiler::compile_to_asm(&module)
+        Compiler::compile_module(&Target::host(), &module).unwrap()
     }
 
     /// Build and compile `op(a: T, b: T) -> Bool { a <op> b }`.
-    fn comparison_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> String {
+    fn comparison_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
         let module = CompiledModuleBuilder::new()
             .function(
                 name,
@@ -244,7 +244,7 @@ mod tests {
                 ],
             )
             .build();
-        Compiler::compile_to_asm(&module)
+        Compiler::compile_module(&Target::host(), &module).unwrap()
     }
 
     /// Build and compile `op(a: In) -> Out { <op>(a) }`.
@@ -253,7 +253,7 @@ mod tests {
         input: SignatureToken,
         output: SignatureToken,
         op: Bytecode,
-    ) -> String {
+    ) -> Assembly {
         let module = CompiledModuleBuilder::new()
             .function(
                 name,
@@ -263,7 +263,7 @@ mod tests {
                 vec![Bytecode::CopyLoc(0), op, Bytecode::Ret],
             )
             .build();
-        Compiler::compile_to_asm(&module)
+        Compiler::compile_module(&Target::host(), &module).unwrap()
     }
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
     }
 
@@ -392,7 +392,7 @@ mod tests {
                 ],
             )
             .build();
-        let asm = Compiler::compile_to_asm(&module);
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
     }
 
