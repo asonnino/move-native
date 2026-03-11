@@ -7,7 +7,7 @@ use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use super::FunctionLowering;
-use super::state::FunctionState;
+use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM call instructions for Move function calls.
@@ -50,15 +50,12 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         let call = llvm.builder.build_call(callee_fn, &args, &call_name)?;
 
         if !destinations.is_empty() {
-            let ret_val = match call.try_as_basic_value() {
-                inkwell::values::ValueKind::Basic(v) => v,
-                _ => panic!("expected non-void return from callee"),
-            };
+            let return_value = call.into_basic_value()?;
             if destinations.len() == 1 {
-                self.state.store(destinations[0], ret_val)?;
+                self.state.store(destinations[0], return_value)?;
             } else {
                 // Multi-return: unpack struct into individual destinations
-                let struct_val = ret_val.into_struct_value();
+                let struct_val = return_value.into_struct_value();
                 for (i, destination) in destinations.iter().enumerate() {
                     let field = llvm.builder.build_extract_value(
                         struct_val,

@@ -5,7 +5,7 @@ use inkwell::types::BasicType;
 use move_model::model::{DatatypeId, ModuleId};
 use move_model::ty::Type;
 
-use super::state::FunctionState;
+use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::CompileResult;
 
 /// Emits LLVM calls for Move global storage operations
@@ -133,10 +133,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         let call = llvm.builder.build_call(function_value, &args, symbol)?;
 
         if !destinations.is_empty() {
-            let ret_val = match call.try_as_basic_value() {
-                inkwell::values::ValueKind::Basic(v) => v,
-                _ => panic!("expected non-void return from {symbol}"),
-            };
+            let ret_val = call.into_basic_value()?;
             self.state.store(destinations[0], ret_val)?;
         }
         Ok(())

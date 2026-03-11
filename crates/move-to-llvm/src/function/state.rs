@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicValueEnum, CallSiteValue, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use move_model::model::FunctionEnv as MoveFunctionEnv;
 use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
@@ -16,6 +18,22 @@ use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
 use crate::types::TypeLowering;
+
+/// Extension trait for extracting a `BasicValueEnum` from a call result.
+pub(crate) trait CallSiteValueExt<'ctx> {
+    fn into_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>>;
+}
+
+impl<'ctx> CallSiteValueExt<'ctx> for CallSiteValue<'ctx> {
+    fn into_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>> {
+        let inkwell::values::ValueKind::Basic(v) = self.try_as_basic_value() else {
+            return Err(CompileError::malformed_module(
+                "expected non-void return from call",
+            ));
+        };
+        Ok(v)
+    }
+}
 
 /// A single local variable (param, local, or compiler-generated temp).
 ///
@@ -169,9 +187,26 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         self.ctx.mangle_native_symbol(callee_env, type_args)
     }
 
+    /// Get a local by index, returning an error if out of bounds.
+    pub(crate) fn get_local(&self, idx: usize) -> CompileResult<&Local<'ctx>> {
+        self.locals.get(idx).ok_or_else(|| {
+            CompileError::malformed_module(format!("local index {idx} out of bounds"))
+        })
+    }
+
+    /// Get a label's basic block, returning an error if the label doesn't exist.
+    pub(crate) fn get_label_block(
+        &self,
+        label: &move_stackless_bytecode::stackless_bytecode::Label,
+    ) -> CompileResult<BasicBlock<'ctx>> {
+        self.label_blocks.get(label).copied().ok_or_else(|| {
+            CompileError::malformed_module(format!("unknown label {}", label.as_usize()))
+        })
+    }
+
     /// Load a local as a generic `BasicValueEnum` (works for any type).
     pub(crate) fn load_value(&self, idx: usize) -> CompileResult<BasicValueEnum<'ctx>> {
-        let local = &self.locals[idx];
+        let local = self.get_local(idx)?;
         Ok(self
             .ctx
             .builder
@@ -180,18 +215,45 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
 
     /// Load a local as an `IntValue` (convenience for arithmetic/comparison ops).
     pub(crate) fn load_int(&self, idx: usize) -> CompileResult<IntValue<'ctx>> {
-        Ok(self.load_value(idx)?.into_int_value())
+        match self.load_value(idx)? {
+            BasicValueEnum::IntValue(v) => Ok(v),
+            other => Err(CompileError::malformed_module(format!(
+                "expected integer for local {idx}, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Load a local as a `StructValue` (convenience for struct pack/unpack ops).
+    pub(crate) fn load_struct(&self, idx: usize) -> CompileResult<StructValue<'ctx>> {
+        match self.load_value(idx)? {
+            BasicValueEnum::StructValue(v) => Ok(v),
+            other => Err(CompileError::malformed_module(format!(
+                "expected struct for local {idx}, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Load a local as a `PointerValue` (convenience for reference ops).
+    pub(crate) fn load_pointer(&self, idx: usize) -> CompileResult<PointerValue<'ctx>> {
+        match self.load_value(idx)? {
+            BasicValueEnum::PointerValue(v) => Ok(v),
+            other => Err(CompileError::malformed_module(format!(
+                "expected pointer for local {idx}, got {other:?}"
+            ))),
+        }
     }
 
     /// Store a value into a local's alloca.
     pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) -> CompileResult<()> {
-        self.ctx.builder.build_store(self.locals[idx].alloca, val)?;
+        let local = self.get_local(idx)?;
+        self.ctx.builder.build_store(local.alloca, val)?;
         Ok(())
     }
 
     /// Resolve the pointee LLVM type for a local that holds a reference (`&T` or `&mut T`).
     pub(crate) fn pointee_type(&self, idx: usize) -> CompileResult<BasicTypeEnum<'ctx>> {
-        match &self.locals[idx].mty {
+        let local = self.get_local(idx)?;
+        match &local.mty {
             Type::Reference(_, inner) => self.lower_type(inner),
             other => Err(CompileError::unsupported_type(other.clone())),
         }

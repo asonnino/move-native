@@ -3,7 +3,7 @@
 
 use move_stackless_bytecode::stackless_bytecode::Constant;
 
-use super::state::FunctionState;
+use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM IR for Move constant values.
@@ -61,10 +61,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let call =
                     llvm.builder
                         .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")?;
-                match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => v,
-                    _ => unreachable!("const vec runtime function must return a value"),
-                }
+                call.into_basic_value()?
             }
             Constant::AddressArray(addresses) => {
                 let id = self.state.next_const_id();
@@ -82,10 +79,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let call =
                     llvm.builder
                         .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")?;
-                match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => v,
-                    _ => unreachable!("const vec runtime function must return a value"),
-                }
+                call.into_basic_value()?
             }
             Constant::Vector(elements) => {
                 let function_type = llvm.ptr_type.fn_type(
@@ -107,11 +101,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         &[null.into(), zero.into(), zero.into()],
                         "const_vec_empty",
                     )?;
-                    let v = match call.try_as_basic_value() {
-                        inkwell::values::ValueKind::Basic(v) => v,
-                        _ => unreachable!("const vec runtime function must return a value"),
-                    };
-                    return self.state.store(destination, v);
+                    return self.state.store(destination, call.into_basic_value()?);
                 }
                 let (elem_size, buf) = Self::serialize_scalar_vector(elements)?;
                 let id = self.state.next_const_id();
@@ -129,10 +119,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     &[ptr.into(), count.into(), esz.into()],
                     "const_vec",
                 )?;
-                match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => v,
-                    _ => unreachable!("const vec runtime function must return a value"),
-                }
+                call.into_basic_value()?
             }
         };
         self.state.store(destination, val)

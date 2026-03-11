@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Builder for constructing Move `CompiledModule`s in unit tests.
+//! Builder for constructing Move `CompiledModule`s in tests.
 
 use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{

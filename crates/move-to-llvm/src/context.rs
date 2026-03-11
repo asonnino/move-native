@@ -124,7 +124,7 @@ impl<'ctx> LlvmContext<'ctx> {
         self.module.get_function(name)
     }
 
-    /// Define an internal function in this module.
+    /// Add a function definition (with body) to this module.
     pub(crate) fn add_function(
         &self,
         name: &str,

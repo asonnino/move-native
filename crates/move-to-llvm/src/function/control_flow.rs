@@ -32,7 +32,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                     // Multi-return: pack values into an anonymous struct
                     let return_types: Vec<BasicTypeEnum<'ctx>> = returns
                         .iter()
-                        .map(|r| Ok(self.state.locals[*r].llvm_ty))
+                        .map(|r| Ok(self.state.get_local(*r)?.llvm_ty))
                         .collect::<CompileResult<_>>()?;
                     let return_struct_type = llvm.context.struct_type(&return_types, false);
                     let mut struct_value = return_struct_type.get_undef();
@@ -47,7 +47,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 }
             }
             Bytecode::Label(_, label) => {
-                let block = self.state.label_blocks[label];
+                let block = self.state.get_label_block(label)?;
                 // Add fallthrough branch if current block has no terminator
                 let current = llvm
                     .builder
@@ -59,7 +59,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 llvm.builder.position_at_end(block);
             }
             Bytecode::Jump(_, label) => {
-                let block = self.state.label_blocks[label];
+                let block = self.state.get_label_block(label)?;
                 llvm.builder.build_unconditional_branch(block)?;
             }
             Bytecode::Branch(_, then_label, else_label, cond) => {
@@ -68,8 +68,8 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 let compare =
                     llvm.builder
                         .build_int_compare(IntPredicate::NE, cond_val, zero, "cond")?;
-                let then_block = self.state.label_blocks[then_label];
-                let else_block = self.state.label_blocks[else_label];
+                let then_block = self.state.get_label_block(then_label)?;
+                let else_block = self.state.get_label_block(else_label)?;
                 llvm.builder
                     .build_conditional_branch(compare, then_block, else_block)?;
             }

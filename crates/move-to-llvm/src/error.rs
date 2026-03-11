@@ -42,6 +42,9 @@ pub enum CompileError {
 
     #[error("model builder failed: {0}")]
     ModelBuilder(String),
+
+    #[error("malformed module: {0}")]
+    MalformedModule(String),
 }
 
 impl CompileError {
@@ -83,5 +86,9 @@ impl CompileError {
 
     pub(crate) fn model_builder(msg: impl Into<String>) -> Self {
         Self::ModelBuilder(msg.into())
+    }
+
+    pub(crate) fn malformed_module(msg: impl Into<String>) -> Self {
+        Self::MalformedModule(msg.into())
     }
 }
