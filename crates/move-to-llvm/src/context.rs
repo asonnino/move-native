@@ -41,6 +41,8 @@ impl<'ctx> LlvmContext<'ctx> {
         module: &CompiledModule,
         dependencies: &[CompiledModule],
     ) -> CompileResult<Self> {
+        Self::validate_dependencies(module, dependencies)?;
+
         let all_modules: Vec<&CompiledModule> =
             dependencies.iter().chain(std::iter::once(module)).collect();
         let env = move_model::run_bytecode_model_builder(all_modules)
@@ -66,6 +68,29 @@ impl<'ctx> LlvmContext<'ctx> {
             i256_type: context.custom_width_int_type(256),
             ptr_type: context.ptr_type(AddressSpace::default()),
         })
+    }
+
+    /// Verify that all modules referenced by `module` are present in `dependencies`.
+    fn validate_dependencies(
+        module: &CompiledModule,
+        dependencies: &[CompiledModule],
+    ) -> CompileResult<()> {
+        let self_id = module.self_id();
+        let dependency_ids: std::collections::HashSet<_> =
+            dependencies.iter().map(|d| d.self_id()).collect();
+
+        for handle in &module.module_handles {
+            let id = module.module_id_for_handle(handle);
+            if id == self_id {
+                continue;
+            }
+            if !dependency_ids.contains(&id) {
+                return Err(CompileError::malformed_module(format!(
+                    "missing dependency: {id}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Create a minimal `LlvmContext` with an empty `GlobalEnv` for unit testing.

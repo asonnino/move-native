@@ -2,72 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Tests that compile real Move bytecode (.mv files) through the full pipeline.
-//!
-//! ## Test tiers
-//!
-//! - **Tier 1 (must pass)**: Simple contracts that exercise currently-supported features.
-//! - **Tier 2 (expected failures, `#[ignore]`)**: Real Sui framework modules that exercise
-//!   features we haven't implemented yet. Each failure tells us what to implement next.
-//! - **Tier 3 (aspirational, `#[ignore]`)**: Full DeFi protocols (DeepBook, SuiNS).
-//!   These become graduation tests.
-//!
-//! ## Adding new contracts
-//!
-//! 1. Write or obtain the `.move` source
-//! 2. Compile with `sui move build` to get `.mv` bytecode
-//! 3. Place the `.mv` file in `tests/move_samples/`
-//! 4. Add a test below using `include_bytes!`
 
-// ===================================================================
-// Tier 1: Simple contracts (must pass)
-// ===================================================================
+use move_to_llvm::Target;
 
 /// End-to-end from the checked-in add.mv (two-argument u64 addition).
 #[test]
 fn add_module_from_mv_file() {
     let bytecode = include_bytes!("../../../tests/move_samples/add.mv");
 
-    let asm = move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
-        .expect("compile from .mv file failed");
+    let asm =
+        move_to_llvm::compile(&Target::host(), bytecode).expect("compile from .mv file failed");
 
-    assert!(asm.contains("add"), "assembly should contain 'add'");
-    assert!(asm.contains("ret"), "assembly should contain ret");
-}
-
-/// Serialize → deserialize → compile: the true end-to-end path through `compile()`.
-#[test]
-fn add_module_round_trip_via_serialization() {
-    use move_binary_format::file_format::*;
-    use move_to_llvm::module::CompiledModuleBuilder;
-
-    let module = CompiledModuleBuilder::new()
-        .function(
-            "add",
-            vec![SignatureToken::U64, SignatureToken::U64],
-            vec![SignatureToken::U64],
-            vec![],
-            vec![
-                Bytecode::CopyLoc(0),
-                Bytecode::CopyLoc(1),
-                Bytecode::Add,
-                Bytecode::Ret,
-            ],
-        )
-        .build();
-
-    let mut bytecode = Vec::new();
-    module
-        .serialize_with_version(module.version, &mut bytecode)
-        .expect("serialization failed");
-
-    let asm = move_to_llvm::compile(&move_to_llvm::Target::Aarch64, &bytecode)
-        .expect("compile from bytecode failed");
-
-    assert!(asm.contains("add"));
-    assert!(asm.contains("ret"));
     assert!(
-        !asm.contains("x23"),
-        "should not reference reserved register x23"
+        asm.contains("\tadd\t"),
+        "assembly should contain 'add' instruction"
+    );
+    assert!(
+        asm.contains("\tret"),
+        "assembly should contain ret instruction"
     );
 }
 

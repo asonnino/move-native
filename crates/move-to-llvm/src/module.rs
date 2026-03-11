@@ -33,6 +33,7 @@ pub struct CompiledModuleBuilder {
     struct_defs: Vec<StructDefinition>,
     field_handles: Vec<FieldHandle>,
     constant_pool: Vec<Constant>,
+    foreign_modules: Vec<(AccountAddress, IdentifierIndex)>,
 }
 
 impl Default for CompiledModuleBuilder {
@@ -60,6 +61,7 @@ impl CompiledModuleBuilder {
             struct_defs: vec![],
             field_handles: vec![],
             constant_pool: vec![],
+            foreign_modules: vec![],
         }
     }
 
@@ -131,6 +133,42 @@ impl CompiledModuleBuilder {
             parameters: params_idx,
             return_: returns_idx,
             type_parameters: vec![],
+        });
+
+        self.function_definitions.push(FunctionDefinition {
+            function: handle_idx,
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: None,
+        });
+
+        self
+    }
+
+    /// Add a generic native (extern) function declaration — no body.
+    pub fn generic_native_function(
+        mut self,
+        name: &str,
+        type_params: Vec<AbilitySet>,
+        params: Vec<SignatureToken>,
+        returns: Vec<SignatureToken>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let params_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(params));
+        let returns_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(returns));
+
+        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
+        self.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: name_idx,
+            parameters: params_idx,
+            return_: returns_idx,
+            type_parameters: type_params,
         });
 
         self.function_definitions.push(FunctionDefinition {
@@ -306,18 +344,93 @@ impl CompiledModuleBuilder {
         self
     }
 
+    /// Register a foreign module handle (e.g. a dependency).
+    ///
+    /// The `ModuleHandleIndex` is `1 + insertion_order` (index 0 is always self).
+    /// Returns `(builder, ModuleHandleIndex)`.
+    pub fn foreign_module(
+        mut self,
+        address: AccountAddress,
+        name: &str,
+    ) -> (Self, ModuleHandleIndex) {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+        let handle_idx = ModuleHandleIndex(1 + self.foreign_modules.len() as u16);
+        self.foreign_modules.push((address, name_idx));
+        (self, handle_idx)
+    }
+
+    /// Add a function handle pointing to a foreign module (no body / no `FunctionDefinition`).
+    ///
+    /// The `FunctionHandleIndex` follows the same sequential numbering as local functions.
+    pub fn foreign_function(
+        mut self,
+        module: ModuleHandleIndex,
+        name: &str,
+        params: Vec<SignatureToken>,
+        returns: Vec<SignatureToken>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let params_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(params));
+        let returns_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(returns));
+
+        self.function_handles.push(FunctionHandle {
+            module,
+            name: name_idx,
+            parameters: params_idx,
+            return_: returns_idx,
+            type_parameters: vec![],
+        });
+
+        self
+    }
+
+    /// Add a raw `Signature` entry (e.g. for `VecXxx` bytecodes).
+    ///
+    /// Returns `(builder, SignatureIndex)`.
+    pub fn signature(mut self, tokens: Vec<SignatureToken>) -> (Self, SignatureIndex) {
+        let idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(tokens));
+        (self, idx)
+    }
+
     /// Assemble into a `CompiledModule`.
     pub fn build(self) -> CompiledModule {
+        // Deduplicate addresses: self.address first, then foreign addresses
+        let mut address_identifiers = vec![self.address];
+        let mut addr_index_map = std::collections::HashMap::new();
+        addr_index_map.insert(self.address, AddressIdentifierIndex(0));
+        for &(addr, _) in &self.foreign_modules {
+            let len = address_identifiers.len();
+            addr_index_map.entry(addr).or_insert_with(|| {
+                address_identifiers.push(addr);
+                AddressIdentifierIndex(len as u16)
+            });
+        }
+
+        // Build module_handles: index 0 = self, then foreign modules
+        let mut module_handles = vec![ModuleHandle {
+            address: AddressIdentifierIndex(0),
+            name: IdentifierIndex(0),
+        }];
+        for &(addr, name_idx) in &self.foreign_modules {
+            module_handles.push(ModuleHandle {
+                address: addr_index_map[&addr],
+                name: name_idx,
+            });
+        }
+
         CompiledModule {
             version: 7,
             publishable: true,
             self_module_handle_idx: ModuleHandleIndex(0),
-            module_handles: vec![ModuleHandle {
-                address: AddressIdentifierIndex(0),
-                name: IdentifierIndex(0),
-            }],
+            module_handles,
             identifiers: self.identifiers,
-            address_identifiers: vec![self.address],
+            address_identifiers,
             function_handles: self.function_handles,
             function_defs: self.function_definitions,
             signatures: self.signatures,

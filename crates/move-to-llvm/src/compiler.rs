@@ -126,3 +126,28 @@ impl<'ctx> Compiler<'ctx> {
         .lower_function(function_data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{Compiler, Target, module::CompiledModuleBuilder};
+
+    #[test]
+    fn empty_bytecode_is_error() {
+        let result = Compiler::compile(&Target::host(), &[]);
+        assert!(result.is_err(), "empty bytecode should fail");
+    }
+
+    #[test]
+    fn garbage_bytecode_is_error() {
+        let result = Compiler::compile(&Target::host(), &[0xDE, 0xAD]);
+        assert!(result.is_err(), "garbage bytecode should fail");
+    }
+
+    #[test]
+    fn missing_dependency_is_error() {
+        let (module, _deps) = CompiledModuleBuilder::all_features();
+        // Pass empty deps — dependency validation catches missing modules.
+        let result = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[]);
+        assert!(result.is_err(), "missing dependencies should fail");
+    }
+}
