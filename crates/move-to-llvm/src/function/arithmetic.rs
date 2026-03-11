@@ -242,6 +242,8 @@ mod tests {
     fn add_u256() {
         let asm = binary_operation_module("add_u256", SignatureToken::U256, Bytecode::Add);
         assert!(asm.contains("add_u256"), "missing symbol\n{asm}");
+        // i256 add lowers to multi-word arithmetic with carry chain
+        assert!(asm.contains("\tadds\t"), "missing adds (carry chain) for u256 add\n{asm}");
     }
 
     #[test]
@@ -316,6 +318,8 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+        assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
+        assert!(asm.contains("eq"), "missing eq condition\n{asm}");
     }
 
     #[test]
@@ -338,6 +342,8 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+        assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
+        assert!(asm.contains("ne"), "missing ne condition\n{asm}");
     }
 
     #[test]
@@ -360,13 +366,47 @@ mod tests {
 
     #[test]
     fn shift_left() {
-        let asm = binary_operation_module("shl_fn", SignatureToken::U64, Bytecode::Shl);
+        // Move shifts have signature (T, u8) -> T, exercising the z_extend path
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "shl_fn",
+                vec![SignatureToken::U64, SignatureToken::U8],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Shl,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
         assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
     }
 
     #[test]
     fn shift_right() {
-        let asm = binary_operation_module("shr_fn", SignatureToken::U64, Bytecode::Shr);
+        // Move shifts have signature (T, u8) -> T, exercising the z_extend path
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "shr_fn",
+                vec![SignatureToken::U64, SignatureToken::U8],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Shr,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
         assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
     }
 

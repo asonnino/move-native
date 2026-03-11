@@ -18,8 +18,6 @@
 //! 3. Place the `.mv` file in `tests/move_samples/`
 //! 4. Add a test below using `include_bytes!`
 
-mod common;
-
 // ===================================================================
 // Tier 1: Simple contracts (must pass)
 // ===================================================================

@@ -185,7 +185,7 @@ pub(crate) mod test_helpers {
 #[cfg(test)]
 mod tests {
     use move_binary_format::file_format::{
-        Bytecode, FieldHandleIndex, SignatureToken, StructDefinitionIndex,
+        Bytecode, FieldHandleIndex, FunctionHandleIndex, SignatureToken, StructDefinitionIndex,
     };
 
     use crate::compiler::Compiler;
@@ -267,6 +267,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(asm.contains("always_true"), "missing symbol\n{asm}");
+        assert!(asm.contains("#1"), "missing #1 immediate for LdTrue\n{asm}");
     }
 
     #[test]
@@ -367,5 +368,43 @@ mod tests {
             message.contains("expected pointer"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn call_multi_return() {
+        // swap(a: u64, b: u64): (u64, u64) { b, a }
+        // call_swap(x: u64, y: u64): (u64, u64) { swap(x, y) }
+        // Tests the destinations.len() > 1 branch in CallEmitter::emit
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "swap",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![],
+                vec![Bytecode::MoveLoc(1), Bytecode::MoveLoc(0), Bytecode::Ret],
+            )
+            .function(
+                "call_swap",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Call(FunctionHandleIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
+        assert!(
+            asm.contains("call_swap"),
+            "missing 'call_swap' symbol\n{asm}"
+        );
+        assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
     }
 }

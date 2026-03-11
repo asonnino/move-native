@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use inkwell::values::FunctionValue;
+use inkwell::values::{BasicValueEnum, FunctionValue};
 use move_model::model::{FunId, ModuleId};
 use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
@@ -54,8 +54,11 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             if destinations.len() == 1 {
                 self.state.store(destinations[0], return_value)?;
             } else {
-                // Multi-return: unpack struct into individual destinations
-                let struct_val = return_value.into_struct_value();
+                let BasicValueEnum::StructValue(struct_val) = return_value else {
+                    return Err(CompileError::malformed_module(format!(
+                        "expected struct return for multi-value call, got {return_value:?}"
+                    )));
+                };
                 for (i, destination) in destinations.iter().enumerate() {
                     let field = llvm.builder.build_extract_value(
                         struct_val,

@@ -30,8 +30,14 @@
 
 use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{
-    AbilitySet, Bytecode::*, DatatypeHandleIndex, FieldHandleIndex, FunctionHandleIndex,
-    FunctionInstantiationIndex, SignatureToken::*, StructDefinitionIndex,
+    AbilitySet,
+    Bytecode::{
+        Abort, Add, BrFalse, Branch, Call, CallGeneric, CastU8, CopyLoc, Gt, LdU64, Lt, MoveLoc,
+        MutBorrowField, Pack, ReadRef, Ret, StLoc, Sub, Unpack, WriteRef,
+    },
+    DatatypeHandleIndex, FieldHandleIndex, FunctionHandleIndex, FunctionInstantiationIndex,
+    SignatureToken::{Datatype, MutableReference, TypeParameter, U8, U64},
+    StructDefinitionIndex,
 };
 
 use super::CompiledModuleBuilder;
