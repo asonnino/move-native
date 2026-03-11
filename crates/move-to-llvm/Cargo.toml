@@ -14,7 +14,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-ethnum = "1"
+ethnum = "1.5"
 inkwell.workspace = true
 move-binary-format.workspace = true
 move-core-types.workspace = true
@@ -24,6 +24,6 @@ num-bigint = "0.4"
 thiserror.workspace = true
 
 [dev-dependencies]
-indoc = "2"
+indoc = "2.0"
 move-binary-format.workspace = true
 move-core-types.workspace = true

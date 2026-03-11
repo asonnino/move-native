@@ -9,10 +9,8 @@ repository = "https://github.com/alberto/move-native"
 
 [workspace.dependencies]
 inkwell = { version = "0.8", features = ["llvm18-1"] }
-petgraph = "0.8"
-tempfile = "3"
-thiserror = "2"
-yaxpeax-arch = "0.3"
+tempfile = "3.27.0"
+thiserror = "2.0"
 yaxpeax-arm = "0.4"
 
 # Sui / Move crates

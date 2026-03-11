@@ -15,8 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 cfg.workspace = true
-petgraph.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-indoc = "2"
+indoc = "2.0"

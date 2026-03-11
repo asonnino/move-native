@@ -19,4 +19,4 @@ thiserror.workspace = true
 [dev-dependencies]
 instrumenter.workspace = true
 object = "0.38"
-serial_test = "3"
+serial_test = "3.3"
