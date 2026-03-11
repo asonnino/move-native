@@ -92,7 +92,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::*;
+    use move_binary_format::file_format::{Bytecode, SignatureToken};
 
     use crate::compiler::Compiler;
     use crate::target::Target;

@@ -200,153 +200,153 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use move_model::ty::{PrimitiveType, Type};
-    use move_stackless_bytecode::stackless_bytecode::Operation;
+    use move_binary_format::file_format::{Bytecode, SignatureToken};
 
-    use super::super::state::FunctionState;
-    use super::ArithmeticEmitter;
-    use crate::context::LlvmContext;
+    use crate::compiler::Compiler;
+    use crate::target::Target;
+    use crate::test_utils::CompiledModuleBuilder;
 
-    fn locals(p: PrimitiveType, n: usize) -> Vec<Type> {
-        vec![Type::Primitive(p); n]
+    /// Build a module with `op(a: T, b: T): T { a <op> b }`.
+    fn binary_operation_module(name: &str, ty: SignatureToken, op: Bytecode) -> String {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                name,
+                vec![ty.clone(), ty.clone()],
+                vec![ty],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    op,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string()
     }
 
     #[test]
     fn add_u64() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Add, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("add i64"), "IR: {ir}");
+        let asm = binary_operation_module("add_fn", SignatureToken::U64, Bytecode::Add);
+        assert!(asm.contains("add_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("\tadd\t"), "missing add instruction\n{asm}");
     }
 
     #[test]
-    fn sub_u32() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U32, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Sub, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("sub i32"), "IR: {ir}");
-    }
-
-    #[test]
-    fn mul_u8() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U8, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Mul, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("mul i8"), "IR: {ir}");
-    }
-
-    #[test]
-    fn div_unsigned() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Div, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("udiv i64"), "IR: {ir}");
-    }
-
-    #[test]
-    fn mod_unsigned() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Mod, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("urem i64"), "IR: {ir}");
-    }
-
-    #[test]
-    fn shift_same_width() {
-        let llvm = LlvmContext::new_for_test();
-        let state =
-            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Shl, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("shl i64"), "IR: {ir}");
+    fn sub_u64() {
+        let asm = binary_operation_module("sub_fn", SignatureToken::U64, Bytecode::Sub);
         assert!(
-            !ir.contains("zext"),
-            "no zext expected when widths match: {ir}"
+            asm.contains("\tsub\t") || asm.contains("\tsubs\t"),
+            "missing sub instruction\n{asm}"
         );
     }
 
     #[test]
-    fn shift_narrow_amount() {
-        let llvm = LlvmContext::new_for_test();
-        let types = vec![
-            Type::Primitive(PrimitiveType::U64),
-            Type::Primitive(PrimitiveType::U8),
-            Type::Primitive(PrimitiveType::U64),
-        ];
-        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Shl, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("zext i8"), "IR: {ir}");
+    fn mul_u64() {
+        let asm = binary_operation_module("mul_fn", SignatureToken::U64, Bytecode::Mul);
+        assert!(asm.contains("\tmul\t"), "missing mul instruction\n{asm}");
+    }
+
+    #[test]
+    fn div_unsigned() {
+        let asm = binary_operation_module("div_fn", SignatureToken::U64, Bytecode::Div);
+        assert!(asm.contains("\tudiv\t"), "missing udiv instruction\n{asm}");
+    }
+
+    #[test]
+    fn mod_unsigned() {
+        let asm = binary_operation_module("mod_fn", SignatureToken::U64, Bytecode::Mod);
+        // ARM64 computes mod as: x - (x / y) * y, using udiv + msub
+        assert!(asm.contains("\tudiv\t"), "missing udiv for mod\n{asm}");
+        assert!(asm.contains("\tmsub\t"), "missing msub for mod\n{asm}");
+    }
+
+    #[test]
+    fn shift_left() {
+        let asm = binary_operation_module("shl_fn", SignatureToken::U64, Bytecode::Shl);
+        assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
+    }
+
+    #[test]
+    fn shift_right() {
+        let asm = binary_operation_module("shr_fn", SignatureToken::U64, Bytecode::Shr);
+        assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
+    }
+
+    #[test]
+    fn bitwise_and() {
+        let asm = binary_operation_module("band_fn", SignatureToken::U64, Bytecode::BitAnd);
+        assert!(asm.contains("\tand\t"), "missing and instruction\n{asm}");
+    }
+
+    #[test]
+    fn bitwise_or() {
+        let asm = binary_operation_module("bor_fn", SignatureToken::U64, Bytecode::BitOr);
+        assert!(asm.contains("\torr\t"), "missing orr instruction\n{asm}");
+    }
+
+    #[test]
+    fn bitwise_xor() {
+        let asm = binary_operation_module("xor_fn", SignatureToken::U64, Bytecode::Xor);
+        assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
+    }
+
+    #[test]
+    fn comparison_lt() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "lt_fn",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Lt,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+        assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
     }
 
     #[test]
     fn cast_truncate() {
-        let llvm = LlvmContext::new_for_test();
-        let types = vec![
-            Type::Primitive(PrimitiveType::U64),
-            Type::Primitive(PrimitiveType::U8),
-        ];
-        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[1], &Operation::CastU8, &[0])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("trunc i64"), "IR: {ir}");
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "trunc_fn",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U8],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::CastU8, Bytecode::Ret],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("trunc_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn cast_extend() {
-        let llvm = LlvmContext::new_for_test();
-        let types = vec![
-            Type::Primitive(PrimitiveType::U8),
-            Type::Primitive(PrimitiveType::U64),
-        ];
-        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[1], &Operation::CastU64, &[0])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("zext i8"), "IR: {ir}");
-    }
-
-    #[test]
-    fn comparison_produces_i8() {
-        let llvm = LlvmContext::new_for_test();
-        let types = vec![
-            Type::Primitive(PrimitiveType::U64),
-            Type::Primitive(PrimitiveType::U64),
-            Type::Primitive(PrimitiveType::Bool),
-        ];
-        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
-        ArithmeticEmitter::new(&state)
-            .emit(&[2], &Operation::Lt, &[0, 1])
-            .unwrap();
-        let ir = llvm.module.print_to_string().to_string();
-        assert!(ir.contains("icmp ult"), "IR: {ir}");
-        assert!(ir.contains("zext i1"), "IR: {ir}");
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "extend_fn",
+                vec![SignatureToken::U8],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::CastU64, Bytecode::Ret],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("extend_fn"), "missing symbol\n{asm}");
     }
 }

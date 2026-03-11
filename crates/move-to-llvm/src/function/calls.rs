@@ -172,7 +172,9 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::*;
+    use move_binary_format::file_format::{
+        AbilitySet, Bytecode, FunctionHandleIndex, FunctionInstantiationIndex, SignatureToken,
+    };
 
     use crate::compiler::Compiler;
     use crate::target::Target;

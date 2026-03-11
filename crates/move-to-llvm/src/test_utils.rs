@@ -18,6 +18,9 @@ pub(crate) struct CompiledModuleBuilder {
     function_handles: Vec<FunctionHandle>,
     function_definitions: Vec<FunctionDefinition>,
     function_instantiations: Vec<FunctionInstantiation>,
+    datatype_handles: Vec<DatatypeHandle>,
+    struct_defs: Vec<StructDefinition>,
+    field_handles: Vec<FieldHandle>,
 }
 
 impl CompiledModuleBuilder {
@@ -29,6 +32,9 @@ impl CompiledModuleBuilder {
             function_handles: vec![],
             function_definitions: vec![],
             function_instantiations: vec![],
+            datatype_handles: vec![],
+            struct_defs: vec![],
+            field_handles: vec![],
         }
     }
 
@@ -158,6 +164,55 @@ impl CompiledModuleBuilder {
         self
     }
 
+    /// Add a struct definition to the module.
+    ///
+    /// The `DatatypeHandleIndex` equals the insertion order (0 for the first, etc.).
+    /// Use `SignatureToken::Datatype(DatatypeHandleIndex(n))` to reference it.
+    pub(crate) fn struct_definition(
+        mut self,
+        name: &str,
+        abilities: AbilitySet,
+        fields: Vec<(&str, SignatureToken)>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let handle_idx = DatatypeHandleIndex(self.datatype_handles.len() as u16);
+        self.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: name_idx,
+            abilities,
+            type_parameters: vec![],
+        });
+
+        let field_defs: Vec<FieldDefinition> = fields
+            .into_iter()
+            .map(|(field_name, ty)| {
+                let field_name_idx = IdentifierIndex(self.identifiers.len() as u16);
+                self.identifiers.push(Identifier::new(field_name).unwrap());
+                FieldDefinition {
+                    name: field_name_idx,
+                    signature: TypeSignature(ty),
+                }
+            })
+            .collect();
+
+        self.struct_defs.push(StructDefinition {
+            struct_handle: handle_idx,
+            field_information: StructFieldInformation::Declared(field_defs),
+        });
+
+        self
+    }
+
+    /// Add a field handle (for `ImmBorrowField` / `MutBorrowField`).
+    ///
+    /// The `FieldHandleIndex` equals the insertion order (0 for the first, etc.).
+    pub(crate) fn field_handle(mut self, owner: StructDefinitionIndex, field: u16) -> Self {
+        self.field_handles.push(FieldHandle { owner, field });
+        self
+    }
+
     /// Add a function instantiation (for `CallGeneric`).
     ///
     /// Returns `self` for chaining. The `FunctionInstantiationIndex` equals
@@ -191,11 +246,11 @@ impl CompiledModuleBuilder {
             function_handles: self.function_handles,
             function_defs: self.function_definitions,
             signatures: self.signatures,
-            struct_defs: vec![],
-            datatype_handles: vec![],
+            struct_defs: self.struct_defs,
+            datatype_handles: self.datatype_handles,
             constant_pool: vec![],
             metadata: vec![],
-            field_handles: vec![],
+            field_handles: self.field_handles,
             friend_decls: vec![],
             struct_def_instantiations: vec![],
             function_instantiations: self.function_instantiations,

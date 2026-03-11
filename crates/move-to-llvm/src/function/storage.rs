@@ -142,3 +142,129 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::{
+        Ability, AbilitySet, Bytecode, DatatypeHandleIndex, SignatureToken, StructDefinitionIndex,
+    };
+
+    use crate::compiler::Compiler;
+    use crate::target::Target;
+    use crate::test_utils::CompiledModuleBuilder;
+
+    /// Module builder pre-loaded with `Coin { value: u64 }` at `DatatypeHandleIndex(0)`.
+    fn coin_module() -> CompiledModuleBuilder {
+        CompiledModuleBuilder::new().struct_definition(
+            "Coin",
+            AbilitySet::EMPTY | Ability::Key,
+            vec![("value", SignatureToken::U64)],
+        )
+    }
+
+    #[test]
+    fn exists_emits_runtime_call() {
+        let module = coin_module()
+            .function(
+                "check_exists",
+                vec![SignatureToken::Address],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::ExistsDeprecated(StructDefinitionIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_exists"),
+            "missing __move_rt_exists call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn move_from_emits_runtime_call() {
+        let module = coin_module()
+            .function(
+                "take_coin",
+                vec![SignatureToken::Address],
+                vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::MoveFromDeprecated(StructDefinitionIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_move_from"),
+            "missing __move_rt_move_from call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn move_to_emits_runtime_call() {
+        let module = coin_module()
+            .function(
+                "publish_coin",
+                vec![
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                    SignatureToken::Signer,
+                ],
+                vec![],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(1), // signer
+                    Bytecode::MoveLoc(0), // coin
+                    Bytecode::MoveToDeprecated(StructDefinitionIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_move_to"),
+            "missing __move_rt_move_to call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn borrow_global_emits_runtime_call() {
+        let module = coin_module()
+            .function(
+                "borrow_coin",
+                vec![SignatureToken::Address],
+                vec![SignatureToken::Reference(Box::new(
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                ))],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::ImmBorrowGlobalDeprecated(StructDefinitionIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_borrow_global"),
+            "missing __move_rt_borrow_global call\n{asm}"
+        );
+    }
+}

@@ -167,3 +167,168 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::{
+        AbilitySet, Bytecode, DatatypeHandleIndex, FieldHandleIndex, SignatureToken,
+        StructDefinitionIndex,
+    };
+
+    use crate::compiler::Compiler;
+    use crate::target::Target;
+    use crate::test_utils::CompiledModuleBuilder;
+
+    /// Module builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.
+    fn point_module() -> CompiledModuleBuilder {
+        CompiledModuleBuilder::new().struct_definition(
+            "Point",
+            AbilitySet::PRIMITIVES,
+            vec![("x", SignatureToken::U64), ("y", SignatureToken::U64)],
+        )
+    }
+
+    fn point_token() -> SignatureToken {
+        SignatureToken::Datatype(DatatypeHandleIndex(0))
+    }
+
+    #[test]
+    fn pack_struct() {
+        let module = point_module()
+            .function(
+                "new_point",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![point_token()],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Pack(StructDefinitionIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("new_point"),
+            "missing 'new_point' symbol\n{asm}"
+        );
+    }
+
+    #[test]
+    fn unpack_struct() {
+        let module = point_module()
+            .function(
+                "get_x",
+                vec![point_token()],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Unpack(StructDefinitionIndex(0)),
+                    Bytecode::StLoc(2), // y (discarded)
+                    Bytecode::StLoc(1), // x
+                    Bytecode::MoveLoc(1),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("get_x"), "missing 'get_x' symbol\n{asm}");
+    }
+
+    #[test]
+    fn borrow_and_read_ref() {
+        // copy_via_ref(x: u64): u64 { let r = &x; *r }
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "copy_via_ref",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::Reference(Box::new(SignatureToken::U64))],
+                vec![
+                    Bytecode::ImmBorrowLoc(0), // &x
+                    Bytecode::StLoc(1),        // r = &x
+                    Bytecode::MoveLoc(1),      // push r
+                    Bytecode::ReadRef,         // *r
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("copy_via_ref"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn write_ref() {
+        // overwrite(x: u64, y: u64): u64 { let r = &mut x; *r = y; *r }
+        let mut_ref = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "overwrite",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![mut_ref],
+                vec![
+                    Bytecode::MutBorrowLoc(0), // &mut x
+                    Bytecode::StLoc(2),        // r = &mut x
+                    Bytecode::CopyLoc(1),      // push y (value)
+                    Bytecode::CopyLoc(2),      // push r (ref)
+                    Bytecode::WriteRef,        // *r = y
+                    Bytecode::MoveLoc(2),      // push r
+                    Bytecode::ReadRef,         // *r
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("overwrite"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn borrow_field() {
+        // get_x_via_ref(x: u64, y: u64): u64 { let p = Point{x,y}; let r = &p; *(&r.x) }
+        let ref_point = SignatureToken::Reference(Box::new(point_token()));
+        let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
+        let module = point_module()
+            .field_handle(StructDefinitionIndex(0), 0) // FieldHandleIndex(0) → Point.x
+            .function(
+                "get_x_via_ref",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![point_token(), ref_point, ref_u64],
+                vec![
+                    Bytecode::CopyLoc(0),                          // push x
+                    Bytecode::CopyLoc(1),                          // push y
+                    Bytecode::Pack(StructDefinitionIndex(0)),      // Point { x, y }
+                    Bytecode::StLoc(2),                            // p = ...
+                    Bytecode::ImmBorrowLoc(2),                     // &p
+                    Bytecode::StLoc(3),                            // ref_p = &p
+                    Bytecode::MoveLoc(3),                          // push ref_p
+                    Bytecode::ImmBorrowField(FieldHandleIndex(0)), // &ref_p.x
+                    Bytecode::StLoc(4),                            // ref_x = ...
+                    Bytecode::MoveLoc(4),                          // push ref_x
+                    Bytecode::ReadRef,                             // *ref_x
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("get_x_via_ref"), "missing symbol\n{asm}");
+    }
+}

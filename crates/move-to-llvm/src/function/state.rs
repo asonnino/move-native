@@ -13,13 +13,6 @@ use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 
-#[cfg(test)]
-use move_stackless_bytecode::annotations::Annotations;
-#[cfg(test)]
-use move_stackless_bytecode::function_target_pipeline::FunctionVariant;
-#[cfg(test)]
-use std::collections::BTreeSet;
-
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
 use crate::types::TypeLowering;
@@ -226,37 +219,5 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         global.set_linkage(Linkage::Private);
         global.set_unnamed_addr(true);
         global
-    }
-
-    /// Create a minimal `FunctionState` for unit testing emitters.
-    ///
-    /// Creates a void test function, positions the builder in its entry block,
-    /// and allocates locals from the given types.
-    #[cfg(test)]
-    pub(crate) fn new_for_test(
-        ctx: &'a LlvmContext<'ctx>,
-        local_types: Vec<Type>,
-        code: Vec<Bytecode>,
-    ) -> CompileResult<Self> {
-        let function_data = FunctionData {
-            variant: FunctionVariant::Baseline,
-            type_args: vec![],
-            code,
-            local_types,
-            return_types: vec![],
-            acquires_global_resources: vec![],
-            locations: BTreeMap::new(),
-            loop_invariants: BTreeSet::new(),
-            debug_comments: BTreeMap::new(),
-            vc_infos: BTreeMap::new(),
-            annotations: Annotations::default(),
-            name_to_index: BTreeMap::new(),
-            ghost_type_param_count: 0,
-        };
-        let fn_type = ctx.context.void_type().fn_type(&[], false);
-        let function = ctx.module.add_function("test", fn_type, None);
-        let entry = ctx.context.append_basic_block(function, "entry");
-        ctx.builder.position_at_end(entry);
-        Self::new(ctx, function, 0, &function_data, vec![])
     }
 }
