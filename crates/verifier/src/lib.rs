@@ -31,9 +31,9 @@ mod gas;
 mod stack;
 mod verify;
 
-pub use cfg::{CheckResult, RejectionReason};
 pub use decode::{DecodedInstruction, decode_instructions};
 pub use error::{DecodeError, VerificationError, VerificationResult};
 pub use gas::{DEFAULT_GAS_BUDGET, GasEffect};
+pub use graph::{CheckResult, RejectionReason};
 pub use stack::DEFAULT_STACK_BUDGET;
 pub use verify::Verifier;

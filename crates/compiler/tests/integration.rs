@@ -14,28 +14,37 @@ fn all_features_compiles() {
 
     // Verify all function symbols are present
     for name in &[
+        // Structs
         "make_point",
         "sum_point",
-        "round_trip",
-        "identity",
-        "call_identity",
-        "sum_loop",
-        "swap_fields",
-        "swap_u64",
-        "checked_sub",
-        "low_byte",
+        // Arithmetic & types
         "forty_two",
-        "integration_test",
-        "call_double",
-        "test_vec",
+        "low_byte",
         "cast_widths",
-        "freeze_and_read",
-        "discard",
-        "read_x",
         "add_u16",
         "add_u32",
         "add_u128",
         "add_u256",
+        "discard",
+        // References
+        "swap_fields",
+        "freeze_and_read",
+        "read_x",
+        // Control flow
+        "swap_u64",
+        "checked_sub",
+        // Calls & generics
+        "round_trip",
+        "identity",
+        "call_identity",
+        // Loops
+        "sum_loop",
+        // Integration
+        "integration_test",
+        // Cross-module
+        "call_double",
+        // Vectors
+        "test_vec",
     ] {
         assert!(
             asm.contains(name),

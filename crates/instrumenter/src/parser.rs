@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use cfg::{BasicInstruction, CfgInstruction};
+use graph::{BasicInstruction, CfgInstruction};
 
 use crate::error::ResolveError;
 
@@ -355,7 +355,7 @@ impl<'a> ParsedAssembly<'a> {
 
 #[cfg(test)]
 mod tests {
-    use cfg::{BasicInstruction, CfgInstruction};
+    use graph::{BasicInstruction, CfgInstruction};
     use indoc::indoc;
 
     use super::{ParsedAssembly, ParsedLine, ResolveError, Statement, UnresolvedInstruction};

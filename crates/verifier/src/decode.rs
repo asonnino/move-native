@@ -5,7 +5,7 @@
 //!
 //! Decodes raw bytes into structured Arm64 instructions using the `yaxpeax-arm` crate.
 
-use cfg::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
+use graph::{BasicInstruction, CfgInstruction, CheckResult, ClassifiedOpcode};
 use yaxpeax_arch::{Decoder, U8Reader};
 use yaxpeax_arm::armv8::a64::{InstDecoder, Instruction, Opcode, Operand};
 
@@ -138,7 +138,7 @@ pub(crate) fn decode_instructions_unchecked(code: &[u8]) -> Vec<DecodedInstructi
 
 #[cfg(test)]
 mod tests {
-    use cfg::{BasicInstruction, CfgInstruction};
+    use graph::{BasicInstruction, CfgInstruction};
     use yaxpeax_arm::armv8::a64::Opcode;
 
     use super::decode_instructions_unchecked as decode;
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_check_and_is_store_methods() {
-        use cfg::CheckResult;
+        use graph::CheckResult;
 
         // str x0, [sp] — allowed store
         let code = [0xe0, 0x03, 0x00, 0xf9];

@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use cfg::{BasicInstruction, CfgInstruction, CheckResult, build_call_graph};
+use graph::{BasicInstruction, CfgInstruction, CheckResult, build_call_graph};
 
 use crate::{
     DecodedInstruction,

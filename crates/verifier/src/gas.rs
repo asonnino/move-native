@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use cfg::{BasicInstruction, CfgInstruction};
+use graph::{BasicInstruction, CfgInstruction};
 use yaxpeax_arm::armv8::a64::{Opcode, Operand, SizeCode};
 
 use crate::DecodedInstruction;

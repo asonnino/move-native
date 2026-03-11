@@ -15,9 +15,9 @@ pub mod error;
 pub mod instrument;
 pub mod parser;
 
-use cfg::BlockGraph;
-pub use cfg::BlockIndex;
 pub use error::{InstrumentError, ResolveError};
+use graph::BlockGraph;
+pub use graph::BlockIndex;
 pub use instrument::instrument;
 pub use parser::{ParsedAssembly, ParsedLine};
 
@@ -38,6 +38,6 @@ pub struct CfgResult {
 /// Returns an error if label resolution fails (undefined labels, trailing labels).
 pub fn build_cfg(asm: &ParsedAssembly<'_>) -> Result<CfgResult, ResolveError> {
     let resolved = asm.resolve()?;
-    let cfg = cfg::build_block_graph(&resolved);
+    let cfg = graph::build_block_graph(&resolved);
     Ok(CfgResult { cfg, resolved })
 }

@@ -225,15 +225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfg"
-version = "0.1.0"
-dependencies = [
- "lazy_static",
- "petgraph",
- "yaxpeax-arm",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,6 +693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph"
+version = "0.1.0"
+dependencies = [
+ "lazy_static",
+ "petgraph",
+ "yaxpeax-arm",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -994,7 +994,7 @@ dependencies = [
 name = "instrumenter"
 version = "0.1.0"
 dependencies = [
- "cfg",
+ "graph",
  "indoc",
  "thiserror 2.0.18",
 ]
@@ -2729,7 +2729,7 @@ dependencies = [
 name = "verifier"
 version = "0.1.0"
 dependencies = [
- "cfg",
+ "graph",
  "instrumenter",
  "object 0.38.1",
  "tempfile",

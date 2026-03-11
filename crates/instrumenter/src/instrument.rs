@@ -30,7 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cfg::BlockGraph;
+use graph::BlockGraph;
 
 use crate::{
     BlockIndex, CfgResult,

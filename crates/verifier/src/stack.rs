@@ -5,7 +5,7 @@
 //!
 //! Verifies that the total stack usage cannot exceed a budget.
 
-use cfg::{BasicInstruction, CfgInstruction};
+use graph::{BasicInstruction, CfgInstruction};
 use yaxpeax_arm::armv8::a64::{Opcode, Operand, SizeCode};
 
 use crate::DecodedInstruction;
