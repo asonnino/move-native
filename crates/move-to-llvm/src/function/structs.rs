@@ -171,26 +171,14 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
 #[cfg(test)]
 mod tests {
     use move_binary_format::file_format::{
-        AbilitySet, Bytecode, DatatypeHandleIndex, FieldHandleIndex, SignatureToken,
-        StructDefinitionIndex,
+        Bytecode, FieldHandleIndex, SignatureToken, StructDefinitionIndex,
     };
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
 
-    /// Module builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.
-    fn point_module() -> CompiledModuleBuilder {
-        CompiledModuleBuilder::new().struct_definition(
-            "Point",
-            AbilitySet::PRIMITIVES,
-            vec![("x", SignatureToken::U64), ("y", SignatureToken::U64)],
-        )
-    }
-
-    fn point_token() -> SignatureToken {
-        SignatureToken::Datatype(DatatypeHandleIndex(0))
-    }
+    use super::super::test_helpers::{point_module, point_token};
 
     #[test]
     fn pack_struct() {

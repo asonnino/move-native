@@ -164,12 +164,35 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_helpers {
+    use move_binary_format::file_format::{AbilitySet, DatatypeHandleIndex, SignatureToken};
+
+    use crate::module::CompiledModuleBuilder;
+
+    pub(crate) fn point_token() -> SignatureToken {
+        SignatureToken::Datatype(DatatypeHandleIndex(0))
+    }
+
+    pub(crate) fn point_module() -> CompiledModuleBuilder {
+        CompiledModuleBuilder::new().struct_definition(
+            "Point",
+            AbilitySet::PRIMITIVES,
+            vec![("x", SignatureToken::U64), ("y", SignatureToken::U64)],
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::{Bytecode, SignatureToken};
+    use move_binary_format::file_format::{
+        Bytecode, FieldHandleIndex, SignatureToken, StructDefinitionIndex,
+    };
 
     use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
+
+    use super::test_helpers::{point_module, point_token};
 
     #[test]
     fn assign_copies_local() {
@@ -244,5 +267,105 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(asm.contains("always_true"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn arithmetic_on_struct_local_is_error() {
+        // f(p: Point): Point { p + p } — Add on a struct should fail in load_int
+        let module = point_module()
+            .function(
+                "bad_add",
+                vec![point_token()],
+                vec![point_token()],
+                vec![point_token()],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Add,
+                    Bytecode::StLoc(1),
+                    Bytecode::MoveLoc(1),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+            panic!("expected MalformedModule error for Add on struct");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("malformed module"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("expected integer"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn unpack_on_integer_local_is_error() {
+        // f(x: u64): u64 { Unpack(x) } — Unpack on an integer should fail in load_struct
+        let module = point_module()
+            .function(
+                "bad_unpack",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Unpack(StructDefinitionIndex(0)),
+                    Bytecode::StLoc(1),
+                    Bytecode::MoveLoc(1),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+            panic!("expected MalformedModule error for Unpack on integer");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("malformed module"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("expected struct"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn borrow_field_on_integer_local_is_error() {
+        // f(x: u64): u64 { ImmBorrowField(x) } — BorrowField on an integer should fail
+        let module = point_module()
+            .field_handle(StructDefinitionIndex(0), 0)
+            .function(
+                "bad_borrow_field",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::ImmBorrowField(FieldHandleIndex(0)),
+                    Bytecode::ReadRef,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+            panic!("expected MalformedModule error for BorrowField on integer");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("malformed module"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("expected pointer"),
+            "unexpected error: {message}"
+        );
     }
 }
