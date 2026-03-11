@@ -215,6 +215,14 @@ mod tests {
     }
 
     #[test]
+    fn globl_with_space_separator() {
+        let mut asm = Assembly(".globl _bar\n_bar:\n\tret\n".into());
+        asm.add_symbol_aliases();
+        assert!(asm.contains(".globl bar\n"));
+        assert!(asm.contains("bar:\n\tb _bar\n"));
+    }
+
+    #[test]
     fn multiple_globals_produce_multiple_aliases() {
         let mut asm = Assembly(
             indoc! {"

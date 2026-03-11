@@ -16,6 +16,16 @@ impl<'a> Mangler<'a> {
         Self { env }
     }
 
+    /// Create a `Mangler` backed by an empty `GlobalEnv` for unit testing.
+    ///
+    /// The leaked env is never accessed for primitive, vector, reference, or
+    /// type-parameter branches.
+    #[cfg(test)]
+    fn new_for_test() -> Mangler<'static> {
+        let env = Box::leak(Box::new(GlobalEnv::new()));
+        Mangler::new(env)
+    }
+
     /// Mangle a Move type into a deterministic, symbol-safe string.
     pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
         match ty {
@@ -79,5 +89,100 @@ impl<'a> Mangler<'a> {
             let args = self.mangle_type_args(type_args)?;
             Ok(format!("{base}${args}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use move_model::ty::{PrimitiveType, Type};
+
+    use super::Mangler;
+
+    #[test]
+    fn primitives() {
+        let m = Mangler::new_for_test();
+        let cases = [
+            (PrimitiveType::Bool, "bool"),
+            (PrimitiveType::U8, "u8"),
+            (PrimitiveType::U16, "u16"),
+            (PrimitiveType::U32, "u32"),
+            (PrimitiveType::U64, "u64"),
+            (PrimitiveType::U128, "u128"),
+            (PrimitiveType::U256, "u256"),
+            (PrimitiveType::Address, "address"),
+            (PrimitiveType::Signer, "signer"),
+        ];
+        for (p, expected) in cases {
+            assert_eq!(m.mangle_type(&Type::Primitive(p)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn vector_of_primitive() {
+        let m = Mangler::new_for_test();
+        let ty = Type::Vector(Box::new(Type::Primitive(PrimitiveType::U64)));
+        assert_eq!(m.mangle_type(&ty).unwrap(), "vec$u64");
+    }
+
+    #[test]
+    fn nested_vector() {
+        let m = Mangler::new_for_test();
+        let inner = Type::Vector(Box::new(Type::Primitive(PrimitiveType::U8)));
+        let ty = Type::Vector(Box::new(inner));
+        assert_eq!(m.mangle_type(&ty).unwrap(), "vec$vec$u8");
+    }
+
+    #[test]
+    fn immutable_reference() {
+        let m = Mangler::new_for_test();
+        let ty = Type::Reference(false, Box::new(Type::Primitive(PrimitiveType::U64)));
+        assert_eq!(m.mangle_type(&ty).unwrap(), "ref$u64");
+    }
+
+    #[test]
+    fn mutable_reference() {
+        let m = Mangler::new_for_test();
+        let ty = Type::Reference(true, Box::new(Type::Primitive(PrimitiveType::U64)));
+        assert_eq!(m.mangle_type(&ty).unwrap(), "mut$u64");
+    }
+
+    #[test]
+    fn type_parameter() {
+        let m = Mangler::new_for_test();
+        assert_eq!(m.mangle_type(&Type::TypeParameter(0)).unwrap(), "T0");
+        assert_eq!(m.mangle_type(&Type::TypeParameter(3)).unwrap(), "T3");
+    }
+
+    #[test]
+    fn unsupported_type_is_error() {
+        let m = Mangler::new_for_test();
+        assert!(m.mangle_type(&Type::Error).is_err());
+    }
+
+    #[test]
+    fn mangle_type_args_multiple() {
+        let m = Mangler::new_for_test();
+        let args = vec![
+            Type::Primitive(PrimitiveType::U8),
+            Type::Primitive(PrimitiveType::U64),
+            Type::Primitive(PrimitiveType::Bool),
+        ];
+        assert_eq!(m.mangle_type_args(&args).unwrap(), "u8$u64$bool");
+    }
+
+    #[test]
+    fn mangle_type_args_empty() {
+        let m = Mangler::new_for_test();
+        assert_eq!(m.mangle_type_args(&[]).unwrap(), "");
+    }
+
+    #[test]
+    fn ref_to_vector() {
+        let m = Mangler::new_for_test();
+        let ty = Type::Reference(
+            false,
+            Box::new(Type::Vector(Box::new(Type::Primitive(PrimitiveType::U8)))),
+        );
+        assert_eq!(m.mangle_type(&ty).unwrap(), "ref$vec$u8");
     }
 }

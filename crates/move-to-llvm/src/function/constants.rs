@@ -152,6 +152,8 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
     }
 
     /// Serialize a `Vector` of scalar constants into a flat byte buffer.
+    ///
+    /// Returns `(element_size, flat_buffer)`.
     fn serialize_scalar_vector(elements: &[Constant]) -> CompileResult<(usize, Vec<u8>)> {
         let element_size = match &elements[0] {
             Constant::Bool(_) | Constant::U8(_) => 1,
@@ -192,5 +194,140 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
             }
         }
         Ok((element_size, buf))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use move_stackless_bytecode::stackless_bytecode::Constant;
+    use num_bigint::BigUint;
+
+    use super::ConstantEmitter;
+
+    #[test]
+    fn address_single() {
+        let addr = BigUint::from(0x42u64);
+        let buf = ConstantEmitter::serialize_address_array(&[addr]);
+        assert_eq!(buf.len(), 32);
+        assert_eq!(buf[0], 0x42);
+        assert!(buf[1..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn address_multiple() {
+        let a = BigUint::from(1u64);
+        let b = BigUint::from(2u64);
+        let buf = ConstantEmitter::serialize_address_array(&[a, b]);
+        assert_eq!(buf.len(), 64);
+        assert_eq!(buf[0], 1);
+        assert_eq!(buf[32], 2);
+    }
+
+    #[test]
+    fn address_zero() {
+        let buf = ConstantEmitter::serialize_address_array(&[BigUint::ZERO]);
+        assert_eq!(buf, vec![0u8; 32]);
+    }
+
+    #[test]
+    fn address_max() {
+        let addr = BigUint::from_bytes_le(&[0xFF; 32]);
+        let buf = ConstantEmitter::serialize_address_array(&[addr]);
+        assert_eq!(buf, vec![0xFF; 32]);
+    }
+
+    #[test]
+    fn address_small_is_le_padded() {
+        let addr = BigUint::from(1u64);
+        let buf = ConstantEmitter::serialize_address_array(&[addr]);
+        let mut expected = [0u8; 32];
+        expected[0] = 1;
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn address_empty_slice() {
+        let buf = ConstantEmitter::serialize_address_array(&[]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn scalar_vec_bool() {
+        let elements = vec![Constant::Bool(true), Constant::Bool(false)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 1);
+        assert_eq!(buf, [1, 0]);
+    }
+
+    #[test]
+    fn scalar_vec_u8() {
+        let elements = vec![Constant::U8(0xFF), Constant::U8(0x42)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 1);
+        assert_eq!(buf, [0xFF, 0x42]);
+    }
+
+    #[test]
+    fn scalar_vec_u16() {
+        let elements = vec![Constant::U16(0x1234)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 2);
+        assert_eq!(buf, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn scalar_vec_u32() {
+        let elements = vec![Constant::U32(0xDEADBEEF)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 4);
+        assert_eq!(buf, [0xEF, 0xBE, 0xAD, 0xDE]);
+    }
+
+    #[test]
+    fn scalar_vec_u64() {
+        let elements = vec![Constant::U64(0x0102030405060708)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 8);
+        assert_eq!(buf, [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+    }
+
+    #[test]
+    fn scalar_vec_u128() {
+        let val: u128 = 0x0102030405060708_090A0B0C0D0E0F10;
+        let elements = vec![Constant::U128(val)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 16);
+        assert_eq!(buf, val.to_le_bytes());
+    }
+
+    #[test]
+    fn scalar_vec_u256() {
+        let val = ethnum::U256::from(1u64);
+        let elements = vec![Constant::U256(val)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 32);
+        // lo = 1, hi = 0 → first 16 bytes are 1_u128.to_le, next 16 are zeros
+        let (hi, lo) = val.into_words();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&lo.to_le_bytes());
+        expected.extend_from_slice(&hi.to_le_bytes());
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn scalar_vec_address() {
+        let addr = BigUint::from(0xABu64);
+        let elements = vec![Constant::Address(addr)];
+        let (size, buf) = ConstantEmitter::serialize_scalar_vector(&elements).unwrap();
+        assert_eq!(size, 32);
+        assert_eq!(buf[0], 0xAB);
+        assert!(buf[1..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn scalar_vec_unsupported() {
+        let elements = vec![Constant::ByteArray(vec![1, 2, 3])];
+        let result = ConstantEmitter::serialize_scalar_vector(&elements);
+        assert!(result.is_err());
     }
 }

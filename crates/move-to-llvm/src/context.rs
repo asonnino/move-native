@@ -68,6 +68,31 @@ impl<'ctx> LlvmContext<'ctx> {
         })
     }
 
+    /// Create a minimal `LlvmContext` with an empty `GlobalEnv` for unit testing.
+    ///
+    /// Leaks the LLVM `Context` so the returned value is `'static` — fine for tests.
+    /// Sufficient for code paths that don't access the Move environment
+    /// (primitives, references, vectors, etc.).
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> LlvmContext<'static> {
+        let context: &'static Context = Box::leak(Box::new(Context::create()));
+        let llvm_module = context.create_module("test");
+        let builder = context.create_builder();
+        LlvmContext {
+            env: GlobalEnv::new(),
+            context,
+            module: llvm_module,
+            builder,
+            i8_type: context.i8_type(),
+            i16_type: context.i16_type(),
+            i32_type: context.i32_type(),
+            i64_type: context.i64_type(),
+            i128_type: context.i128_type(),
+            i256_type: context.custom_width_int_type(256),
+            ptr_type: context.ptr_type(AddressSpace::default()),
+        }
+    }
+
     /// Look up a struct definition by module and datatype ID.
     pub(crate) fn get_struct_env(
         &self,

@@ -95,3 +95,129 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_model::ty::{PrimitiveType, Type};
+
+    use super::TypeLowering;
+    use crate::context::LlvmContext;
+
+    #[test]
+    fn primitive_bit_widths() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let cases = [
+            (PrimitiveType::Bool, 8),
+            (PrimitiveType::U8, 8),
+            (PrimitiveType::U16, 16),
+            (PrimitiveType::U32, 32),
+            (PrimitiveType::U64, 64),
+            (PrimitiveType::U128, 128),
+            (PrimitiveType::U256, 256),
+            (PrimitiveType::Address, 256),
+            (PrimitiveType::Signer, 256),
+        ];
+        for (p, expected_bits) in cases {
+            let ty = lowering.lower_type(&Type::Primitive(p)).unwrap();
+            assert_eq!(
+                ty.into_int_type().get_bit_width(),
+                expected_bits,
+                "wrong bit width for {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reference_is_pointer() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let immutable = lowering
+            .lower_type(&Type::Reference(
+                false,
+                Box::new(Type::Primitive(PrimitiveType::U64)),
+            ))
+            .unwrap();
+        let mutable = lowering
+            .lower_type(&Type::Reference(
+                true,
+                Box::new(Type::Primitive(PrimitiveType::U64)),
+            ))
+            .unwrap();
+        assert!(immutable.is_pointer_type());
+        assert!(mutable.is_pointer_type());
+        assert_eq!(immutable, mutable);
+    }
+
+    #[test]
+    fn vector_is_pointer() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let ty = lowering
+            .lower_type(&Type::Vector(Box::new(Type::Primitive(PrimitiveType::U8))))
+            .unwrap();
+        assert!(ty.is_pointer_type());
+    }
+
+    #[test]
+    fn unsupported_type_is_error() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        assert!(lowering.lower_type(&Type::Error).is_err());
+    }
+
+    #[test]
+    fn function_type_void_return() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let function_type = lowering
+            .lower_function_type(&[Type::Primitive(PrimitiveType::U64)], &[])
+            .unwrap();
+        assert_eq!(function_type.count_param_types(), 1);
+        assert!(function_type.get_return_type().is_none());
+    }
+
+    #[test]
+    fn function_type_single_return() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let function_type = lowering
+            .lower_function_type(
+                &[Type::Primitive(PrimitiveType::U8)],
+                &[Type::Primitive(PrimitiveType::U64)],
+            )
+            .unwrap();
+        assert_eq!(function_type.count_param_types(), 1);
+        let ret = function_type
+            .get_return_type()
+            .expect("should have a return type");
+        assert_eq!(ret.into_int_type().get_bit_width(), 64);
+    }
+
+    #[test]
+    fn function_type_multiple_returns() {
+        let llvm = LlvmContext::new_for_test();
+        let lowering = TypeLowering::new(&llvm);
+
+        let function_type = lowering
+            .lower_function_type(
+                &[],
+                &[
+                    Type::Primitive(PrimitiveType::U8),
+                    Type::Primitive(PrimitiveType::U64),
+                ],
+            )
+            .unwrap();
+        let ret = function_type
+            .get_return_type()
+            .expect("should have a return type");
+        let struct_ty = ret.into_struct_type();
+        assert_eq!(struct_ty.count_fields(), 2);
+    }
+}
