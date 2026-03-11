@@ -151,6 +151,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
             llvm.builder
                 .build_int_z_extend(amt, val.get_type(), "shl_ext")?
+        } else if amt.get_type().get_bit_width() > val.get_type().get_bit_width() {
+            return Err(crate::error::CompileError::malformed_module(
+                "shift amount wider than value",
+            ));
         } else {
             amt
         };
@@ -235,6 +239,12 @@ mod tests {
     }
 
     #[test]
+    fn add_u256() {
+        let asm = binary_operation_module("add_u256", SignatureToken::U256, Bytecode::Add);
+        assert!(asm.contains("add_u256"), "missing symbol\n{asm}");
+    }
+
+    #[test]
     fn sub_u64() {
         let asm = binary_operation_module("sub_fn", SignatureToken::U64, Bytecode::Sub);
         assert!(
@@ -264,15 +274,70 @@ mod tests {
     }
 
     #[test]
-    fn shift_left() {
-        let asm = binary_operation_module("shl_fn", SignatureToken::U64, Bytecode::Shl);
-        assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
+    fn comparison_lt() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "lt_fn",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Lt,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+        assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
     }
 
     #[test]
-    fn shift_right() {
-        let asm = binary_operation_module("shr_fn", SignatureToken::U64, Bytecode::Shr);
-        assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
+    fn comparison_eq() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "eq_fn",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Eq,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+    }
+
+    #[test]
+    fn comparison_neq() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "neq_fn",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Neq,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
     }
 
     #[test]
@@ -294,26 +359,33 @@ mod tests {
     }
 
     #[test]
-    fn comparison_lt() {
+    fn shift_left() {
+        let asm = binary_operation_module("shl_fn", SignatureToken::U64, Bytecode::Shl);
+        assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
+    }
+
+    #[test]
+    fn shift_right() {
+        let asm = binary_operation_module("shr_fn", SignatureToken::U64, Bytecode::Shr);
+        assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
+    }
+
+    #[test]
+    fn logical_not() {
         let module = CompiledModuleBuilder::new()
             .function(
-                "lt_fn",
-                vec![SignatureToken::U64, SignatureToken::U64],
+                "not_fn",
+                vec![SignatureToken::Bool],
                 vec![SignatureToken::Bool],
                 vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    Bytecode::Lt,
-                    Bytecode::Ret,
-                ],
+                vec![Bytecode::CopyLoc(0), Bytecode::Not, Bytecode::Ret],
             )
             .build();
         let asm = Compiler::compile_module(&Target::Aarch64, &module)
             .unwrap()
             .to_string();
-        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
-        assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
+        assert!(asm.contains("not_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
     }
 
     #[test]
@@ -348,5 +420,22 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(asm.contains("extend_fn"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn cast_same_width_noop() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "cast_noop",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::CastU64, Bytecode::Ret],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("cast_noop"), "missing symbol\n{asm}");
     }
 }

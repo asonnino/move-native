@@ -31,8 +31,8 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
             Operation::Pack(module_id, datatype_id, type_args) => {
                 self.emit_pack(*module_id, *datatype_id, type_args, destinations, sources)
             }
-            Operation::Unpack(module_id, datatype_id, _type_args) => {
-                self.emit_unpack(*module_id, *datatype_id, destinations, sources)
+            Operation::Unpack(module_id, datatype_id, type_args) => {
+                self.emit_unpack(*module_id, *datatype_id, type_args, destinations, sources)
             }
             Operation::BorrowLoc => self.emit_borrow_loc(destinations, sources),
             Operation::BorrowField(module_id, datatype_id, type_args, offset) => self
@@ -85,10 +85,12 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
+        type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
+        let _type_args = self.state.instantiate_types(type_args);
         let struct_val = self.state.load_struct(sources[0])?;
         let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id);
         let field_count = struct_env.get_fields().count();

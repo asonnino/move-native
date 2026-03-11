@@ -7,8 +7,7 @@ mod context;
 mod error;
 mod function;
 mod mangle;
-#[cfg(test)]
-mod module;
+pub mod module;
 mod target;
 mod types;
 

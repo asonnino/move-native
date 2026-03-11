@@ -190,6 +190,9 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::ConstantEmitter;
+    use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
 
     #[test]
     fn address_single() {
@@ -316,5 +319,109 @@ mod tests {
         let elements = vec![Constant::ByteArray(vec![1, 2, 3])];
         let result = ConstantEmitter::serialize_scalar_vector(&elements);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn compile_byte_array_constant() {
+        use move_binary_format::file_format::{
+            Bytecode, ConstantPoolIndex,
+            SignatureToken::{U8, Vector},
+        };
+
+        let hello: Vec<u8> = b"Hello".to_vec();
+        let mut bcs_data = Vec::new();
+        bcs_data.push(hello.len() as u8);
+        bcs_data.extend_from_slice(&hello);
+
+        let vec_u8 = Vector(Box::new(U8));
+        let module = CompiledModuleBuilder::new()
+            .constant(vec_u8.clone(), bcs_data)
+            .function(
+                "get_bytes",
+                vec![],
+                vec![vec_u8.clone()],
+                vec![vec_u8],
+                vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_const_vec_u8"),
+            "missing runtime call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn compile_address_constant() {
+        use move_binary_format::file_format::{Bytecode, ConstantPoolIndex, SignatureToken};
+
+        let mut addr_bytes = [0u8; 32];
+        addr_bytes[31] = 0x42;
+
+        let module = CompiledModuleBuilder::new()
+            .constant(SignatureToken::Address, addr_bytes.to_vec())
+            .function(
+                "load_addr",
+                vec![],
+                vec![SignatureToken::Address],
+                vec![SignatureToken::Address],
+                vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("load_addr"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn compile_vector_u64_constant() {
+        use move_binary_format::file_format::{
+            Bytecode, ConstantPoolIndex,
+            SignatureToken::{U64, Vector},
+        };
+
+        let elems: Vec<u64> = vec![10, 20, 30];
+        let mut bcs_data = Vec::new();
+        bcs_data.push(elems.len() as u8);
+        for e in &elems {
+            bcs_data.extend_from_slice(&e.to_le_bytes());
+        }
+
+        let vec_u64 = Vector(Box::new(U64));
+        let module = CompiledModuleBuilder::new()
+            .constant(vec_u64.clone(), bcs_data)
+            .function(
+                "get_vec",
+                vec![],
+                vec![vec_u64.clone()],
+                vec![vec_u64],
+                vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(
+            asm.contains("__move_rt_const_vec"),
+            "missing runtime call\n{asm}"
+        );
     }
 }
