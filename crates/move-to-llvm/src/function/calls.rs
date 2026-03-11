@@ -169,3 +169,112 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         Ok((f, callee_name))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::*;
+
+    use crate::compiler::Compiler;
+    use crate::target::Target;
+    use crate::test_utils::CompiledModuleBuilder;
+
+    #[test]
+    fn call_non_generic() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "double",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Add,
+                    Bytecode::Ret,
+                ],
+            )
+            .function(
+                "caller",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Call(FunctionHandleIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("double"), "missing 'double' symbol\n{asm}");
+        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+        assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
+    }
+
+    #[test]
+    fn call_generic() {
+        let module = CompiledModuleBuilder::new()
+            .generic_function(
+                "identity",
+                vec![AbilitySet::EMPTY],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![],
+                vec![Bytecode::MoveLoc(0), Bytecode::Ret],
+            )
+            .function(
+                "caller",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CallGeneric(FunctionInstantiationIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .function_instantiation(FunctionHandleIndex(0), vec![SignatureToken::U64])
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(
+            asm.contains("identity$u64"),
+            "missing monomorphized 'identity$u64' symbol\n{asm}"
+        );
+        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+    }
+
+    #[test]
+    fn call_native() {
+        let module = CompiledModuleBuilder::new()
+            .native_function(
+                "native_add",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+            )
+            .function(
+                "caller",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Call(FunctionHandleIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+        assert!(
+            asm.contains("__move_rt_0x0_M_native_add"),
+            "missing mangled native symbol\n{asm}"
+        );
+    }
+}

@@ -197,3 +197,156 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_model::ty::{PrimitiveType, Type};
+    use move_stackless_bytecode::stackless_bytecode::Operation;
+
+    use super::super::state::FunctionState;
+    use super::ArithmeticEmitter;
+    use crate::context::LlvmContext;
+
+    fn locals(p: PrimitiveType, n: usize) -> Vec<Type> {
+        vec![Type::Primitive(p); n]
+    }
+
+    #[test]
+    fn add_u64() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Add, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("add i64"), "IR: {ir}");
+    }
+
+    #[test]
+    fn sub_u32() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U32, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Sub, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("sub i32"), "IR: {ir}");
+    }
+
+    #[test]
+    fn mul_u8() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U8, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Mul, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("mul i8"), "IR: {ir}");
+    }
+
+    #[test]
+    fn div_unsigned() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Div, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("udiv i64"), "IR: {ir}");
+    }
+
+    #[test]
+    fn mod_unsigned() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Mod, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("urem i64"), "IR: {ir}");
+    }
+
+    #[test]
+    fn shift_same_width() {
+        let llvm = LlvmContext::new_for_test();
+        let state =
+            FunctionState::new_for_test(&llvm, locals(PrimitiveType::U64, 3), vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Shl, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("shl i64"), "IR: {ir}");
+        assert!(
+            !ir.contains("zext"),
+            "no zext expected when widths match: {ir}"
+        );
+    }
+
+    #[test]
+    fn shift_narrow_amount() {
+        let llvm = LlvmContext::new_for_test();
+        let types = vec![
+            Type::Primitive(PrimitiveType::U64),
+            Type::Primitive(PrimitiveType::U8),
+            Type::Primitive(PrimitiveType::U64),
+        ];
+        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Shl, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("zext i8"), "IR: {ir}");
+    }
+
+    #[test]
+    fn cast_truncate() {
+        let llvm = LlvmContext::new_for_test();
+        let types = vec![
+            Type::Primitive(PrimitiveType::U64),
+            Type::Primitive(PrimitiveType::U8),
+        ];
+        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[1], &Operation::CastU8, &[0])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("trunc i64"), "IR: {ir}");
+    }
+
+    #[test]
+    fn cast_extend() {
+        let llvm = LlvmContext::new_for_test();
+        let types = vec![
+            Type::Primitive(PrimitiveType::U8),
+            Type::Primitive(PrimitiveType::U64),
+        ];
+        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[1], &Operation::CastU64, &[0])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("zext i8"), "IR: {ir}");
+    }
+
+    #[test]
+    fn comparison_produces_i8() {
+        let llvm = LlvmContext::new_for_test();
+        let types = vec![
+            Type::Primitive(PrimitiveType::U64),
+            Type::Primitive(PrimitiveType::U64),
+            Type::Primitive(PrimitiveType::Bool),
+        ];
+        let state = FunctionState::new_for_test(&llvm, types, vec![]).unwrap();
+        ArithmeticEmitter::new(&state)
+            .emit(&[2], &Operation::Lt, &[0, 1])
+            .unwrap();
+        let ir = llvm.module.print_to_string().to_string();
+        assert!(ir.contains("icmp ult"), "IR: {ir}");
+        assert!(ir.contains("zext i1"), "IR: {ir}");
+    }
+}

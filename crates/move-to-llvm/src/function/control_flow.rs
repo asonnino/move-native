@@ -89,3 +89,129 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::*;
+
+    use crate::compiler::Compiler;
+    use crate::target::Target;
+    use crate::test_utils::CompiledModuleBuilder;
+
+    #[test]
+    fn ret_void() {
+        let module = CompiledModuleBuilder::new()
+            .function("noop", vec![], vec![], vec![], vec![Bytecode::Ret])
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("noop"), "missing 'noop' symbol\n{asm}");
+        assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
+    }
+
+    #[test]
+    fn ret_single_value() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "identity",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("identity"), "missing 'identity' symbol\n{asm}");
+        assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
+    }
+
+    #[test]
+    fn ret_multi_value() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "swap",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(1), Bytecode::CopyLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
+        assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
+    }
+
+    #[test]
+    fn branch_and_jump() {
+        // sum_to_n(n: u64): u64 — loop with BrFalse (conditional) + Branch (unconditional)
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "sum_to_n",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![
+                    Bytecode::LdU64(0),
+                    Bytecode::StLoc(1), // sum = 0
+                    Bytecode::LdU64(0),
+                    Bytecode::StLoc(2), // i = 0
+                    // LOOP:
+                    Bytecode::CopyLoc(2),
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Lt,
+                    Bytecode::BrFalse(17), // -> END
+                    // body
+                    Bytecode::CopyLoc(1),
+                    Bytecode::CopyLoc(2),
+                    Bytecode::Add,
+                    Bytecode::StLoc(1), // sum += i
+                    Bytecode::CopyLoc(2),
+                    Bytecode::LdU64(1),
+                    Bytecode::Add,
+                    Bytecode::StLoc(2),  // i += 1
+                    Bytecode::Branch(4), // -> LOOP
+                    // END:
+                    Bytecode::MoveLoc(1),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("sum_to_n"), "missing 'sum_to_n' symbol\n{asm}");
+        // Conditional branch (b.hs, b.lo, etc.)
+        assert!(asm.contains("b."), "missing conditional branch\n{asm}");
+    }
+
+    #[test]
+    fn abort() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "abort_42",
+                vec![],
+                vec![],
+                vec![SignatureToken::U64],
+                vec![
+                    Bytecode::LdU64(42),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Abort,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module).unwrap();
+        let asm = asm.to_string();
+        assert!(asm.contains("abort_42"), "missing 'abort_42' symbol\n{asm}");
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "missing '__move_rt_abort' call\n{asm}"
+        );
+    }
+}
