@@ -45,43 +45,43 @@ pub enum CompileError {
 }
 
 impl CompileError {
-    pub fn unsupported_bytecode(bc: Bytecode) -> Self {
+    pub(crate) fn unsupported_bytecode(bc: Bytecode) -> Self {
         Self::UnsupportedBytecode(Box::new(bc))
     }
 
-    pub fn unsupported_type(ty: Type) -> Self {
+    pub(crate) fn unsupported_type(ty: Type) -> Self {
         Self::UnsupportedType(Box::new(ty))
     }
 
-    pub fn unsupported_constant(c: Constant) -> Self {
+    pub(crate) fn unsupported_constant(c: Constant) -> Self {
         Self::UnsupportedConstant(Box::new(c))
     }
 
-    pub fn unsupported_operation(op: Operation) -> Self {
+    pub(crate) fn unsupported_operation(op: Operation) -> Self {
         Self::UnsupportedOperation(Box::new(op))
     }
 
-    pub fn llvm(msg: impl Into<String>) -> Self {
+    pub(crate) fn llvm(msg: impl Into<String>) -> Self {
         Self::Llvm(msg.into())
     }
 
-    pub fn target_init(msg: impl Into<String>) -> Self {
+    pub(crate) fn target_init(msg: impl Into<String>) -> Self {
         Self::TargetInit(msg.into())
     }
 
-    pub fn target_machine(msg: impl Into<String>) -> Self {
+    pub(crate) fn target_machine(msg: impl Into<String>) -> Self {
         Self::TargetMachine(msg.into())
     }
 
-    pub fn codegen(msg: impl Into<String>) -> Self {
+    pub(crate) fn codegen(msg: impl Into<String>) -> Self {
         Self::CodeGeneration(msg.into())
     }
 
-    pub fn deserialize(msg: impl Into<String>) -> Self {
+    pub(crate) fn deserialize(msg: impl Into<String>) -> Self {
         Self::Deserialize(msg.into())
     }
 
-    pub fn model_builder(msg: impl Into<String>) -> Self {
+    pub(crate) fn model_builder(msg: impl Into<String>) -> Self {
         Self::ModelBuilder(msg.into())
     }
 }

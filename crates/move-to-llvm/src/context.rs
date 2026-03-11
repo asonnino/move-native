@@ -8,9 +8,9 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::{FunctionType, IntType, PointerType};
 use inkwell::values::FunctionValue;
 use move_binary_format::CompiledModule;
-use move_model::model::{GlobalEnv, ModuleEnv};
-
-use move_model::model::FunctionEnv;
+use move_model::model::{
+    DatatypeId, FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId, StructEnv,
+};
 use move_model::ty::Type;
 
 use crate::error::{CompileError, CompileResult};
@@ -21,7 +21,7 @@ use crate::mangle::Mangler;
 /// Also owns the Move `GlobalEnv` (semantic model) so that all central
 /// infrastructure lives in one place.
 pub(crate) struct LlvmContext<'ctx> {
-    pub(crate) env: GlobalEnv,
+    env: GlobalEnv,
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
     pub(crate) builder: Builder<'ctx>,
@@ -36,7 +36,7 @@ pub(crate) struct LlvmContext<'ctx> {
 }
 
 impl<'ctx> LlvmContext<'ctx> {
-    pub fn new(
+    pub(crate) fn new(
         context: &'ctx Context,
         module: &CompiledModule,
         dependencies: &[CompiledModule],
@@ -68,12 +68,26 @@ impl<'ctx> LlvmContext<'ctx> {
         })
     }
 
-    pub fn env(&self) -> &GlobalEnv {
-        &self.env
+    /// Look up a struct definition by module and datatype ID.
+    pub(crate) fn get_struct_env(
+        &self,
+        module_id: ModuleId,
+        datatype_id: DatatypeId,
+    ) -> StructEnv<'_> {
+        self.env.get_module(module_id).into_struct(datatype_id)
+    }
+
+    /// Look up a function definition by module and function ID.
+    pub(crate) fn get_function_env(
+        &self,
+        module_id: ModuleId,
+        function_id: FunId,
+    ) -> FunctionEnv<'_> {
+        self.env.get_module(module_id).into_function(function_id)
     }
 
     /// The module being compiled (always the last one added to the environment).
-    pub fn target_module(&self) -> ModuleEnv<'_> {
+    pub(crate) fn target_module(&self) -> ModuleEnv<'_> {
         self.env
             .get_modules()
             .last()
@@ -81,12 +95,12 @@ impl<'ctx> LlvmContext<'ctx> {
     }
 
     /// Look up an already-declared function by name.
-    pub fn get_function(&self, name: &str) -> Option<FunctionValue<'ctx>> {
+    pub(crate) fn get_function(&self, name: &str) -> Option<FunctionValue<'ctx>> {
         self.module.get_function(name)
     }
 
     /// Define an internal function in this module.
-    pub fn add_function(
+    pub(crate) fn add_function(
         &self,
         name: &str,
         function_type: FunctionType<'ctx>,
@@ -95,7 +109,7 @@ impl<'ctx> LlvmContext<'ctx> {
     }
 
     /// Declare an external function (defined elsewhere, resolved at link time), idempotent.
-    pub fn add_external_function(
+    pub(crate) fn add_external_function(
         &self,
         name: &str,
         function_type: FunctionType<'ctx>,
@@ -107,17 +121,17 @@ impl<'ctx> LlvmContext<'ctx> {
     }
 
     /// Mangle a Move type into a symbol-safe string.
-    pub fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
+    pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
         Mangler::new(&self.env).mangle_type(ty)
     }
 
     /// Mangle type arguments into a `$`-separated string.
-    pub fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
+    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
         Mangler::new(&self.env).mangle_type_args(type_args)
     }
 
     /// Build the mangled symbol name for a native function call.
-    pub fn mangle_native_symbol(
+    pub(crate) fn mangle_native_symbol(
         &self,
         callee_env: &FunctionEnv<'_>,
         type_args: &[Type],

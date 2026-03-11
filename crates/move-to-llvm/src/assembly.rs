@@ -27,7 +27,7 @@ impl Assembly {
     /// directive that prevents the assembler from encoding `tbz`/`tbnz`
     /// branch-to-label (the assembler can't guarantee range when subsections
     /// may be reordered).
-    pub fn add_symbol_aliases(&mut self) {
+    pub(crate) fn add_symbol_aliases(&mut self) {
         let asm = &self.0;
         let mut output = String::with_capacity(asm.len());
         let mut global_names: Vec<&str> = Vec::new();
@@ -99,7 +99,7 @@ pub(crate) struct AssemblyBuilder {
 }
 
 impl AssemblyBuilder {
-    pub fn new(target: &Target) -> CompileResult<Self> {
+    pub(crate) fn new(target: &Target) -> CompileResult<Self> {
         target.initialize();
 
         let triple = TargetTriple::create(target.triple());
@@ -124,7 +124,7 @@ impl AssemblyBuilder {
     ///
     /// Runs mem2reg (promote allocas to SSA registers), instcombine, and
     /// simplifycfg — enough to clean up the alloca-heavy IR we generate.
-    pub fn optimize(&self, module: &Module<'_>) -> CompileResult<()> {
+    pub(crate) fn optimize(&self, module: &Module<'_>) -> CompileResult<()> {
         let options = PassBuilderOptions::create();
         module
             .run_passes("mem2reg,instcombine,simplifycfg", &self.machine, options)
@@ -132,7 +132,7 @@ impl AssemblyBuilder {
     }
 
     /// Emit the module as assembly text.
-    pub fn build(&self, module: &Module<'_>) -> CompileResult<Assembly> {
+    pub(crate) fn build(&self, module: &Module<'_>) -> CompileResult<Assembly> {
         let buf = self
             .machine
             .write_to_memory_buffer(module, FileType::Assembly)

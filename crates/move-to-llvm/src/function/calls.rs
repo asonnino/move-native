@@ -19,11 +19,11 @@ pub(crate) struct CallEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit(
+    pub(super) fn emit(
         &self,
         destinations: &[usize],
         module_id: ModuleId,
@@ -32,12 +32,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        let callee_env = self
-            .state
-            .ctx
-            .env()
-            .get_module(module_id)
-            .into_function(function_id);
+        let callee_env = self.state.ctx.get_function_env(module_id, function_id);
 
         let (callee_fn, call_name) = if callee_env.is_native() {
             self.emit_native(&callee_env, type_args)?
@@ -108,7 +103,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
         let llvm = &self.state.ctx;
-        let inst_args = self.state.inst_types(type_args);
+        let inst_args = self.state.instantiate_types(type_args);
         let callee_name = callee_env.get_name_str();
         let args = self.state.mangle_type_args(&inst_args)?;
         let mangled = format!("{callee_name}${args}");

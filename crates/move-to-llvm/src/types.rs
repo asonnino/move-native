@@ -15,12 +15,12 @@ pub(crate) struct TypeLowering<'a, 'ctx> {
 }
 
 impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
-    pub fn new(ctx: &'a LlvmContext<'ctx>) -> Self {
+    pub(crate) fn new(ctx: &'a LlvmContext<'ctx>) -> Self {
         Self { ctx }
     }
 
     /// Lower a `move_model::ty::Type` to an LLVM type.
-    pub fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
+    pub(crate) fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
         match ty {
             Type::Primitive(PrimitiveType::U8) => Ok(self.ctx.i8_type.into()),
             Type::Primitive(PrimitiveType::U16) => Ok(self.ctx.i16_type.into()),
@@ -34,11 +34,7 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
             Type::Reference(_, _) => Ok(self.ctx.ptr_type.into()),
             Type::Vector(_) => Ok(self.ctx.ptr_type.into()),
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let struct_env = self
-                    .ctx
-                    .env()
-                    .get_module(*module_id)
-                    .into_struct(*datatype_id);
+                let struct_env = self.ctx.get_struct_env(*module_id, *datatype_id);
                 let name = if type_args.is_empty() {
                     struct_env.get_full_name_str()
                 } else {
@@ -74,7 +70,7 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
     /// Lower Move parameter and return types into an LLVM function type.
     ///
     /// For zero returns -> void, one return -> that type, multiple returns -> anonymous struct.
-    pub fn lower_function_type(
+    pub(crate) fn lower_function_type(
         &self,
         parameter_types: &[Type],
         return_types: &[Type],

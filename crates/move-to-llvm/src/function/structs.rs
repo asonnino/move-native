@@ -17,11 +17,11 @@ pub(crate) struct StructEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit(
+    pub(super) fn emit(
         &self,
         destinations: &[usize],
         operation: &Operation,
@@ -64,7 +64,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let type_args = self.state.inst_types(type_args);
+        let type_args = self.state.instantiate_types(type_args);
         let struct_ty = self
             .state
             .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?
@@ -90,12 +90,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
         let struct_val = self.state.load_value(sources[0])?.into_struct_value();
-        let struct_env = self
-            .state
-            .ctx
-            .env()
-            .get_module(module_id)
-            .into_struct(datatype_id);
+        let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id);
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
             let field_val =
@@ -107,7 +102,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     }
 
     fn emit_borrow_loc(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
-        let ptr = self.state.locals.borrow()[sources[0]].alloca;
+        let ptr = self.state.locals[sources[0]].alloca;
         self.state.store(destinations[0], ptr.into())?;
         Ok(())
     }
@@ -123,7 +118,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
         let struct_ptr = self.state.load_value(sources[0])?.into_pointer_value();
-        let type_args = self.state.inst_types(type_args);
+        let type_args = self.state.instantiate_types(type_args);
         let struct_ty =
             self.state
                 .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?;

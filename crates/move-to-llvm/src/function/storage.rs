@@ -15,11 +15,11 @@ pub(crate) struct StorageEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit_move_to(
+    pub(super) fn emit_move_to(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
@@ -28,24 +28,17 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        self.emit_storage_call(
-            "move_to",
-            module_id,
-            datatype_id,
-            type_args,
-            destinations,
-            sources,
-            |dt_ty| {
-                let val_ty = self.state.lower_type(&dt_ty)?.into();
-                Ok(llvm
-                    .context
-                    .void_type()
-                    .fn_type(&[val_ty, llvm.i256_type.into()], false))
-            },
-        )
+        let (symbol, datatype) =
+            self.resolve_symbol("move_to", module_id, datatype_id, type_args)?;
+        let parameter_type = self.state.lower_type(&datatype)?.into();
+        let function_type = llvm
+            .context
+            .void_type()
+            .fn_type(&[parameter_type, llvm.i256_type.into()], false);
+        self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
-    pub fn emit_move_from(
+    pub(super) fn emit_move_from(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
@@ -54,21 +47,14 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        self.emit_storage_call(
-            "move_from",
-            module_id,
-            datatype_id,
-            type_args,
-            destinations,
-            sources,
-            |dt_ty| {
-                let ret_ty = self.state.lower_type(&dt_ty)?;
-                Ok(ret_ty.fn_type(&[llvm.i256_type.into()], false))
-            },
-        )
+        let (symbol, datatype) =
+            self.resolve_symbol("move_from", module_id, datatype_id, type_args)?;
+        let return_type = self.state.lower_type(&datatype)?;
+        let function_type = return_type.fn_type(&[llvm.i256_type.into()], false);
+        self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
-    pub fn emit_exists(
+    pub(super) fn emit_exists(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
@@ -77,18 +63,12 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        self.emit_storage_call(
-            "exists",
-            module_id,
-            datatype_id,
-            type_args,
-            destinations,
-            sources,
-            |_| Ok(llvm.i8_type.fn_type(&[llvm.i256_type.into()], false)),
-        )
+        let (symbol, _) = self.resolve_symbol("exists", module_id, datatype_id, type_args)?;
+        let function_type = llvm.i8_type.fn_type(&[llvm.i256_type.into()], false);
+        self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
-    pub fn emit_borrow_global(
+    pub(super) fn emit_borrow_global(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
@@ -97,18 +77,13 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        self.emit_storage_call(
-            "borrow_global",
-            module_id,
-            datatype_id,
-            type_args,
-            destinations,
-            sources,
-            |_| Ok(llvm.ptr_type.fn_type(&[llvm.i256_type.into()], false)),
-        )
+        let (symbol, _) =
+            self.resolve_symbol("borrow_global", module_id, datatype_id, type_args)?;
+        let function_type = llvm.ptr_type.fn_type(&[llvm.i256_type.into()], false);
+        self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
-    pub fn emit_get_global(
+    pub(super) fn emit_get_global(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
@@ -117,47 +92,45 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        self.emit_storage_call(
-            "get_global",
-            module_id,
-            datatype_id,
-            type_args,
-            destinations,
-            sources,
-            |dt_ty| {
-                let ret_ty = self.state.lower_type(&dt_ty)?;
-                Ok(ret_ty.fn_type(&[llvm.i256_type.into()], false))
-            },
-        )
+        let (symbol, datatype) =
+            self.resolve_symbol("get_global", module_id, datatype_id, type_args)?;
+        let return_type = self.state.lower_type(&datatype)?;
+        let function_type = return_type.fn_type(&[llvm.i256_type.into()], false);
+        self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
-    /// Common implementation for all storage operations.
-    #[allow(clippy::too_many_arguments)]
-    fn emit_storage_call(
+    /// Resolve the runtime symbol for a storage operation on a concrete datatype.
+    fn resolve_symbol(
         &self,
         operation_name: &str,
         module_id: ModuleId,
         datatype_id: DatatypeId,
         type_args: &[Type],
+    ) -> CompileResult<(String, Type)> {
+        let inst_args = self.state.instantiate_types(type_args);
+        let datatype = Type::Datatype(module_id, datatype_id, inst_args);
+        let mangled = self.state.mangle_type(&datatype)?;
+        let symbol = format!("__move_rt_{operation_name}${mangled}");
+        Ok((symbol, datatype))
+    }
+
+    /// Declare the extern, call it with loaded sources, and store the result.
+    fn call_and_store(
+        &self,
+        symbol: &str,
+        function_type: inkwell::types::FunctionType<'ctx>,
         destinations: &[usize],
         sources: &[usize],
-        build_fn_type: impl FnOnce(Type) -> CompileResult<inkwell::types::FunctionType<'ctx>>,
     ) -> CompileResult<()> {
         let llvm = &self.state.ctx;
-        let inst_args = self.state.inst_types(type_args);
-        let dt_ty = Type::Datatype(module_id, datatype_id, inst_args);
-        let mangled = self.state.mangle_type(&dt_ty)?;
-        let symbol = format!("__move_rt_{operation_name}${mangled}");
-
-        let fn_type = build_fn_type(dt_ty)?;
-        let func = llvm.add_external_function(&symbol, fn_type);
+        let function_value = llvm.add_external_function(symbol, function_type);
 
         let args: Vec<_> = sources
             .iter()
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = llvm.builder.build_call(func, &args, &symbol)?;
+        let call = llvm.builder.build_call(function_value, &args, symbol)?;
 
         if !destinations.is_empty() {
             let ret_val = match call.try_as_basic_value() {

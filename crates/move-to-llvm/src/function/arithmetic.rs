@@ -16,11 +16,11 @@ pub(crate) struct ArithmeticEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit(
+    pub(super) fn emit(
         &self,
         destinations: &[usize],
         operation: &Operation,

@@ -15,36 +15,35 @@ pub(crate) struct ControlFlowEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit(&self, bc: &Bytecode) -> CompileResult<()> {
+    pub(super) fn emit(&self, byte_code: &Bytecode) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        match bc {
-            Bytecode::Ret(_, rets) => {
-                if rets.is_empty() {
+        match byte_code {
+            Bytecode::Ret(_, returns) => {
+                if returns.is_empty() {
                     llvm.builder.build_return(None)?;
-                } else if rets.len() == 1 {
-                    let val = self.state.load_value(rets[0])?;
+                } else if returns.len() == 1 {
+                    let val = self.state.load_value(returns[0])?;
                     llvm.builder.build_return(Some(&val))?;
                 } else {
                     // Multi-return: pack values into an anonymous struct
-                    let locals = self.state.locals.borrow();
-                    let ret_types: Vec<BasicTypeEnum<'ctx>> = rets
+                    let return_types: Vec<BasicTypeEnum<'ctx>> = returns
                         .iter()
-                        .map(|r| Ok(locals[*r].llvm_ty))
+                        .map(|r| Ok(self.state.locals[*r].llvm_ty))
                         .collect::<CompileResult<_>>()?;
-                    let ret_struct_ty = llvm.context.struct_type(&ret_types, false);
-                    let mut agg = ret_struct_ty.get_undef();
-                    for (i, r) in rets.iter().enumerate() {
+                    let return_struct_type = llvm.context.struct_type(&return_types, false);
+                    let mut struct_value = return_struct_type.get_undef();
+                    for (i, r) in returns.iter().enumerate() {
                         let val = self.state.load_value(*r)?;
-                        agg = llvm
+                        struct_value = llvm
                             .builder
-                            .build_insert_value(agg, val, i as u32, &format!("ret_{i}"))?
+                            .build_insert_value(struct_value, val, i as u32, &format!("ret_{i}"))?
                             .into_struct_value();
                     }
-                    llvm.builder.build_return(Some(&agg))?;
+                    llvm.builder.build_return(Some(&struct_value))?;
                 }
             }
             Bytecode::Label(_, label) => {
@@ -66,13 +65,13 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
             Bytecode::Branch(_, then_label, else_label, cond) => {
                 let cond_val = self.state.load_int(*cond)?;
                 let zero = cond_val.get_type().const_zero();
-                let cmp =
+                let compare =
                     llvm.builder
                         .build_int_compare(IntPredicate::NE, cond_val, zero, "cond")?;
                 let then_block = self.state.label_blocks[then_label];
                 let else_block = self.state.label_blocks[else_label];
                 llvm.builder
-                    .build_conditional_branch(cmp, then_block, else_block)?;
+                    .build_conditional_branch(compare, then_block, else_block)?;
             }
             Bytecode::Abort(_, code_idx) => {
                 let code = self.state.load_value(*code_idx)?;

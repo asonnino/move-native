@@ -9,8 +9,6 @@ mod state;
 mod storage;
 mod structs;
 
-use std::collections::BTreeMap;
-
 use inkwell::values::FunctionValue;
 use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
@@ -18,9 +16,8 @@ use move_stackless_bytecode::stackless_bytecode::{Bytecode, Operation};
 
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
-use crate::types::TypeLowering;
 
-pub(crate) use state::{FunctionState, Local};
+pub(crate) use state::FunctionState;
 
 use arithmetic::ArithmeticEmitter;
 use calls::CallEmitter;
@@ -39,7 +36,7 @@ pub(crate) struct FunctionLowering<'a, 'ctx> {
 }
 
 impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
-    pub fn new(
+    pub(crate) fn new(
         ctx: &'a LlvmContext<'ctx>,
         function: FunctionValue<'ctx>,
         parameter_count: usize,
@@ -49,50 +46,12 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         let entry = ctx.context.append_basic_block(function, "entry");
         ctx.builder.position_at_end(entry);
 
-        let type_lowering = TypeLowering::new(ctx);
+        let state = FunctionState::new(ctx, function, parameter_count, function_data, type_params)?;
 
-        // Allocas for all locals
-        let mut locals = Vec::with_capacity(function_data.local_types.len());
-        for (i, ty) in function_data.local_types.iter().enumerate() {
-            let mty = if type_params.is_empty() {
-                ty.clone()
-            } else {
-                ty.instantiate(&type_params)
-            };
-            let llvm_ty = type_lowering.lower_type(&mty)?;
-            let alloca = ctx.builder.build_alloca(llvm_ty, &format!("t{i}"))?;
-            locals.push(Local {
-                mty,
-                llvm_ty,
-                alloca,
-            });
-        }
-
-        // Store function parameters into their allocas
-        for (i, local) in locals.iter().enumerate().take(parameter_count) {
-            let parameter = function
-                .get_nth_param(i as u32)
-                .ok_or(CompileError::llvm("missing parameter"))?;
-            ctx.builder.build_store(local.alloca, parameter)?;
-        }
-
-        // Pre-create basic blocks for all labels
-        let mut label_blocks = BTreeMap::new();
-        for byte_code in &function_data.code {
-            if let Bytecode::Label(_, label) = byte_code {
-                let block = ctx
-                    .context
-                    .append_basic_block(function, &format!("L{}", label.as_usize()));
-                label_blocks.insert(*label, block);
-            }
-        }
-
-        Ok(Self {
-            state: FunctionState::new(ctx, locals, label_blocks, type_params),
-        })
+        Ok(Self { state })
     }
 
-    pub fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
+    pub(crate) fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
         for byte_code in &function_data.code {
             self.lower_bytecode(byte_code)?;
         }

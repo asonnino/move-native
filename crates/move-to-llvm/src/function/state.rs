@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use inkwell::basic_block::BasicBlock;
@@ -10,7 +10,8 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use move_model::model::FunctionEnv as MoveFunctionEnv;
 use move_model::ty::Type;
-use move_stackless_bytecode::stackless_bytecode::Label;
+use move_stackless_bytecode::function_target::FunctionData;
+use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
@@ -30,6 +31,29 @@ pub(crate) struct Local<'ctx> {
     pub(crate) alloca: PointerValue<'ctx>,
 }
 
+impl<'ctx> Local<'ctx> {
+    /// Create a new local: instantiate the Move type, lower it to LLVM, and emit an alloca.
+    pub(crate) fn new(
+        ctx: &LlvmContext<'ctx>,
+        ty: &Type,
+        type_params: &[Type],
+        name: &str,
+    ) -> CompileResult<Self> {
+        let mty = if type_params.is_empty() {
+            ty.clone()
+        } else {
+            ty.instantiate(type_params)
+        };
+        let llvm_ty = TypeLowering::new(ctx).lower_type(&mty)?;
+        let alloca = ctx.builder.build_alloca(llvm_ty, name)?;
+        Ok(Self {
+            mty,
+            llvm_ty,
+            alloca,
+        })
+    }
+}
+
 /// Per-function infrastructure state and utility methods used by emitters.
 ///
 /// Contains everything emitters need (locals, type params, mangling, LLVM helpers)
@@ -37,7 +61,7 @@ pub(crate) struct Local<'ctx> {
 pub(crate) struct FunctionState<'a, 'ctx> {
     pub(crate) ctx: &'a LlvmContext<'ctx>,
     /// All locals (params + locals + compiler-generated temps).
-    pub(crate) locals: RefCell<Vec<Local<'ctx>>>,
+    pub(crate) locals: Vec<Local<'ctx>>,
     /// Pre-created basic blocks for each Label in the bytecode.
     pub(crate) label_blocks: BTreeMap<Label, BasicBlock<'ctx>>,
     /// Concrete types for the function's type parameters (empty for non-generic).
@@ -49,22 +73,50 @@ pub(crate) struct FunctionState<'a, 'ctx> {
 impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     pub(crate) fn new(
         ctx: &'a LlvmContext<'ctx>,
-        locals: Vec<Local<'ctx>>,
-        label_blocks: BTreeMap<Label, BasicBlock<'ctx>>,
+        function: FunctionValue<'ctx>,
+        parameter_count: usize,
+        function_data: &FunctionData,
         type_params: Vec<Type>,
-    ) -> Self {
-        Self {
+    ) -> CompileResult<Self> {
+        // Allocas for all locals
+        let locals: Vec<Local> = function_data
+            .local_types
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| Local::new(ctx, ty, &type_params, &format!("t{i}")))
+            .collect::<CompileResult<_>>()?;
+
+        // Store function parameters into their allocas
+        for (i, local) in locals.iter().enumerate().take(parameter_count) {
+            let parameter = function
+                .get_nth_param(i as u32)
+                .ok_or(CompileError::llvm("missing parameter"))?;
+            ctx.builder.build_store(local.alloca, parameter)?;
+        }
+
+        // Pre-create basic blocks for all labels
+        let mut label_blocks = BTreeMap::new();
+        for byte_code in &function_data.code {
+            if let Bytecode::Label(_, label) = byte_code {
+                let block = ctx
+                    .context
+                    .append_basic_block(function, &format!("L{}", label.as_usize()));
+                label_blocks.insert(*label, block);
+            }
+        }
+
+        Ok(Self {
             ctx,
-            locals: RefCell::new(locals),
+            locals,
             label_blocks,
             type_params,
             const_counter: Cell::new(0),
-        }
+        })
     }
 
     /// Instantiate type_args through the current function's type parameters.
     /// Returns the args unchanged for non-generic functions.
-    pub(crate) fn inst_types(&self, types: &[Type]) -> Vec<Type> {
+    pub(crate) fn instantiate_types(&self, types: &[Type]) -> Vec<Type> {
         if self.type_params.is_empty() {
             types.to_vec()
         } else {
@@ -119,8 +171,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
 
     /// Load a local as a generic `BasicValueEnum` (works for any type).
     pub(crate) fn load_value(&self, idx: usize) -> CompileResult<BasicValueEnum<'ctx>> {
-        let locals = self.locals.borrow();
-        let local = &locals[idx];
+        let local = &self.locals[idx];
         Ok(self
             .ctx
             .builder
@@ -134,15 +185,13 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
 
     /// Store a value into a local's alloca.
     pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) -> CompileResult<()> {
-        let locals = self.locals.borrow();
-        self.ctx.builder.build_store(locals[idx].alloca, val)?;
+        self.ctx.builder.build_store(self.locals[idx].alloca, val)?;
         Ok(())
     }
 
     /// Resolve the pointee LLVM type for a local that holds a reference (`&T` or `&mut T`).
     pub(crate) fn pointee_type(&self, idx: usize) -> CompileResult<BasicTypeEnum<'ctx>> {
-        let locals = self.locals.borrow();
-        match &locals[idx].mty {
+        match &self.locals[idx].mty {
             Type::Reference(_, inner) => self.lower_type(inner),
             other => Err(CompileError::unsupported_type(other.clone())),
         }

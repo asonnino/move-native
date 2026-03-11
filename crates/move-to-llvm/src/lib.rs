@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod assembly;
-pub mod compiler;
-pub(crate) mod context;
-pub mod error;
-pub(crate) mod function;
+mod compiler;
+mod context;
+mod error;
+mod function;
 mod mangle;
-pub mod target;
+mod target;
 mod types;
 
 pub use assembly::Assembly;

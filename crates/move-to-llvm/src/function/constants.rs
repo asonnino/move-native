@@ -12,11 +12,11 @@ pub(crate) struct ConstantEmitter<'a, 'b, 'ctx> {
 }
 
 impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
-    pub fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
+    pub(super) fn new(state: &'a FunctionState<'b, 'ctx>) -> Self {
         Self { state }
     }
 
-    pub fn emit(&self, destination: usize, constant: &Constant) -> CompileResult<()> {
+    pub(super) fn emit(&self, destination: usize, constant: &Constant) -> CompileResult<()> {
         let llvm = &self.state.ctx;
         let val = match constant {
             Constant::Bool(v) => llvm.i8_type.const_int(*v as u64, false).into(),
@@ -66,9 +66,9 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     _ => unreachable!("const vec runtime function must return a value"),
                 }
             }
-            Constant::AddressArray(addrs) => {
+            Constant::AddressArray(addresses) => {
                 let id = self.state.next_const_id();
-                let buf = serialize_address_array(addrs);
+                let buf = Self::serialize_address_array(addresses);
                 let global = self
                     .state
                     .emit_const_global(&format!("const_addrs_{id}"), &buf);
@@ -78,7 +78,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         .fn_type(&[llvm.ptr_type.into(), llvm.i64_type.into()], false),
                 );
                 let ptr = global.as_pointer_value();
-                let count = llvm.i64_type.const_int(addrs.len() as u64, false);
+                let count = llvm.i64_type.const_int(addresses.len() as u64, false);
                 let call =
                     llvm.builder
                         .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")?;
@@ -87,8 +87,8 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     _ => unreachable!("const vec runtime function must return a value"),
                 }
             }
-            Constant::Vector(elems) => {
-                let fn_type = llvm.ptr_type.fn_type(
+            Constant::Vector(elements) => {
+                let function_type = llvm.ptr_type.fn_type(
                     &[
                         llvm.ptr_type.into(),
                         llvm.i64_type.into(),
@@ -96,12 +96,14 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     ],
                     false,
                 );
-                if elems.is_empty() {
-                    let func = self.state.declare_external("__move_rt_const_vec", fn_type);
+                if elements.is_empty() {
+                    let function = self
+                        .state
+                        .declare_external("__move_rt_const_vec", function_type);
                     let null = llvm.ptr_type.const_null();
                     let zero = llvm.i64_type.const_zero();
                     let call = llvm.builder.build_call(
-                        func,
+                        function,
                         &[null.into(), zero.into(), zero.into()],
                         "const_vec_empty",
                     )?;
@@ -111,17 +113,19 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     };
                     return self.state.store(destination, v);
                 }
-                let (elem_size, buf) = serialize_scalar_vector(elems)?;
+                let (elem_size, buf) = Self::serialize_scalar_vector(elements)?;
                 let id = self.state.next_const_id();
                 let global = self
                     .state
                     .emit_const_global(&format!("const_vec_{id}"), &buf);
-                let func = self.state.declare_external("__move_rt_const_vec", fn_type);
+                let function = self
+                    .state
+                    .declare_external("__move_rt_const_vec", function_type);
                 let ptr = global.as_pointer_value();
-                let count = llvm.i64_type.const_int(elems.len() as u64, false);
+                let count = llvm.i64_type.const_int(elements.len() as u64, false);
                 let esz = llvm.i64_type.const_int(elem_size as u64, false);
                 let call = llvm.builder.build_call(
-                    func,
+                    function,
                     &[ptr.into(), count.into(), esz.into()],
                     "const_vec",
                 )?;
@@ -133,60 +137,60 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
         };
         self.state.store(destination, val)
     }
-}
 
-/// Serialize an `AddressArray` into a flat buffer of 32-byte little-endian addresses.
-pub(super) fn serialize_address_array(addrs: &[num_bigint::BigUint]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(addrs.len() * 32);
-    for addr in addrs {
-        let bytes = addr.to_bytes_le();
-        let mut padded = [0u8; 32];
-        let len = bytes.len().min(32);
-        padded[..len].copy_from_slice(&bytes[..len]);
-        buf.extend_from_slice(&padded);
-    }
-    buf
-}
-
-/// Serialize a `Vector` of scalar constants into a flat byte buffer.
-pub(super) fn serialize_scalar_vector(elems: &[Constant]) -> CompileResult<(usize, Vec<u8>)> {
-    let elem_size = match &elems[0] {
-        Constant::Bool(_) | Constant::U8(_) => 1,
-        Constant::U16(_) => 2,
-        Constant::U32(_) => 4,
-        Constant::U64(_) => 8,
-        Constant::U128(_) => 16,
-        Constant::U256(_) | Constant::Address(_) => 32,
-        other => {
-            return Err(CompileError::unsupported_constant(other.clone()));
+    /// Serialize an `AddressArray` into a flat buffer of 32-byte little-endian addresses.
+    fn serialize_address_array(addresses: &[num_bigint::BigUint]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(addresses.len() * 32);
+        for addr in addresses {
+            let bytes = addr.to_bytes_le();
+            let mut padded = [0u8; 32];
+            let len = bytes.len().min(32);
+            padded[..len].copy_from_slice(&bytes[..len]);
+            buf.extend_from_slice(&padded);
         }
-    };
+        buf
+    }
 
-    let mut buf = Vec::with_capacity(elems.len() * elem_size);
-    for elem in elems {
-        match elem {
-            Constant::Bool(v) => buf.push(*v as u8),
-            Constant::U8(v) => buf.push(*v),
-            Constant::U16(v) => buf.extend_from_slice(&v.to_le_bytes()),
-            Constant::U32(v) => buf.extend_from_slice(&v.to_le_bytes()),
-            Constant::U64(v) => buf.extend_from_slice(&v.to_le_bytes()),
-            Constant::U128(v) => buf.extend_from_slice(&v.to_le_bytes()),
-            Constant::U256(v) => {
-                let (hi, lo) = v.into_words();
-                buf.extend_from_slice(&lo.to_le_bytes());
-                buf.extend_from_slice(&hi.to_le_bytes());
-            }
-            Constant::Address(big) => {
-                let bytes = big.to_bytes_le();
-                let mut padded = [0u8; 32];
-                let len = bytes.len().min(32);
-                padded[..len].copy_from_slice(&bytes[..len]);
-                buf.extend_from_slice(&padded);
-            }
+    /// Serialize a `Vector` of scalar constants into a flat byte buffer.
+    fn serialize_scalar_vector(elements: &[Constant]) -> CompileResult<(usize, Vec<u8>)> {
+        let element_size = match &elements[0] {
+            Constant::Bool(_) | Constant::U8(_) => 1,
+            Constant::U16(_) => 2,
+            Constant::U32(_) => 4,
+            Constant::U64(_) => 8,
+            Constant::U128(_) => 16,
+            Constant::U256(_) | Constant::Address(_) => 32,
             other => {
                 return Err(CompileError::unsupported_constant(other.clone()));
             }
+        };
+
+        let mut buf = Vec::with_capacity(elements.len() * element_size);
+        for element in elements {
+            match element {
+                Constant::Bool(v) => buf.push(*v as u8),
+                Constant::U8(v) => buf.push(*v),
+                Constant::U16(v) => buf.extend_from_slice(&v.to_le_bytes()),
+                Constant::U32(v) => buf.extend_from_slice(&v.to_le_bytes()),
+                Constant::U64(v) => buf.extend_from_slice(&v.to_le_bytes()),
+                Constant::U128(v) => buf.extend_from_slice(&v.to_le_bytes()),
+                Constant::U256(v) => {
+                    let (hi, lo) = v.into_words();
+                    buf.extend_from_slice(&lo.to_le_bytes());
+                    buf.extend_from_slice(&hi.to_le_bytes());
+                }
+                Constant::Address(big) => {
+                    let bytes = big.to_bytes_le();
+                    let mut padded = [0u8; 32];
+                    let len = bytes.len().min(32);
+                    padded[..len].copy_from_slice(&bytes[..len]);
+                    buf.extend_from_slice(&padded);
+                }
+                other => {
+                    return Err(CompileError::unsupported_constant(other.clone()));
+                }
+            }
         }
+        Ok((element_size, buf))
     }
-    Ok((elem_size, buf))
 }

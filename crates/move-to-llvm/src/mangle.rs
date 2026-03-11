@@ -12,12 +12,12 @@ pub(crate) struct Mangler<'a> {
 }
 
 impl<'a> Mangler<'a> {
-    pub fn new(env: &'a GlobalEnv) -> Self {
+    pub(crate) fn new(env: &'a GlobalEnv) -> Self {
         Self { env }
     }
 
     /// Mangle a Move type into a deterministic, symbol-safe string.
-    pub fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
+    pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
         match ty {
             Type::Primitive(PrimitiveType::Bool) => Ok("bool".to_string()),
             Type::Primitive(PrimitiveType::U8) => Ok("u8".to_string()),
@@ -47,7 +47,7 @@ impl<'a> Mangler<'a> {
     }
 
     /// Mangle a slice of type arguments into a `$`-separated string.
-    pub fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
+    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
         Ok(type_args
             .iter()
             .map(|t| self.mangle_type(t))
@@ -58,7 +58,7 @@ impl<'a> Mangler<'a> {
     /// Build the extern symbol name for a native function call with concrete type args.
     ///
     /// Format: `__move_rt_<addr>_<module>_<function>$<type_args>`
-    pub fn mangle_native_symbol(
+    pub(crate) fn mangle_native_symbol(
         &self,
         callee_env: &FunctionEnv<'_>,
         type_args: &[Type],
