@@ -98,7 +98,7 @@ Provide before/after snippets for your key suggestions.
 ## Project Context
 
 This codebase compiles Move bytecode to native Arm64. Key crates include:
-- `move-to-llvm`: Move bytecode to LLVM IR lowering
+- `compiler`: Move bytecode to LLVM IR lowering
 - `gas-instrument`: Arm64 assembly rewriting for gas metering
 - `native-verifier`: Verification of compiled modules
 - `native-runtime`: Execution runtime with signal handling

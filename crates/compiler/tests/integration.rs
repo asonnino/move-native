@@ -3,9 +3,9 @@
 
 //! Integration tests for the Move-to-LLVM compiler.
 
+use compiler::module::CompiledModuleBuilder;
+use compiler::{Compiler, Target};
 use move_binary_format::file_format::{Bytecode, SignatureToken};
-use move_to_llvm::module::CompiledModuleBuilder;
-use move_to_llvm::{Compiler, Target};
 
 #[test]
 fn all_features_compiles() {
@@ -116,7 +116,7 @@ fn serialization_round_trip() {
         .serialize_with_version(module.version, &mut bytecode)
         .expect("serialization failed");
 
-    let asm = move_to_llvm::compile(&Target::host(), &bytecode).expect("compile failed");
+    let asm = compiler::compile(&Target::host(), &bytecode).expect("compile failed");
 
     assert!(asm.contains("\tadd\t"), "should contain add instruction");
     assert!(asm.contains("\tret"), "should contain ret instruction");

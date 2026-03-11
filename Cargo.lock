@@ -329,6 +329,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "compiler"
+version = "0.1.0"
+dependencies = [
+ "ethnum",
+ "indoc",
+ "inkwell",
+ "move-binary-format",
+ "move-core-types",
+ "move-model",
+ "move-stackless-bytecode",
+ "num-bigint",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1476,21 +1491,6 @@ source = "git+https://github.com/MystenLabs/sui?rev=e4146b827fc1ceb26af5885acb32
 dependencies = [
  "phf",
  "serde",
-]
-
-[[package]]
-name = "move-to-llvm"
-version = "0.1.0"
-dependencies = [
- "ethnum",
- "indoc",
- "inkwell",
- "move-binary-format",
- "move-core-types",
- "move-model",
- "move-stackless-bytecode",
- "num-bigint",
- "thiserror 2.0.18",
 ]
 
 [[package]]

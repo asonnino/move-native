@@ -1,10 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// add.move — Minimal Move module for testing move-to-llvm
+// add.move — Minimal Move module for testing the compiler
 //
 // Equivalent to the CompiledModule constructed in
-// crates/move-to-llvm/tests/integration.rs::make_add_module()
+// crates/compiler/tests/integration.rs::make_add_module()
 //
 // To compile: sui move build  (produces build/.../add.mv)
 

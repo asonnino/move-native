@@ -3,15 +3,14 @@
 
 //! Tests that compile real Move bytecode (.mv files) through the full pipeline.
 
-use move_to_llvm::Target;
+use compiler::Target;
 
 /// End-to-end from the checked-in add.mv (two-argument u64 addition).
 #[test]
 fn add_module_from_mv_file() {
     let bytecode = include_bytes!("../../../tests/move_samples/add.mv");
 
-    let asm =
-        move_to_llvm::compile(&Target::host(), bytecode).expect("compile from .mv file failed");
+    let asm = compiler::compile(&Target::host(), bytecode).expect("compile from .mv file failed");
 
     assert!(
         asm.contains("\tadd\t"),
@@ -39,7 +38,7 @@ fn add_module_from_mv_file() {
 // #[ignore = "requires balance.mv — not yet supported: phantom generics"]
 // fn sui_framework_balance() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/sui_framework/balance.mv");
-//     move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
+//     compiler::compile(&compiler::Target::Aarch64, bytecode)
 //         .expect("balance.mv compilation failed");
 // }
 
@@ -47,7 +46,7 @@ fn add_module_from_mv_file() {
 // #[ignore = "requires table.mv — not yet supported: dual phantom generics, trait bounds"]
 // fn sui_framework_table() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/sui_framework/table.mv");
-//     move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
+//     compiler::compile(&compiler::Target::Aarch64, bytecode)
 //         .expect("table.mv compilation failed");
 // }
 
@@ -55,7 +54,7 @@ fn add_module_from_mv_file() {
 // #[ignore = "requires coin.mv — not yet supported: events, dynamic fields"]
 // fn sui_framework_coin() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/sui_framework/coin.mv");
-//     move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
+//     compiler::compile(&compiler::Target::Aarch64, bytecode)
 //         .expect("coin.mv compilation failed");
 // }
 
@@ -79,7 +78,7 @@ fn add_module_from_mv_file() {
 // #[ignore = "requires deepbook .mv files — aspirational graduation test"]
 // fn deepbook_pool() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/deepbook/pool.mv");
-//     move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
+//     compiler::compile(&compiler::Target::Aarch64, bytecode)
 //         .expect("deepbook pool.mv compilation failed");
 // }
 
@@ -92,6 +91,6 @@ fn add_module_from_mv_file() {
 // #[ignore = "requires suins .mv files — aspirational graduation test"]
 // fn suins_core() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/suins/suins.mv");
-//     move_to_llvm::compile(&move_to_llvm::Target::Aarch64, bytecode)
+//     compiler::compile(&compiler::Target::Aarch64, bytecode)
 //         .expect("suins.mv compilation failed");
 // }
