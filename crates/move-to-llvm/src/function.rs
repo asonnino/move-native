@@ -162,3 +162,87 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::{Bytecode, SignatureToken};
+
+    use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
+
+    #[test]
+    fn assign_copies_local() {
+        // f(x: u64): u64 { let y = x; y }
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "copy_local",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![
+                    Bytecode::CopyLoc(0), // push x
+                    Bytecode::StLoc(1),   // y = x
+                    Bytecode::MoveLoc(1), // push y
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("copy_local"), "missing symbol\n{asm}");
+        assert!(asm.contains("ret"), "missing ret\n{asm}");
+    }
+
+    #[test]
+    fn load_integer_constant() {
+        // f(): u64 { 42 }
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "forty_two",
+                vec![],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![
+                    Bytecode::LdU64(42),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("forty_two"), "missing symbol\n{asm}");
+        // 42 = 0x2A, should appear as a mov immediate
+        assert!(asm.contains("#42"), "missing immediate #42\n{asm}");
+    }
+
+    #[test]
+    fn load_bool_constant() {
+        // f(): bool { true }
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "always_true",
+                vec![],
+                vec![SignatureToken::Bool],
+                vec![SignatureToken::Bool],
+                vec![
+                    Bytecode::LdTrue,
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::Aarch64, &module)
+            .unwrap()
+            .to_string();
+        assert!(asm.contains("always_true"), "missing symbol\n{asm}");
+    }
+}

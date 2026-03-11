@@ -203,8 +203,8 @@ mod tests {
     use move_binary_format::file_format::{Bytecode, SignatureToken};
 
     use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
-    use crate::test_utils::CompiledModuleBuilder;
 
     /// Build a module with `op(a: T, b: T): T { a <op> b }`.
     fn binary_operation_module(name: &str, ty: SignatureToken, op: Bytecode) -> String {

@@ -150,8 +150,8 @@ mod tests {
     };
 
     use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
-    use crate::test_utils::CompiledModuleBuilder;
 
     /// Module builder pre-loaded with `Coin { value: u64 }` at `DatatypeHandleIndex(0)`.
     fn coin_module() -> CompiledModuleBuilder {

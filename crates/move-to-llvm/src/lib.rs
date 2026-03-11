@@ -7,9 +7,9 @@ mod context;
 mod error;
 mod function;
 mod mangle;
-mod target;
 #[cfg(test)]
-mod test_utils;
+mod module;
+mod target;
 mod types;
 
 pub use assembly::Assembly;

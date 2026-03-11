@@ -177,8 +177,8 @@ mod tests {
     };
 
     use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
-    use crate::test_utils::CompiledModuleBuilder;
 
     #[test]
     fn call_non_generic() {

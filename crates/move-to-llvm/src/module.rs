@@ -1,17 +1,23 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared test utilities for unit tests that need a real Move `CompiledModule`.
+//! Builder for constructing Move `CompiledModule`s in unit tests.
 
 use move_binary_format::CompiledModule;
-use move_binary_format::file_format::*;
+use move_binary_format::file_format::{
+    AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, DatatypeHandle, DatatypeHandleIndex,
+    FieldDefinition, FieldHandle, FunctionDefinition, FunctionHandle, FunctionHandleIndex,
+    FunctionInstantiation, IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature,
+    SignatureIndex, SignatureToken, StructDefinition, StructDefinitionIndex,
+    StructFieldInformation, TypeSignature, Visibility,
+};
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
 
-/// Builder for a Move `CompiledModule` containing one or more functions.
+/// Builder for a Move `CompiledModule` containing functions, structs, and fields.
 ///
 /// Handles all the index bookkeeping (identifiers, signatures, handles)
-/// so tests only specify names, types, and bytecode.
+/// so callers only specify names, types, and bytecode.
 pub(crate) struct CompiledModuleBuilder {
     identifiers: Vec<Identifier>,
     signatures: Vec<Signature>,
@@ -24,7 +30,7 @@ pub(crate) struct CompiledModuleBuilder {
 }
 
 impl CompiledModuleBuilder {
-    /// Create a new test module named `"M"` at address `0x0`.
+    /// Create a new module named `"M"` at address `0x0`.
     pub(crate) fn new() -> Self {
         Self {
             identifiers: vec![Identifier::new("M").unwrap()],
@@ -38,11 +44,10 @@ impl CompiledModuleBuilder {
         }
     }
 
-    /// Add a public function to the module.
+    /// Add a public function.
     ///
-    /// Returns `self` for chaining. The function's `FunctionHandleIndex` equals
-    /// its insertion order (0 for the first, 1 for the second, etc.), which is
-    /// what `Bytecode::Call(FunctionHandleIndex(n))` needs.
+    /// The `FunctionHandleIndex` equals the insertion order (0, 1, …),
+    /// which is what `Bytecode::Call(FunctionHandleIndex(n))` needs.
     pub(crate) fn function(
         mut self,
         name: &str,
@@ -164,10 +169,10 @@ impl CompiledModuleBuilder {
         self
     }
 
-    /// Add a struct definition to the module.
+    /// Add a struct definition.
     ///
-    /// The `DatatypeHandleIndex` equals the insertion order (0 for the first, etc.).
-    /// Use `SignatureToken::Datatype(DatatypeHandleIndex(n))` to reference it.
+    /// The `DatatypeHandleIndex` equals the insertion order (0, 1, …).
+    /// Reference it with `SignatureToken::Datatype(DatatypeHandleIndex(n))`.
     pub(crate) fn struct_definition(
         mut self,
         name: &str,
@@ -207,7 +212,7 @@ impl CompiledModuleBuilder {
 
     /// Add a field handle (for `ImmBorrowField` / `MutBorrowField`).
     ///
-    /// The `FieldHandleIndex` equals the insertion order (0 for the first, etc.).
+    /// The `FieldHandleIndex` equals the insertion order (0, 1, …).
     pub(crate) fn field_handle(mut self, owner: StructDefinitionIndex, field: u16) -> Self {
         self.field_handles.push(FieldHandle { owner, field });
         self
@@ -215,8 +220,7 @@ impl CompiledModuleBuilder {
 
     /// Add a function instantiation (for `CallGeneric`).
     ///
-    /// Returns `self` for chaining. The `FunctionInstantiationIndex` equals
-    /// the insertion order (0 for the first, etc.).
+    /// The `FunctionInstantiationIndex` equals the insertion order (0, 1, …).
     pub(crate) fn function_instantiation(
         mut self,
         handle: FunctionHandleIndex,
@@ -231,7 +235,7 @@ impl CompiledModuleBuilder {
         self
     }
 
-    /// Assemble the module into a `CompiledModule`.
+    /// Assemble into a `CompiledModule`.
     pub(crate) fn build(self) -> CompiledModule {
         CompiledModule {
             version: 7,

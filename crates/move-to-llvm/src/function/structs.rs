@@ -176,8 +176,8 @@ mod tests {
     };
 
     use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
-    use crate::test_utils::CompiledModuleBuilder;
 
     /// Module builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.
     fn point_module() -> CompiledModuleBuilder {
