@@ -20,7 +20,7 @@ fn address() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn ascii() {
     fixture().compile("ascii");
 }
@@ -71,7 +71,6 @@ fn option() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn string() {
     fixture().compile("string");
 }
@@ -83,37 +82,33 @@ fn type_name() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn u128() {
     fixture().compile("u128");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn u16() {
     fixture().compile("u16");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn u256() {
     fixture().compile("u256");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn u32() {
     fixture().compile("u32");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn u64() {
     fixture().compile("u64");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn u8() {
     fixture().compile("u8");
 }

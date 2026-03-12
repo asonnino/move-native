@@ -161,8 +161,8 @@ fn funds_accumulator() {
 }
 
 #[test]
-fn growth16() {
-    fixture().compile("growth16");
+fn groth16() {
+    fixture().compile("groth16");
 }
 
 #[test]

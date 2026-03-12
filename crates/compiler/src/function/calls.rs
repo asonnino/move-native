@@ -79,16 +79,17 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
         let llvm = &self.state.ctx;
-        let mangled = self.state.mangle_native_symbol(callee_env, type_args)?;
+        let inst_args = self.state.instantiate_types(type_args);
+        let mangled = self.state.mangle_native_symbol(callee_env, &inst_args)?;
         let inst_params: Vec<Type> = callee_env
             .get_parameter_types()
             .iter()
-            .map(|t: &Type| t.instantiate(type_args))
+            .map(|t: &Type| t.instantiate(&inst_args))
             .collect();
         let inst_rets: Vec<Type> = callee_env
             .get_return_types()
             .iter()
-            .map(|t: &Type| t.instantiate(type_args))
+            .map(|t: &Type| t.instantiate(&inst_args))
             .collect();
         let fn_type = self.state.lower_function_type(&inst_params, &inst_rets)?;
         let f = llvm.add_external_function(&mangled, fn_type);
