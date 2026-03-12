@@ -20,7 +20,6 @@ fn address() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn ascii() {
     fixture().compile("ascii");
 }
@@ -82,7 +81,6 @@ fn type_name() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn u128() {
     fixture().compile("u128");
 }
@@ -93,7 +91,6 @@ fn u16() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn u256() {
     fixture().compile("u256");
 }
@@ -119,7 +116,6 @@ fn uq32_32() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn uq64_64() {
     fixture().compile("uq64_64");
 }

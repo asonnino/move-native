@@ -155,7 +155,6 @@ fn event() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn funds_accumulator() {
     fixture().compile("funds_accumulator");
 }
@@ -248,7 +247,6 @@ fn pay() {
 }
 
 #[test]
-#[ignore = "compiler emitted x23 (reserved for gas metering)"]
 fn poseidon() {
     fixture().compile("poseidon");
 }
