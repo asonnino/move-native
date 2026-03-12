@@ -11,7 +11,7 @@ use inkwell::values::{
     BasicValueEnum, CallSiteValue, FunctionValue, IntValue, PointerValue, StructValue,
 };
 use move_model::model::FunctionEnv as MoveFunctionEnv;
-use move_model::ty::Type;
+use move_model::ty::{PrimitiveType, Type};
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 
@@ -96,7 +96,6 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         function_data: &FunctionData,
         type_params: Vec<Type>,
     ) -> CompileResult<Self> {
-        // Allocas for all locals
         let locals: Vec<Local> = function_data
             .local_types
             .iter()
@@ -104,7 +103,6 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             .map(|(i, ty)| Local::new(ctx, ty, &type_params, &format!("t{i}")))
             .collect::<CompileResult<_>>()?;
 
-        // Store function parameters into their allocas
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
             let parameter = function
                 .get_nth_param(i as u32)
@@ -112,7 +110,6 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             ctx.builder.build_store(local.alloca, parameter)?;
         }
 
-        // Pre-create basic blocks for all labels
         let mut label_blocks = BTreeMap::new();
         for byte_code in &function_data.code {
             if let Bytecode::Label(_, label) = byte_code {
@@ -132,69 +129,12 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         })
     }
 
-    /// Instantiate type_args through the current function's type parameters.
-    /// Returns the args unchanged for non-generic functions.
-    pub(crate) fn instantiate_types(&self, types: &[Type]) -> Vec<Type> {
-        if self.type_params.is_empty() {
-            types.to_vec()
-        } else {
-            types
-                .iter()
-                .map(|t| t.instantiate(&self.type_params))
-                .collect()
-        }
-    }
-
-    /// Lower a Move type to an LLVM type.
-    pub(crate) fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
-        TypeLowering::new(self.ctx).lower_type(ty)
-    }
-
-    /// Lower Move parameter and return types into an LLVM function type.
-    pub(crate) fn lower_function_type(
-        &self,
-        parameter_types: &[Type],
-        return_types: &[Type],
-    ) -> CompileResult<inkwell::types::FunctionType<'ctx>> {
-        TypeLowering::new(self.ctx).lower_function_type(parameter_types, return_types)
-    }
-
-    /// Declare an external runtime function (e.g. `__move_rt_*`).
-    pub(crate) fn declare_external(
-        &self,
-        name: &str,
-        fn_type: inkwell::types::FunctionType<'ctx>,
-    ) -> FunctionValue<'ctx> {
-        self.ctx.add_external_function(name, fn_type)
-    }
-
-    /// Mangle a Move type.
-    pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
-        self.ctx.mangle_type(ty)
-    }
-
-    /// Mangle type arguments.
-    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
-        self.ctx.mangle_type_args(type_args)
-    }
-
-    /// Mangle a native symbol.
-    pub(crate) fn mangle_native_symbol(
-        &self,
-        callee_env: &MoveFunctionEnv<'_>,
-        type_args: &[Type],
-    ) -> CompileResult<String> {
-        self.ctx.mangle_native_symbol(callee_env, type_args)
-    }
-
-    /// Get a local by index, returning an error if out of bounds.
     pub(crate) fn get_local(&self, idx: usize) -> CompileResult<&Local<'ctx>> {
         self.locals.get(idx).ok_or_else(|| {
             CompileError::InvalidReference(format!("local index {idx} out of bounds"))
         })
     }
 
-    /// Get a label's basic block, returning an error if the label doesn't exist.
     pub(crate) fn get_label_block(
         &self,
         label: &move_stackless_bytecode::stackless_bytecode::Label,
@@ -204,7 +144,6 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         })
     }
 
-    /// Load a local as a generic `BasicValueEnum` (works for any type).
     pub(crate) fn load_value(&self, idx: usize) -> CompileResult<BasicValueEnum<'ctx>> {
         let local = self.get_local(idx)?;
         Ok(self
@@ -213,43 +152,39 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             .build_load(local.llvm_ty, local.alloca, &format!("t{idx}"))?)
     }
 
-    /// Load a local as an `IntValue` (convenience for arithmetic/comparison ops).
     pub(crate) fn load_int(&self, idx: usize) -> CompileResult<IntValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::IntValue(v) => Ok(v),
             other => Err(CompileError::TypeMismatch(format!(
                 "expected integer for local t{idx} (move type {:?}), got LLVM {}",
                 self.get_local(idx)?.mty,
-                llvm_type_name(&other),
+                Self::llvm_type_name(&other),
             ))),
         }
     }
 
-    /// Load a local as a `StructValue` (convenience for struct pack/unpack ops).
     pub(crate) fn load_struct(&self, idx: usize) -> CompileResult<StructValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::StructValue(v) => Ok(v),
             other => Err(CompileError::TypeMismatch(format!(
                 "expected struct for local t{idx} (move type {:?}), got LLVM {}",
                 self.get_local(idx)?.mty,
-                llvm_type_name(&other),
+                Self::llvm_type_name(&other),
             ))),
         }
     }
 
-    /// Load a local as a `PointerValue` (convenience for reference ops).
     pub(crate) fn load_pointer(&self, idx: usize) -> CompileResult<PointerValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::PointerValue(v) => Ok(v),
             other => Err(CompileError::TypeMismatch(format!(
                 "expected pointer for local t{idx} (move type {:?}), got LLVM {}",
                 self.get_local(idx)?.mty,
-                llvm_type_name(&other),
+                Self::llvm_type_name(&other),
             ))),
         }
     }
 
-    /// Store a value into a local's alloca.
     pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) -> CompileResult<()> {
         let local = self.get_local(idx)?;
         self.ctx.builder.build_store(local.alloca, val)?;
@@ -265,14 +200,71 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         }
     }
 
-    /// Allocate a unique ID for global constant names.
+    /// Instantiate type_args through the current function's type parameters.
+    /// Returns the args unchanged for non-generic functions.
+    ///
+    /// Any `TypeParameter` values that survive instantiation are erased to a
+    /// dummy concrete type (`U64`). This happens for phantom type parameters
+    /// when a phantom-generic function is compiled at top level with empty
+    /// `type_params` — the Move verifier guarantees the surviving parameters
+    /// are phantom, so the concrete type chosen does not affect layout.
+    pub(crate) fn instantiate_types(&self, types: &[Type]) -> Vec<Type> {
+        let instantiated = if self.type_params.is_empty() {
+            types.to_vec()
+        } else {
+            types
+                .iter()
+                .map(|t| t.instantiate(&self.type_params))
+                .collect()
+        };
+        instantiated
+            .into_iter()
+            .map(Self::erase_type_params)
+            .collect()
+    }
+
+    pub(crate) fn lower_type(&self, ty: &Type) -> CompileResult<BasicTypeEnum<'ctx>> {
+        TypeLowering::new(self.ctx).lower_type(ty)
+    }
+
+    pub(crate) fn lower_function_type(
+        &self,
+        parameter_types: &[Type],
+        return_types: &[Type],
+    ) -> CompileResult<inkwell::types::FunctionType<'ctx>> {
+        TypeLowering::new(self.ctx).lower_function_type(parameter_types, return_types)
+    }
+
+    pub(crate) fn declare_external(
+        &self,
+        name: &str,
+        fn_type: inkwell::types::FunctionType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        self.ctx.add_external_function(name, fn_type)
+    }
+
+    pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
+        self.ctx.mangle_type(ty)
+    }
+
+    pub(crate) fn mangle_type_args(&self, type_args: &[Type]) -> CompileResult<String> {
+        self.ctx.mangle_type_args(type_args)
+    }
+
+    pub(crate) fn mangle_native_symbol(
+        &self,
+        callee_env: &MoveFunctionEnv<'_>,
+        type_args: &[Type],
+    ) -> CompileResult<String> {
+        self.ctx.mangle_native_symbol(callee_env, type_args)
+    }
+
     pub(crate) fn next_const_id(&self) -> usize {
         let id = self.const_counter.get();
         self.const_counter.set(id + 1);
         id
     }
 
-    /// Emit a private constant global containing the given bytes.
     pub(crate) fn emit_const_global(
         &self,
         name: &str,
@@ -288,16 +280,36 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         global.set_unnamed_addr(true);
         global
     }
-}
 
-/// Short human-readable name for an LLVM value's type (e.g. "ptr", "i64", "struct").
-fn llvm_type_name(val: &BasicValueEnum<'_>) -> &'static str {
-    match val {
-        BasicValueEnum::IntValue(_) => "integer",
-        BasicValueEnum::FloatValue(_) => "float",
-        BasicValueEnum::PointerValue(_) => "pointer",
-        BasicValueEnum::StructValue(_) => "struct",
-        BasicValueEnum::ArrayValue(_) => "array",
-        _ => "other",
+    /// Replace any remaining `TypeParameter` with a dummy concrete type (`U64`).
+    ///
+    /// Surviving type parameters must be phantom (the compiler only compiles
+    /// functions at top level when all type params are phantom), so the
+    /// concrete type chosen does not affect layout or codegen.
+    fn erase_type_params(ty: Type) -> Type {
+        match ty {
+            Type::TypeParameter(_) => Type::Primitive(PrimitiveType::U64),
+            Type::Vector(inner) => Type::Vector(Box::new(Self::erase_type_params(*inner))),
+            Type::Reference(m, inner) => {
+                Type::Reference(m, Box::new(Self::erase_type_params(*inner)))
+            }
+            Type::Datatype(mid, did, args) => Type::Datatype(
+                mid,
+                did,
+                args.into_iter().map(Self::erase_type_params).collect(),
+            ),
+            other => other,
+        }
+    }
+
+    fn llvm_type_name(val: &BasicValueEnum<'_>) -> &'static str {
+        match val {
+            BasicValueEnum::IntValue(_) => "integer",
+            BasicValueEnum::FloatValue(_) => "float",
+            BasicValueEnum::PointerValue(_) => "pointer",
+            BasicValueEnum::StructValue(_) => "struct",
+            BasicValueEnum::ArrayValue(_) => "array",
+            _ => "other",
+        }
     }
 }

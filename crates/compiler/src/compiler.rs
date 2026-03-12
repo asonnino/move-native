@@ -275,6 +275,68 @@ mod tests {
     }
 
     #[test]
+    fn phantom_generic_calls_phantom_generic() {
+        // phantom_read_x<T>(b: &Balance<T>): u64 { b.value }
+        // phantom_proxy<T>(b: &Balance<T>): u64 { phantom_read_x<T>(b) }
+        //
+        // phantom_proxy calls phantom_read_x via CallGeneric with [TypeParameter(0)].
+        // TypeParameter(0) must be erased to produce phantom_read_x$u64.
+        let balance_t = SignatureToken::DatatypeInstantiation(Box::new((
+            DatatypeHandleIndex(0),
+            vec![SignatureToken::TypeParameter(0)],
+        )));
+        let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
+
+        let module = CompiledModuleBuilder::balance()
+            .field_handle(StructDefinitionIndex(0), 0)
+            // FunctionHandleIndex(0): phantom_read_x<T>
+            .generic_function(
+                "phantom_read_x",
+                vec![AbilitySet::EMPTY],
+                vec![ref_balance_t.clone()],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::ImmBorrowField(FieldHandleIndex(0)),
+                    Bytecode::ReadRef,
+                    Bytecode::Ret,
+                ],
+            )
+            // FunctionInstantiationIndex(0): phantom_read_x<TypeParameter(0)>
+            .function_instantiation(
+                move_binary_format::file_format::FunctionHandleIndex(0),
+                vec![SignatureToken::TypeParameter(0)],
+            )
+            // FunctionHandleIndex(1): phantom_proxy<T>
+            .generic_function(
+                "phantom_proxy",
+                vec![AbilitySet::EMPTY],
+                vec![ref_balance_t],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::CallGeneric(
+                        move_binary_format::file_format::FunctionInstantiationIndex(0),
+                    ),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("phantom_read_x$u64"),
+            "should contain erased monomorphization phantom_read_x$u64\n{asm}"
+        );
+        assert!(
+            asm.contains("phantom_proxy"),
+            "phantom_proxy should be compiled\n{asm}"
+        );
+    }
+
+    #[test]
     fn non_phantom_generic_not_compiled_at_top_level() {
         // identity<T>(x: T): T — T is NOT phantom (bare usage in params/returns).
         // This function should NOT be compiled at the top level.

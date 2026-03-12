@@ -49,6 +49,9 @@ fn kitchen_sink_compiles() {
         "eq_points",
         "eq_refs",
         "neq_u64",
+        // Phantom generics
+        "phantom_read_x",
+        "phantom_proxy",
     ] {
         assert!(
             asm.contains(name),
@@ -69,6 +72,10 @@ fn kitchen_sink_compiles() {
     assert!(
         asm.contains("identity$u64"),
         "should contain monomorphized generic (identity$u64)"
+    );
+    assert!(
+        asm.contains("phantom_read_x$u64"),
+        "should contain erased phantom monomorphization (phantom_read_x$u64)\nassembly:\n{asm}"
     );
     assert!(
         asm.contains("__move_rt_abort"),

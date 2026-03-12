@@ -90,7 +90,6 @@ fn config() {
 }
 
 #[test]
-#[ignore = "expected non-void return from call"]
 fn deny_list() {
     fixture().compile("deny_list");
 }
@@ -222,7 +221,6 @@ fn party() {
 }
 
 #[test]
-#[ignore = "expected non-void return from call"]
 fn pay() {
     fixture().compile("pay");
 }
@@ -269,7 +267,6 @@ fn table_vec() {
 }
 
 #[test]
-#[ignore = "expected non-void return from call"]
 fn token() {
     fixture().compile("token");
 }

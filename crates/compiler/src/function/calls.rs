@@ -105,7 +105,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
         let llvm = &self.state.ctx;
         let inst_args = self.state.instantiate_types(type_args);
-        let callee_name = callee_env.get_name_str();
+        let callee_name = Self::qualified_function_name(callee_env);
         let args = self.state.mangle_type_args(&inst_args)?;
         let mangled = format!("{callee_name}${args}");
         let f = match llvm.get_function(&mangled) {
@@ -171,6 +171,18 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             }
         };
         Ok((f, callee_name))
+    }
+
+    /// Module-qualified function name for monomorphized symbols.
+    ///
+    /// Uses `module_name::function_name` (with `::` replaced by `_`) to avoid
+    /// collisions when different modules have functions with the same name
+    /// (e.g. two different `remove` functions monomorphized with the same type args).
+    fn qualified_function_name(callee_env: &move_model::model::FunctionEnv<'_>) -> String {
+        let module_env = &callee_env.module_env;
+        let module_name = module_env.get_full_name_str().replace("::", "_");
+        let function_name = callee_env.get_name_str();
+        format!("{module_name}_{function_name}")
     }
 }
 

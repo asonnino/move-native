@@ -12,11 +12,11 @@
 //!
 //!     struct Point has copy, drop, store { x: u64, y: u64 }
 //!
-//!     // ═══ Structs ═══
+//!     // Structs
 //!     public fun make_point(x: u64, y: u64): Point { Point { x, y } }
 //!     public fun sum_point(p: Point): u64 { let Point { x, y } = p; x + y }
 //!
-//!     // ═══ Arithmetic & types ═══
+//!     // Arithmetic & types
 //!     public fun forty_two(): u64 { 42 }
 //!     public fun low_byte(x: u64): u8 { (x as u8) }
 //!     public fun cast_widths(x: u64): u64 { ((((x as u16) as u32) as u128) as u256) as u64 }
@@ -26,37 +26,37 @@
 //!     public fun add_u256(a: u256, b: u256): u256 { a + b }
 //!     public fun discard(x: u64): u64 { let _ = 99; x }
 //!
-//!     // ═══ References ═══
+//!     // References
 //!     public fun swap_fields(p: &mut Point): u64 { /* swap x,y; return x+y */ }
 //!     public fun freeze_and_read(p: &mut Point): u64 { *freeze(&mut p.x) }
 //!     public fun read_x(p: &Point): u64 { *&p.x }
 //!
-//!     // ═══ Control flow ═══
+//!     // Control flow
 //!     public fun swap_u64(a: u64, b: u64): (u64, u64) { (b, a) }
 //!     public fun checked_sub(a: u64, b: u64): u64 { if (b > a) abort 1; a - b }
 //!
-//!     // ═══ Calls & generics ═══
+//!     // Calls & generics
 //!     public fun round_trip(x: u64, y: u64): u64 { sum_point(make_point(x, y)) }
 //!     public fun identity<T>(x: T): T { x }
 //!     public fun call_identity(x: u64): u64 { identity<u64>(x) }
 //!
-//!     // ═══ Loops ═══
+//!     // Loops
 //!     public fun sum_loop(n: u64): u64 { /* while i < n: sum += i + (i+1) */ }
 //!
-//!     // ═══ Integration ═══
+//!     // Integration
 //!     public fun integration_test(n: u64): u64 {
 //!         checked_sub(swap_u64(call_identity(sum_loop(n)), 0))
 //!     }
 //!
-//!     // ═══ Cross-module ═══
+//!     // Cross-module
 //!     public fun call_double(x: u64): u64 { Dep::double(x) }
 //!
-//!     // ═══ Equality ═══
+//!     // Equality
 //!     public fun eq_points(a: Point, b: Point): bool { a == b }
 //!     public fun eq_refs(a: &u64, b: &u64): bool { *a == *b }
 //!     public fun neq_u64(a: u64, b: u64): bool { a != b }
 //!
-//!     // ═══ Vectors ═══
+//!     // Vectors
 //!     public fun test_vec(a: u64, b: u64): u64 {
 //!         let v = vector::empty<u64>();
 //!         vector::push_back(&mut v, a);
@@ -66,6 +66,10 @@
 //!         vector::destroy_empty(v);
 //!         x + y
 //!     }
+//!
+//!     // Phantom generics
+//!     public fun phantom_read_x<T>(p: &Point): u64 { read_x(p) }
+//!     public fun phantom_proxy<T>(p: &Point): u64 { phantom_read_x<T>(p) }
 //! }
 //! ```
 //!
@@ -95,7 +99,7 @@ impl CompiledModuleBuilder {
     ///
     /// Returns `(main_module, dependency_modules)`.
     ///
-    /// Contains 25 functions operating on a `Point { x: u64, y: u64 }` struct:
+    /// Contains 28 functions operating on a `Point { x: u64, y: u64 }` struct:
     ///
     /// | Index | Name              | Tests                                        |
     /// |-------|-------------------|----------------------------------------------|
@@ -125,13 +129,15 @@ impl CompiledModuleBuilder {
     /// | 23    | `eq_points`       | struct field-by-field Eq                     |
     /// | 24    | `eq_refs`         | reference deref + integer Eq                 |
     /// | 25    | `neq_u64`         | Neq (xor negation path)                      |
+    /// | 26    | `phantom_read_x<T>` | phantom-generic compiled at top level       |
+    /// | 27    | `phantom_proxy<T>`  | phantom type param erasure through CallGeneric |
     pub fn kitchen_sink() -> (CompiledModule, Vec<CompiledModule>) {
         let point = Datatype(DatatypeHandleIndex(0));
         let mut_point_ref = MutableReference(Box::new(point.clone()));
         let mut_u64_ref = MutableReference(Box::new(U64));
 
         let builder = Self::new()
-            // --- Struct ---
+            // Struct
             // DatatypeHandleIndex(0): Point { x: u64, y: u64 }
             .struct_definition(
                 "Point",
@@ -141,8 +147,8 @@ impl CompiledModuleBuilder {
             // FieldHandleIndex(0): Point.x, FieldHandleIndex(1): Point.y
             .field_handle(StructDefinitionIndex(0), 0)
             .field_handle(StructDefinitionIndex(0), 1)
-            // ═══ Structs (0–1) ═══
-            // --- FunctionHandleIndex(0): make_point(x: u64, y: u64): Point ---
+            // Structs (0–1)
+            // FunctionHandleIndex(0): make_point(x: u64, y: u64): Point
             .function(
                 "make_point",
                 vec![U64, U64],
@@ -150,7 +156,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Pack(StructDefinitionIndex(0)), Ret],
             )
-            // --- FunctionHandleIndex(1): sum_point(p: Point): u64 ---
+            // FunctionHandleIndex(1): sum_point(p: Point): u64
             .function(
                 "sum_point",
                 vec![point.clone()],
@@ -167,10 +173,10 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // ═══ Arithmetic & types (2–9) ═══
-            // --- FunctionHandleIndex(2): forty_two(): u64 ---
+            // Arithmetic & types (2–9)
+            // FunctionHandleIndex(2): forty_two(): u64
             .function("forty_two", vec![], vec![U64], vec![], vec![LdU64(42), Ret])
-            // --- FunctionHandleIndex(3): low_byte(x: u64): u8 ---
+            // FunctionHandleIndex(3): low_byte(x: u64): u8
             .function(
                 "low_byte",
                 vec![U64],
@@ -178,7 +184,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CastU8, Ret],
             )
-            // --- FunctionHandleIndex(4): cast_widths(x: u64): u64 ---
+            // FunctionHandleIndex(4): cast_widths(x: u64): u64
             // Chains CastU16 → CastU32 → CastU128 → CastU256 → CastU64 to round-trip
             .function(
                 "cast_widths",
@@ -195,7 +201,7 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // --- FunctionHandleIndex(5): add_u16(a: u16, b: u16): u16 ---
+            // FunctionHandleIndex(5): add_u16(a: u16, b: u16): u16
             .function(
                 "add_u16",
                 vec![U16, U16],
@@ -203,7 +209,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Add, Ret],
             )
-            // --- FunctionHandleIndex(6): add_u32(a: u32, b: u32): u32 ---
+            // FunctionHandleIndex(6): add_u32(a: u32, b: u32): u32
             .function(
                 "add_u32",
                 vec![U32, U32],
@@ -211,7 +217,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Add, Ret],
             )
-            // --- FunctionHandleIndex(7): add_u128(a: u128, b: u128): u128 ---
+            // FunctionHandleIndex(7): add_u128(a: u128, b: u128): u128
             .function(
                 "add_u128",
                 vec![U128, U128],
@@ -219,7 +225,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Add, Ret],
             )
-            // --- FunctionHandleIndex(8): add_u256(a: u256, b: u256): u256 ---
+            // FunctionHandleIndex(8): add_u256(a: u256, b: u256): u256
             .function(
                 "add_u256",
                 vec![U256, U256],
@@ -227,7 +233,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Add, Ret],
             )
-            // --- FunctionHandleIndex(9): discard(x: u64): u64 ---
+            // FunctionHandleIndex(9): discard(x: u64): u64
             // Pop (Destroy) to discard a value
             .function(
                 "discard",
@@ -241,8 +247,8 @@ impl CompiledModuleBuilder {
                     Ret,        // return x
                 ],
             )
-            // ═══ References (10–12) ═══
-            // --- FunctionHandleIndex(10): swap_fields(p: &mut Point): u64 ---
+            // References (10–12)
+            // FunctionHandleIndex(10): swap_fields(p: &mut Point): u64
             .function(
                 "swap_fields",
                 vec![mut_point_ref],
@@ -273,7 +279,7 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // --- FunctionHandleIndex(11): freeze_and_read(p: &mut Point): u64 ---
+            // FunctionHandleIndex(11): freeze_and_read(p: &mut Point): u64
             // MutBorrowField → FreezeRef → ReadRef
             .function(
                 "freeze_and_read",
@@ -288,7 +294,7 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // --- FunctionHandleIndex(12): read_x(p: &Point): u64 ---
+            // FunctionHandleIndex(12): read_x(p: &Point): u64
             // ImmBorrowField → ReadRef
             .function(
                 "read_x",
@@ -302,8 +308,8 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // ═══ Control flow (13–14) ═══
-            // --- FunctionHandleIndex(13): swap_u64(a: u64, b: u64): (u64, u64) ---
+            // Control flow (13–14)
+            // FunctionHandleIndex(13): swap_u64(a: u64, b: u64): (u64, u64)
             .function(
                 "swap_u64",
                 vec![U64, U64],
@@ -311,7 +317,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(1), CopyLoc(0), Ret],
             )
-            // --- FunctionHandleIndex(14): checked_sub(a: u64, b: u64): u64 ---
+            // FunctionHandleIndex(14): checked_sub(a: u64, b: u64): u64
             .function(
                 "checked_sub",
                 vec![U64, U64],
@@ -330,8 +336,8 @@ impl CompiledModuleBuilder {
                     Ret,        // 9
                 ],
             )
-            // ═══ Calls & generics (15–17) ═══
-            // --- FunctionHandleIndex(15): round_trip(x: u64, y: u64): u64 ---
+            // Calls & generics (15–17)
+            // FunctionHandleIndex(15): round_trip(x: u64, y: u64): u64
             .function(
                 "round_trip",
                 vec![U64, U64],
@@ -349,7 +355,7 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // --- FunctionHandleIndex(16): identity<T>(x: T): T ---
+            // FunctionHandleIndex(16): identity<T>(x: T): T
             .generic_function(
                 "identity",
                 vec![AbilitySet::EMPTY],
@@ -360,7 +366,7 @@ impl CompiledModuleBuilder {
             )
             // FunctionInstantiationIndex(0): identity<u64>
             .function_instantiation(FunctionHandleIndex(16), vec![U64])
-            // --- FunctionHandleIndex(17): call_identity(x: u64): u64 ---
+            // FunctionHandleIndex(17): call_identity(x: u64): u64
             .function(
                 "call_identity",
                 vec![U64],
@@ -368,8 +374,8 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CallGeneric(FunctionInstantiationIndex(0)), Ret],
             )
-            // ═══ Loops (18) ═══
-            // --- FunctionHandleIndex(18): sum_loop(n: u64): u64 ---
+            // Loops (18)
+            // FunctionHandleIndex(18): sum_loop(n: u64): u64
             // sum of (i + i+1) for i=0..n-1 = n²
             .function(
                 "sum_loop",
@@ -407,8 +413,8 @@ impl CompiledModuleBuilder {
                     Ret,        // 25
                 ],
             )
-            // ═══ Integration (19) ═══
-            // --- FunctionHandleIndex(19): integration_test(n: u64): u64 ---
+            // Integration (19)
+            // FunctionHandleIndex(19): integration_test(n: u64): u64
             // Chains: sum_loop → call_identity → swap_u64 → checked_sub
             // Result: n²
             .function(
@@ -435,13 +441,13 @@ impl CompiledModuleBuilder {
                 ],
             );
 
-        // ═══ Cross-module (20–21) ═══
-        // --- Foreign module: Dep (for cross-module call) ---
+        // Cross-module (20–21)
+        // Foreign module: Dep (for cross-module call)
         let (builder, dep_handle) = builder.foreign_module(AccountAddress::ZERO, "Dep");
         // FunctionHandleIndex(20): Dep::double (foreign, no body)
         let builder = builder.foreign_function(dep_handle, "double", vec![U64], vec![U64]);
 
-        // --- FunctionHandleIndex(21): call_double(x: u64): u64 ---
+        // FunctionHandleIndex(21): call_double(x: u64): u64
         let builder = builder.function(
             "call_double",
             vec![U64],
@@ -450,14 +456,14 @@ impl CompiledModuleBuilder {
             vec![CopyLoc(0), Call(FunctionHandleIndex(20)), Ret],
         );
 
-        // ═══ Vectors (22) ═══
-        // --- Foreign module: vector (for vector ops) ---
+        // Vectors (22)
+        // Foreign module: vector (for vector ops)
         let (builder, _vec_handle) = builder.foreign_module(AccountAddress::ONE, "vector");
 
         // Signature for VecXxx element type
         let (builder, vec_element_signature) = builder.signature(vec![U64]);
 
-        // --- FunctionHandleIndex(22): test_vec(a: u64, b: u64): u64 ---
+        // FunctionHandleIndex(22): test_vec(a: u64, b: u64): u64
         let main_module = builder
             .function(
                 "test_vec",
@@ -487,8 +493,8 @@ impl CompiledModuleBuilder {
                     Ret,
                 ],
             )
-            // ═══ Equality (23–25) ═══
-            // --- FunctionHandleIndex(23): eq_points(a: Point, b: Point): bool ---
+            // Equality (23–25)
+            // FunctionHandleIndex(23): eq_points(a: Point, b: Point): bool
             .function(
                 "eq_points",
                 vec![point.clone(), point.clone()],
@@ -496,7 +502,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Eq, Ret],
             )
-            // --- FunctionHandleIndex(24): eq_refs(a: &u64, b: &u64): bool ---
+            // FunctionHandleIndex(24): eq_refs(a: &u64, b: &u64): bool
             .function(
                 "eq_refs",
                 vec![Reference(Box::new(U64)), Reference(Box::new(U64))],
@@ -504,7 +510,7 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Eq, Ret],
             )
-            // --- FunctionHandleIndex(25): neq_u64(a: u64, b: u64): bool ---
+            // FunctionHandleIndex(25): neq_u64(a: u64, b: u64): bool
             .function(
                 "neq_u64",
                 vec![U64, U64],
@@ -512,9 +518,33 @@ impl CompiledModuleBuilder {
                 vec![],
                 vec![CopyLoc(0), CopyLoc(1), Neq, Ret],
             )
+            // Phantom generics (26–27)
+            // FunctionHandleIndex(26): phantom_read_x<T>(p: &Point): u64
+            // Generic with phantom T (T absent from params/returns), calls non-generic read_x.
+            .generic_function(
+                "phantom_read_x",
+                vec![AbilitySet::EMPTY],
+                vec![Reference(Box::new(point.clone()))],
+                vec![U64],
+                vec![],
+                vec![CopyLoc(0), Call(FunctionHandleIndex(12)), Ret],
+            )
+            // FunctionInstantiationIndex(1): phantom_read_x<TypeParameter(0)>
+            .function_instantiation(FunctionHandleIndex(26), vec![TypeParameter(0)])
+            // FunctionHandleIndex(27): phantom_proxy<T>(p: &Point): u64
+            // Generic with phantom T, calls phantom_read_x<T> via CallGeneric.
+            // Exercises the erasure path: TypeParameter(0) must be erased to u64.
+            .generic_function(
+                "phantom_proxy",
+                vec![AbilitySet::EMPTY],
+                vec![Reference(Box::new(point))],
+                vec![U64],
+                vec![],
+                vec![CopyLoc(0), CallGeneric(FunctionInstantiationIndex(1)), Ret],
+            )
             .build();
 
-        // --- Build dependency modules ---
+        // Build dependency modules
         let dep_module = Self::named("Dep", AccountAddress::ZERO)
             .function(
                 "double",
