@@ -22,6 +22,17 @@ fn add_module_from_mv_file() {
     );
 }
 
+/// Nested loops and if/else branches (control_flow.mv).
+#[test]
+fn control_flow_module_from_mv_file() {
+    let bytecode = include_bytes!("../../../tests/move_samples/control_flow.mv");
+    let asm =
+        compiler::compile(&Target::host(), bytecode).expect("control_flow.mv compilation failed");
+    assert!(asm.contains("sum_to"), "missing sum_to");
+    assert!(asm.contains("sum_even"), "missing sum_even");
+    assert!(asm.contains("nested_sum"), "missing nested_sum");
+}
+
 // ===================================================================
 // Tier 2: Sui framework modules (expected failures — uncomment as supported)
 // ===================================================================
