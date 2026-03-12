@@ -10,10 +10,10 @@ mod fixtures;
 use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{
     AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, Constant, DatatypeHandle,
-    DatatypeHandleIndex, FieldDefinition, FieldHandle, FunctionDefinition, FunctionHandle,
-    FunctionHandleIndex, FunctionInstantiation, IdentifierIndex, ModuleHandle, ModuleHandleIndex,
-    Signature, SignatureIndex, SignatureToken, StructDefinition, StructDefinitionIndex,
-    StructFieldInformation, TypeSignature, Visibility,
+    DatatypeHandleIndex, DatatypeTyParameter, FieldDefinition, FieldHandle, FunctionDefinition,
+    FunctionHandle, FunctionHandleIndex, FunctionInstantiation, IdentifierIndex, ModuleHandle,
+    ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefInstantiation,
+    StructDefinition, StructDefinitionIndex, StructFieldInformation, TypeSignature, Visibility,
 };
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
@@ -32,6 +32,7 @@ pub struct CompiledModuleBuilder {
     datatype_handles: Vec<DatatypeHandle>,
     struct_defs: Vec<StructDefinition>,
     field_handles: Vec<FieldHandle>,
+    struct_def_instantiations: Vec<StructDefInstantiation>,
     constant_pool: Vec<Constant>,
     foreign_modules: Vec<(AccountAddress, IdentifierIndex)>,
 }
@@ -59,6 +60,7 @@ impl CompiledModuleBuilder {
             function_instantiations: vec![],
             datatype_handles: vec![],
             struct_defs: vec![],
+            struct_def_instantiations: vec![],
             field_handles: vec![],
             constant_pool: vec![],
             foreign_modules: vec![],
@@ -311,6 +313,48 @@ impl CompiledModuleBuilder {
         self
     }
 
+    /// Add a struct definition with generic type parameters.
+    ///
+    /// Like `struct_definition` but accepts `DatatypeTyParameter`s, allowing
+    /// phantom type parameters (e.g. `struct Balance<phantom T> { value: u64 }`).
+    pub fn generic_struct_definition(
+        mut self,
+        name: &str,
+        abilities: AbilitySet,
+        type_parameters: Vec<DatatypeTyParameter>,
+        fields: Vec<(&str, SignatureToken)>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let handle_idx = DatatypeHandleIndex(self.datatype_handles.len() as u16);
+        self.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: name_idx,
+            abilities,
+            type_parameters,
+        });
+
+        let field_defs: Vec<FieldDefinition> = fields
+            .into_iter()
+            .map(|(field_name, ty)| {
+                let field_name_idx = IdentifierIndex(self.identifiers.len() as u16);
+                self.identifiers.push(Identifier::new(field_name).unwrap());
+                FieldDefinition {
+                    name: field_name_idx,
+                    signature: TypeSignature(ty),
+                }
+            })
+            .collect();
+
+        self.struct_defs.push(StructDefinition {
+            struct_handle: handle_idx,
+            field_information: StructFieldInformation::Declared(field_defs),
+        });
+
+        self
+    }
+
     /// Add a field handle (for `ImmBorrowField` / `MutBorrowField`).
     ///
     /// The `FieldHandleIndex` equals the insertion order (0, 1, …).
@@ -331,6 +375,23 @@ impl CompiledModuleBuilder {
         self.signatures.push(Signature(type_args));
         self.function_instantiations.push(FunctionInstantiation {
             handle,
+            type_parameters: sig_idx,
+        });
+        self
+    }
+
+    /// Add a struct definition instantiation (for `PackGeneric` / `UnpackGeneric`).
+    ///
+    /// The `StructDefInstantiationIndex` equals the insertion order (0, 1, …).
+    pub fn struct_def_instantiation(
+        mut self,
+        def: StructDefinitionIndex,
+        type_args: Vec<SignatureToken>,
+    ) -> Self {
+        let sig_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(type_args));
+        self.struct_def_instantiations.push(StructDefInstantiation {
+            def,
             type_parameters: sig_idx,
         });
         self
@@ -440,7 +501,7 @@ impl CompiledModuleBuilder {
             metadata: vec![],
             field_handles: self.field_handles,
             friend_decls: vec![],
-            struct_def_instantiations: vec![],
+            struct_def_instantiations: self.struct_def_instantiations,
             function_instantiations: self.function_instantiations,
             field_instantiations: vec![],
             enum_defs: vec![],

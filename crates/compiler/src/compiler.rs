@@ -5,6 +5,7 @@ use inkwell::context::Context;
 use inkwell::values::FunctionValue;
 use move_binary_format::CompiledModule;
 use move_model::model::FunctionEnv;
+use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
@@ -65,12 +66,15 @@ impl<'ctx> Compiler<'ctx> {
     fn emit(&self) -> CompileResult<Assembly> {
         let target_module_env = self.ctx.target_module();
 
-        // Collect non-generic, non-native functions — the ones we compile
-        // directly. Natives are implemented in Rust; generics are monomorphized
-        // on demand at call sites (see CallEmitter::emit_generic).
+        // Collect non-native functions that we can compile directly:
+        // - Non-generic functions (no type params)
+        // - Phantom-only generic functions (all type params are phantom)
+        //
+        // Truly generic functions are monomorphized on demand at call sites
+        // (see CallEmitter::emit_generic). Natives are implemented in Rust.
         let targets: Vec<_> = target_module_env
             .into_functions()
-            .filter(|t| !t.is_native() && t.get_type_parameter_count() == 0)
+            .filter(|t| !t.is_native() && self.has_only_phantom_type_params(t))
             .map(|function_env| {
                 let generator = StacklessBytecodeGenerator::new(&function_env);
                 let function_data = generator.generate_function();
@@ -109,6 +113,48 @@ impl<'ctx> Compiler<'ctx> {
         Ok(self.ctx.add_function(&name, function_type))
     }
 
+    /// Returns true if the function has no type parameters, or all of its
+    /// type parameters only appear in phantom positions of struct type arguments.
+    ///
+    /// Phantom-only generic functions can be compiled as-if non-generic because
+    /// the phantom type parameters don't affect memory layout or code generation.
+    fn has_only_phantom_type_params(&self, function_env: &FunctionEnv<'_>) -> bool {
+        let count = function_env.get_type_parameter_count();
+        if count == 0 {
+            return true;
+        }
+        // We only need to check the function signature (parameters + returns).
+        // Move's bytecode verifier guarantees that phantom type parameters cannot
+        // appear in non-phantom positions anywhere in the function body either,
+        // so the signature check is sufficient.
+        let param_types = function_env.get_parameter_types();
+        let return_types = function_env.get_return_types();
+        let all_types: Vec<&Type> = param_types.iter().chain(return_types.iter()).collect();
+
+        (0..count as u16).all(|idx| all_types.iter().all(|ty| self.is_phantom_in_type(idx, ty)))
+    }
+
+    /// Check that `TypeParameter(param_idx)` only appears in phantom positions within `ty`.
+    ///
+    /// Returns `true` if the type parameter is either absent or only used as a
+    /// type argument in a phantom position of a struct.
+    fn is_phantom_in_type(&self, param_idx: u16, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParameter(idx) => *idx != param_idx,
+            Type::Primitive(_) => true,
+            Type::Reference(_, inner) | Type::Vector(inner) => {
+                self.is_phantom_in_type(param_idx, inner)
+            }
+            Type::Datatype(module_id, datatype_id, type_args) => {
+                let struct_env = self.ctx.get_struct_env(*module_id, *datatype_id);
+                type_args.iter().enumerate().all(|(i, arg)| {
+                    struct_env.is_phantom_parameter(i) || self.is_phantom_in_type(param_idx, arg)
+                })
+            }
+            _ => true,
+        }
+    }
+
     /// Compile the body of an already-declared LLVM function.
     fn compile_function(
         &self,
@@ -129,6 +175,11 @@ impl<'ctx> Compiler<'ctx> {
 
 #[cfg(test)]
 mod tests {
+    use move_binary_format::file_format::{
+        AbilitySet, Bytecode, DatatypeHandleIndex, FieldHandleIndex, SignatureToken,
+        StructDefinitionIndex,
+    };
+
     use crate::{Compiler, Target, module::CompiledModuleBuilder};
 
     #[test]
@@ -149,5 +200,97 @@ mod tests {
         // Pass empty deps — dependency validation catches missing modules.
         let result = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[]);
         assert!(result.is_err(), "missing dependencies should fail");
+    }
+
+    #[test]
+    fn phantom_generic_value_compiles() {
+        // value<T>(self: &Balance<T>): u64 { self.value }
+        let balance_t = SignatureToken::DatatypeInstantiation(Box::new((
+            DatatypeHandleIndex(0),
+            vec![SignatureToken::TypeParameter(0)],
+        )));
+        let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
+
+        let module = CompiledModuleBuilder::balance()
+            .field_handle(StructDefinitionIndex(0), 0)
+            .generic_function(
+                "value",
+                vec![AbilitySet::EMPTY],
+                vec![ref_balance_t],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),                          // push &self
+                    Bytecode::ImmBorrowField(FieldHandleIndex(0)), // &self.value
+                    Bytecode::ReadRef,                             // *(&self.value)
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("value"),
+            "phantom-generic 'value' should be compiled\n{asm}"
+        );
+        assert!(asm.contains("ret"), "should contain ret\n{asm}");
+    }
+
+    #[test]
+    fn phantom_generic_zero_compiles() {
+        // zero<T>(): Balance<T> { Balance { value: 0 } }
+        let balance_t = SignatureToken::DatatypeInstantiation(Box::new((
+            DatatypeHandleIndex(0),
+            vec![SignatureToken::TypeParameter(0)],
+        )));
+
+        let module = CompiledModuleBuilder::balance()
+            .generic_function(
+                "zero",
+                vec![AbilitySet::EMPTY],
+                vec![],
+                vec![balance_t],
+                vec![],
+                vec![
+                    Bytecode::LdU64(0),
+                    Bytecode::PackGeneric(
+                        move_binary_format::file_format::StructDefInstantiationIndex(0),
+                    ),
+                    Bytecode::Ret,
+                ],
+            )
+            .struct_def_instantiation(
+                StructDefinitionIndex(0),
+                vec![SignatureToken::TypeParameter(0)],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("zero"),
+            "phantom-generic 'zero' should be compiled\n{asm}"
+        );
+    }
+
+    #[test]
+    fn non_phantom_generic_not_compiled_at_top_level() {
+        // identity<T>(x: T): T — T is NOT phantom (bare usage in params/returns).
+        // This function should NOT be compiled at the top level.
+        let module = CompiledModuleBuilder::new()
+            .generic_function(
+                "identity",
+                vec![AbilitySet::EMPTY],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![],
+                vec![Bytecode::MoveLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            !asm.contains("identity"),
+            "non-phantom generic 'identity' should NOT be compiled at top level\n{asm}"
+        );
     }
 }

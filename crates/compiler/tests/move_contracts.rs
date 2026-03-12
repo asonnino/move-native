@@ -35,10 +35,11 @@ fn add_module_from_mv_file() {
 //   sui move build --path <module_dir>
 
 // #[test]
-// #[ignore = "requires balance.mv — not yet supported: phantom generics"]
+// #[ignore = "requires dependency .mv files (ascii, string, type_name, tx_context, object, ...)"]
 // fn sui_framework_balance() {
 //     let bytecode = include_bytes!("../../../tests/move_samples/sui_framework/balance.mv");
-//     compiler::compile(&compiler::Target::Aarch64, bytecode)
+//     // TODO: use compile_module_with_dependencies once dependency loading is supported.
+//     compiler::compile(&Target::host(), bytecode)
 //         .expect("balance.mv compilation failed");
 // }
 
