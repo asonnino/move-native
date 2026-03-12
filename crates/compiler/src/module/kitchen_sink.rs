@@ -117,7 +117,7 @@ impl CompiledModuleBuilder {
     /// | 20    | `double` (foreign)| declared in Dep module                       |
     /// | 21    | `call_double`     | cross-module call to Dep::double             |
     /// | 22    | `test_vec`        | vector ops (VecPack/PushBack/PopBack/Unpack) |
-    pub fn all_features() -> (CompiledModule, Vec<CompiledModule>) {
+    pub fn kitchen_sink() -> (CompiledModule, Vec<CompiledModule>) {
         let point = Datatype(DatatypeHandleIndex(0));
         let mut_point_ref = MutableReference(Box::new(point.clone()));
         let mut_u64_ref = MutableReference(Box::new(U64));

@@ -8,8 +8,8 @@ use compiler::{Compiler, Target};
 use move_binary_format::file_format::{Bytecode, SignatureToken};
 
 #[test]
-fn all_features_compiles() {
-    let (module, deps) = CompiledModuleBuilder::all_features();
+fn kitchen_sink_compiles() {
+    let (module, deps) = CompiledModuleBuilder::kitchen_sink();
     let asm = Compiler::compile_module_with_dependencies(&Target::host(), &module, &deps).unwrap();
 
     // Verify all function symbols are present

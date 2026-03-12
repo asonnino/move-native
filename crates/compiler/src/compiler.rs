@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn missing_dependency_is_error() {
-        let (module, _deps) = CompiledModuleBuilder::all_features();
+        let (module, _deps) = CompiledModuleBuilder::kitchen_sink();
         // Pass empty deps — dependency validation catches missing modules.
         let result = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[]);
         assert!(result.is_err(), "missing dependencies should fail");
