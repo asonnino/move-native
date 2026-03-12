@@ -4,7 +4,7 @@
 //! Integration tests for instrumenter
 //!
 //! These tests exercise the full instrumentation pipeline using real assembly files
-//! from `tests/asm_samples/`. They verify that:
+//! from `tests/asm/`. They verify that:
 //!
 //! 1. Assembly files parse correctly
 //! 2. Back-edges are detected accurately
@@ -16,16 +16,14 @@
 
 use instrumenter::{ParsedAssembly, build_cfg, instrument};
 
-const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
-const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
-const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm_samples/forward_only.s");
-const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
-const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/cbz_loop.s");
-const UNCONDITIONAL_LOOP_ASM: &str =
-    include_str!("../../../tests/asm_samples/unconditional_loop.s");
-const MULTIPLE_FUNCTIONS_ASM: &str =
-    include_str!("../../../tests/asm_samples/multiple_functions.s");
-const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm_samples/large_block.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm/simple_loop.s");
+const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm/nested_loops.s");
+const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm/forward_only.s");
+const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm/function_call.s");
+const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm/cbz_loop.s");
+const UNCONDITIONAL_LOOP_ASM: &str = include_str!("../../../tests/asm/unconditional_loop.s");
+const MULTIPLE_FUNCTIONS_ASM: &str = include_str!("../../../tests/asm/multiple_functions.s");
+const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm/large_block.s");
 
 /// Tests the full instrumentation pipeline on a simple loop.
 ///

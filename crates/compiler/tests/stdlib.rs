@@ -7,11 +7,8 @@
 use compiler::module::framework::ModuleFixture;
 
 fn fixture() -> ModuleFixture {
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/move_samples/sui_framework"
-    );
-    ModuleFixture::from_dir(format!("{base}/move_stdlib"))
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
+    ModuleFixture::from_dir(format!("{base}/stdlib"))
 }
 
 #[test]
@@ -75,7 +72,7 @@ fn string() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got PointerValue"]
+#[ignore = "Eq on reference types not yet supported"]
 fn type_name() {
     fixture().compile("type_name");
 }

@@ -7,12 +7,9 @@
 use compiler::module::framework::ModuleFixture;
 
 fn fixture() -> ModuleFixture {
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/move_samples/sui_framework"
-    );
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
     ModuleFixture::from_dir(format!("{base}/sui"))
-        .with_dependencies_from_dir(format!("{base}/move_stdlib"))
+        .with_dependencies_from_dir(format!("{base}/stdlib"))
 }
 
 #[test]

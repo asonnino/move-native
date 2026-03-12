@@ -6,18 +6,15 @@
 use compiler::module::framework::ModuleFixture;
 
 fn fixture() -> ModuleFixture {
-    let dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/move_samples/custom"
-    );
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move/custom");
     ModuleFixture::from_dir(dir)
 }
 
 fn fixture_with_dependencies() -> ModuleFixture {
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move_samples");
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
     ModuleFixture::from_dir(format!("{base}/custom"))
-        .with_dependencies_from_dir(format!("{base}/sui_framework/move_stdlib"))
-        .with_dependencies_from_dir(format!("{base}/sui_framework/sui"))
+        .with_dependencies_from_dir(format!("{base}/stdlib"))
+        .with_dependencies_from_dir(format!("{base}/sui"))
 }
 
 /// End-to-end from the checked-in add.mv (two-argument u64 addition).

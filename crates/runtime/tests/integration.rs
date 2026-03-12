@@ -15,20 +15,18 @@ use tempfile::TempDir;
 /// The function type for all test functions
 type TestFn = unsafe extern "C" fn();
 
-const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
-const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
-const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm_samples/forward_only.s");
-const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
-const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/cbz_loop.s");
-const UNCONDITIONAL_LOOP_ASM: &str =
-    include_str!("../../../tests/asm_samples/unconditional_loop.s");
-const MULTIPLE_FUNCTIONS_ASM: &str =
-    include_str!("../../../tests/asm_samples/multiple_functions.s");
-const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm_samples/large_block.s");
-const NULL_DEREF_ASM: &str = include_str!("../../../tests/asm_samples/null_deref.s");
-const UNMAPPED_JUMP_ASM: &str = include_str!("../../../tests/asm_samples/unmapped_jump.s");
-const STACK_THEN_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/stack_then_fault.s");
-const NESTED_FAULT_ASM: &str = include_str!("../../../tests/asm_samples/nested_fault.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm/simple_loop.s");
+const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm/nested_loops.s");
+const FORWARD_ONLY_ASM: &str = include_str!("../../../tests/asm/forward_only.s");
+const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm/function_call.s");
+const CBZ_LOOP_ASM: &str = include_str!("../../../tests/asm/cbz_loop.s");
+const UNCONDITIONAL_LOOP_ASM: &str = include_str!("../../../tests/asm/unconditional_loop.s");
+const MULTIPLE_FUNCTIONS_ASM: &str = include_str!("../../../tests/asm/multiple_functions.s");
+const LARGE_BLOCK_ASM: &str = include_str!("../../../tests/asm/large_block.s");
+const NULL_DEREF_ASM: &str = include_str!("../../../tests/asm/null_deref.s");
+const UNMAPPED_JUMP_ASM: &str = include_str!("../../../tests/asm/unmapped_jump.s");
+const STACK_THEN_FAULT_ASM: &str = include_str!("../../../tests/asm/stack_then_fault.s");
+const NESTED_FAULT_ASM: &str = include_str!("../../../tests/asm/nested_fault.s");
 
 /// Instruments the assembly using instrumenter.
 fn instrument_asm(source: &str) -> String {

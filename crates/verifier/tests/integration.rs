@@ -17,9 +17,9 @@ use object::{Object, ObjectSection};
 use tempfile::TempDir;
 use verifier::{GasEffect, VerificationError, Verifier, decode_instructions};
 
-const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm_samples/simple_loop.s");
-const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm_samples/nested_loops.s");
-const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm_samples/function_call.s");
+const SIMPLE_LOOP_ASM: &str = include_str!("../../../tests/asm/simple_loop.s");
+const NESTED_LOOPS_ASM: &str = include_str!("../../../tests/asm/nested_loops.s");
+const FUNCTION_CALL_ASM: &str = include_str!("../../../tests/asm/function_call.s");
 
 /// Assembles the given assembly source and returns the code section bytes.
 fn assemble(source: &str) -> Vec<u8> {

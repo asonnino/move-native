@@ -175,8 +175,8 @@ move-native/
 │       └── Cargo.toml
 │
 ├── tests/
-│   ├── move_sources/          # Test Move programs
-│   ├── asm_samples/           # Hand-written Arm64 for testing
+│   ├── move/                  # Test Move programs
+│   ├── asm/                   # Hand-written Arm64 for testing
 │   └── integration/
 │
 └── README.md
