@@ -1,24 +1,37 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use move_model::ty::Type;
-use move_stackless_bytecode::stackless_bytecode::{Bytecode, Constant, Operation};
-use thiserror::Error;
+use std::fmt;
 
-/// Convenience alias used throughout the crate.
-pub type CompileResult<T> = Result<T, CompileError>;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CompileError {
-    #[error("unsupported bytecode: {0:?}")]
-    UnsupportedBytecode(Box<Bytecode>),
+    // Input errors (Move module or environment is wrong)
+    #[error("unsupported: {0}")]
+    Unsupported(String),
 
-    #[error("unsupported type: {0:?}")]
-    UnsupportedType(Box<Type>),
+    #[error("type mismatch: {0}")]
+    TypeMismatch(String),
 
-    #[error("unsupported constant: {0:?}")]
-    UnsupportedConstant(Box<Constant>),
+    #[error("invalid reference: {0}")]
+    InvalidReference(String),
 
+    #[error(
+        "unresolved type parameter {0}: must be instantiated or appear only in phantom positions"
+    )]
+    UnresolvedTypeParam(u16),
+
+    #[error("missing dependency: {0}")]
+    MissingDependency(String),
+
+    #[error("failed to deserialize module: {0}")]
+    Deserialize(String),
+
+    #[error("model builder failed: {0}")]
+    ModelBuilder(String),
+
+    // LLVM infrastructure errors
     #[error("LLVM builder error: {0}")]
     Builder(#[from] inkwell::builder::BuilderError),
 
@@ -34,34 +47,17 @@ pub enum CompileError {
     #[error("code generation failed: {0}")]
     CodeGeneration(String),
 
-    #[error("failed to deserialize module: {0}")]
-    Deserialize(String),
-
-    #[error("unsupported operation: {0:?}")]
-    UnsupportedOperation(Box<Operation>),
-
-    #[error("model builder failed: {0}")]
-    ModelBuilder(String),
-
-    #[error("malformed module: {0}")]
-    MalformedModule(String),
+    // Context wrapper (preserves inner error kind)
+    #[error("{context}: {source}")]
+    Contextualized {
+        context: String,
+        source: Box<CompileError>,
+    },
 }
 
 impl CompileError {
-    pub(crate) fn unsupported_bytecode(bc: Bytecode) -> Self {
-        Self::UnsupportedBytecode(Box::new(bc))
-    }
-
-    pub(crate) fn unsupported_type(ty: Type) -> Self {
-        Self::UnsupportedType(Box::new(ty))
-    }
-
-    pub(crate) fn unsupported_constant(c: Constant) -> Self {
-        Self::UnsupportedConstant(Box::new(c))
-    }
-
-    pub(crate) fn unsupported_operation(op: Operation) -> Self {
-        Self::UnsupportedOperation(Box::new(op))
+    pub(crate) fn unsupported(val: impl fmt::Debug) -> Self {
+        Self::Unsupported(format!("{val:?}"))
     }
 
     pub(crate) fn llvm(msg: impl Into<String>) -> Self {
@@ -88,7 +84,33 @@ impl CompileError {
         Self::ModelBuilder(msg.into())
     }
 
-    pub(crate) fn malformed_module(msg: impl Into<String>) -> Self {
-        Self::MalformedModule(msg.into())
+    /// Wrap this error with additional context, preserving the original variant.
+    pub fn context(self, ctx: impl fmt::Display) -> Self {
+        Self::Contextualized {
+            context: ctx.to_string(),
+            source: Box::new(self),
+        }
+    }
+
+    /// Peel away context layers to get the root cause.
+    pub fn root_cause(&self) -> &CompileError {
+        match self {
+            Self::Contextualized { source, .. } => source.root_cause(),
+            other => other,
+        }
+    }
+}
+
+/// Convenience alias used throughout the crate.
+pub type CompileResult<T> = Result<T, CompileError>;
+
+/// Extension trait for adding context to `CompileResult` via method chaining.
+pub(crate) trait CompileContext<T> {
+    fn context(self, ctx: impl fmt::Display) -> CompileResult<T>;
+}
+
+impl<T> CompileContext<T> for CompileResult<T> {
+    fn context(self, ctx: impl fmt::Display) -> CompileResult<T> {
+        self.map_err(|e| e.context(ctx))
     }
 }

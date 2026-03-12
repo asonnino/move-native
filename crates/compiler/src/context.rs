@@ -85,9 +85,7 @@ impl<'ctx> LlvmContext<'ctx> {
                 continue;
             }
             if !dependency_ids.contains(&id) {
-                return Err(CompileError::malformed_module(format!(
-                    "missing dependency: {id}"
-                )));
+                return Err(CompileError::MissingDependency(format!("{id}")));
             }
         }
         Ok(())

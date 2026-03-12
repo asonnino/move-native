@@ -7,7 +7,7 @@ use inkwell::values::IntValue;
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
-use crate::error::CompileResult;
+use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
 /// and integer-cast operations.
@@ -152,8 +152,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             llvm.builder
                 .build_int_z_extend(amt, val.get_type(), "shl_ext")?
         } else if amt.get_type().get_bit_width() > val.get_type().get_bit_width() {
-            return Err(crate::error::CompileError::malformed_module(
-                "shift amount wider than value",
+            return Err(CompileError::TypeMismatch(
+                "shift amount wider than value".into(),
             ));
         } else {
             amt

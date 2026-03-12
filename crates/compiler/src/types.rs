@@ -63,11 +63,8 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
                 struct_type.set_body(&field_types, false);
                 Ok(struct_type.into())
             }
-            Type::TypeParameter(idx) => Err(CompileError::malformed_module(format!(
-                "unresolved TypeParameter({idx}) in type lowering; \
-                type parameters must be instantiated or appear only in phantom positions"
-            ))),
-            other => Err(CompileError::unsupported_type(other.clone())),
+            Type::TypeParameter(idx) => Err(CompileError::UnresolvedTypeParam(*idx)),
+            other => Err(CompileError::unsupported(other)),
         }
     }
 

@@ -15,7 +15,7 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Operation};
 
 use crate::context::LlvmContext;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileContext, CompileError, CompileResult};
 
 pub(crate) use state::FunctionState;
 
@@ -53,7 +53,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
     pub(crate) fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
         for byte_code in &function_data.code {
-            self.lower_bytecode(byte_code)?;
+            self.lower_bytecode(byte_code)
+                .context(format!("at {byte_code:?}"))?;
         }
         Ok(())
     }
@@ -76,9 +77,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Bytecode::Jump(..)
             | Bytecode::Branch(..)
             | Bytecode::Abort(..) => ControlFlowEmitter::new(&self.state).emit(byte_code)?,
-            other => {
-                return Err(CompileError::unsupported_bytecode(other.clone()));
-            }
+            other => return Err(CompileError::unsupported(other)),
         }
         Ok(())
     }
@@ -158,7 +157,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             )
             .emit_get_global(*module_id, *datatype_id, type_args, destinations, sources),
 
-            other => Err(CompileError::unsupported_operation(other.clone())),
+            other => Err(CompileError::unsupported(other)),
         }
     }
 }
@@ -265,16 +264,14 @@ mod tests {
             .build();
 
         let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
-            panic!("expected MalformedModule error for Add on struct");
+            panic!("expected TypeMismatch error for Add on struct");
         };
-        let message = err.to_string();
         assert!(
-            message.contains("malformed module"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            message.contains("expected integer"),
-            "unexpected error: {message}"
+            matches!(
+                err.root_cause(),
+                crate::error::CompileError::TypeMismatch(_)
+            ),
+            "expected TypeMismatch, got: {err}"
         );
     }
 
@@ -297,16 +294,14 @@ mod tests {
             .build();
 
         let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
-            panic!("expected MalformedModule error for Unpack on integer");
+            panic!("expected TypeMismatch error for Unpack on integer");
         };
-        let message = err.to_string();
         assert!(
-            message.contains("malformed module"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            message.contains("expected struct"),
-            "unexpected error: {message}"
+            matches!(
+                err.root_cause(),
+                crate::error::CompileError::TypeMismatch(_)
+            ),
+            "expected TypeMismatch, got: {err}"
         );
     }
 
@@ -329,16 +324,14 @@ mod tests {
             .build();
 
         let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
-            panic!("expected MalformedModule error for BorrowField on integer");
+            panic!("expected TypeMismatch error for BorrowField on integer");
         };
-        let message = err.to_string();
         assert!(
-            message.contains("malformed module"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            message.contains("expected pointer"),
-            "unexpected error: {message}"
+            matches!(
+                err.root_cause(),
+                crate::error::CompileError::TypeMismatch(_)
+            ),
+            "expected TypeMismatch, got: {err}"
         );
     }
 

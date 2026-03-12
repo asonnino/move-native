@@ -149,9 +149,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
             Constant::U64(_) => 8,
             Constant::U128(_) => 16,
             Constant::U256(_) | Constant::Address(_) => 32,
-            other => {
-                return Err(CompileError::unsupported_constant(other.clone()));
-            }
+            other => return Err(CompileError::unsupported(other)),
         };
 
         let mut buf = Vec::with_capacity(elements.len() * element_size);
@@ -175,9 +173,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     padded[..len].copy_from_slice(&bytes[..len]);
                     buf.extend_from_slice(&padded);
                 }
-                other => {
-                    return Err(CompileError::unsupported_constant(other.clone()));
-                }
+                other => return Err(CompileError::unsupported(other)),
             }
         }
         Ok((element_size, buf))

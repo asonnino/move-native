@@ -27,8 +27,8 @@ pub(crate) trait CallSiteValueExt<'ctx> {
 impl<'ctx> CallSiteValueExt<'ctx> for CallSiteValue<'ctx> {
     fn into_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>> {
         let inkwell::values::ValueKind::Basic(v) = self.try_as_basic_value() else {
-            return Err(CompileError::malformed_module(
-                "expected non-void return from call",
+            return Err(CompileError::TypeMismatch(
+                "expected non-void return from call".into(),
             ));
         };
         Ok(v)
@@ -190,7 +190,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     /// Get a local by index, returning an error if out of bounds.
     pub(crate) fn get_local(&self, idx: usize) -> CompileResult<&Local<'ctx>> {
         self.locals.get(idx).ok_or_else(|| {
-            CompileError::malformed_module(format!("local index {idx} out of bounds"))
+            CompileError::InvalidReference(format!("local index {idx} out of bounds"))
         })
     }
 
@@ -200,7 +200,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         label: &move_stackless_bytecode::stackless_bytecode::Label,
     ) -> CompileResult<BasicBlock<'ctx>> {
         self.label_blocks.get(label).copied().ok_or_else(|| {
-            CompileError::malformed_module(format!("unknown label {}", label.as_usize()))
+            CompileError::InvalidReference(format!("unknown label {}", label.as_usize()))
         })
     }
 
@@ -217,8 +217,10 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     pub(crate) fn load_int(&self, idx: usize) -> CompileResult<IntValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::IntValue(v) => Ok(v),
-            other => Err(CompileError::malformed_module(format!(
-                "expected integer for local {idx}, got {other:?}"
+            other => Err(CompileError::TypeMismatch(format!(
+                "expected integer for local t{idx} (move type {:?}), got LLVM {}",
+                self.get_local(idx)?.mty,
+                llvm_type_name(&other),
             ))),
         }
     }
@@ -227,8 +229,10 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     pub(crate) fn load_struct(&self, idx: usize) -> CompileResult<StructValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::StructValue(v) => Ok(v),
-            other => Err(CompileError::malformed_module(format!(
-                "expected struct for local {idx}, got {other:?}"
+            other => Err(CompileError::TypeMismatch(format!(
+                "expected struct for local t{idx} (move type {:?}), got LLVM {}",
+                self.get_local(idx)?.mty,
+                llvm_type_name(&other),
             ))),
         }
     }
@@ -237,8 +241,10 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     pub(crate) fn load_pointer(&self, idx: usize) -> CompileResult<PointerValue<'ctx>> {
         match self.load_value(idx)? {
             BasicValueEnum::PointerValue(v) => Ok(v),
-            other => Err(CompileError::malformed_module(format!(
-                "expected pointer for local {idx}, got {other:?}"
+            other => Err(CompileError::TypeMismatch(format!(
+                "expected pointer for local t{idx} (move type {:?}), got LLVM {}",
+                self.get_local(idx)?.mty,
+                llvm_type_name(&other),
             ))),
         }
     }
@@ -255,7 +261,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         let local = self.get_local(idx)?;
         match &local.mty {
             Type::Reference(_, inner) => self.lower_type(inner),
-            other => Err(CompileError::unsupported_type(other.clone())),
+            other => Err(CompileError::unsupported(other)),
         }
     }
 
@@ -281,5 +287,17 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         global.set_linkage(Linkage::Private);
         global.set_unnamed_addr(true);
         global
+    }
+}
+
+/// Short human-readable name for an LLVM value's type (e.g. "ptr", "i64", "struct").
+fn llvm_type_name(val: &BasicValueEnum<'_>) -> &'static str {
+    match val {
+        BasicValueEnum::IntValue(_) => "integer",
+        BasicValueEnum::FloatValue(_) => "float",
+        BasicValueEnum::PointerValue(_) => "pointer",
+        BasicValueEnum::StructValue(_) => "struct",
+        BasicValueEnum::ArrayValue(_) => "array",
+        _ => "other",
     }
 }

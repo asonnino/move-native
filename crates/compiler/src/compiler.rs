@@ -11,7 +11,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use crate::assembly::{Assembly, AssemblyBuilder};
 use crate::context::LlvmContext;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileContext, CompileError, CompileResult};
 use crate::function::FunctionLowering;
 use crate::target::Target;
 use crate::types::TypeLowering;
@@ -91,7 +91,9 @@ impl<'ctx> Compiler<'ctx> {
         // Pass 2: compile function bodies.
         // Emits IR into `self.ctx.module` via LLVM's interior-mutable FFI.
         for ((function_env, function_data), declaration) in targets.iter().zip(declarations) {
-            self.compile_function(declaration, function_env, function_data)?;
+            let name = function_env.get_name_str();
+            self.compile_function(declaration, function_env, function_data)
+                .context(format!("in function '{name}'"))?;
         }
 
         self.asm_builder.optimize(&self.ctx.module)?;

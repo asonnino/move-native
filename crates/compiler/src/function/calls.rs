@@ -8,7 +8,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use super::FunctionLowering;
 use super::state::{CallSiteValueExt, FunctionState};
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileContext, CompileError, CompileResult};
 
 /// Emits LLVM call instructions for Move function calls.
 ///
@@ -55,7 +55,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 self.state.store(destinations[0], return_value)?;
             } else {
                 let BasicValueEnum::StructValue(struct_val) = return_value else {
-                    return Err(CompileError::malformed_module(format!(
+                    return Err(CompileError::TypeMismatch(format!(
                         "expected struct return for multi-value call, got {return_value:?}"
                     )));
                 };
@@ -138,8 +138,11 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                     param_count,
                     &func_data,
                     inst_args,
-                )?;
-                callee_lowering.lower_function(&func_data)?;
+                )
+                .context(format!("in monomorphized '{mangled}'"))?;
+                callee_lowering
+                    .lower_function(&func_data)
+                    .context(format!("in monomorphized '{mangled}'"))?;
 
                 llvm.builder.position_at_end(saved_block);
                 function
