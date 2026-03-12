@@ -3,10 +3,11 @@
 
 use inkwell::IntPredicate;
 use inkwell::types::IntType;
-use inkwell::values::IntValue;
+use inkwell::values::{BasicValueEnum, IntValue};
+use move_model::ty::{PrimitiveType, Type};
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
-use super::state::FunctionState;
+use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
@@ -111,17 +112,112 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_int(sources[0])?;
-        let rhs = self.state.load_int(sources[1])?;
-        let pred = if matches!(operation, Operation::Eq) {
-            IntPredicate::EQ
+        let lhs = self.state.load_value(sources[0])?;
+        let rhs = self.state.load_value(sources[1])?;
+        let mty = self.state.get_local(sources[0])?.mty.clone();
+        let eq = self.emit_eq_values(lhs, rhs, &mty)?;
+        let result = if matches!(operation, Operation::Neq) {
+            let one = llvm.i8_type.const_int(1, false);
+            llvm.builder.build_xor(eq, one, "neq")?
         } else {
-            IntPredicate::NE
+            eq
         };
-        let cmp = llvm.builder.build_int_compare(pred, lhs, rhs, "cmp")?;
-        Ok(llvm
-            .builder
-            .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")?)
+        Ok(result)
+    }
+
+    /// Recursively compare two values for equality based on their Move type.
+    /// Returns an i8 value: 1 for equal, 0 for not equal.
+    fn emit_eq_values(
+        &self,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+        mty: &Type,
+    ) -> CompileResult<IntValue<'ctx>> {
+        let llvm = self.state.ctx;
+        match mty {
+            // Integer-like types: direct int compare
+            Type::Primitive(
+                PrimitiveType::Bool
+                | PrimitiveType::U8
+                | PrimitiveType::U16
+                | PrimitiveType::U32
+                | PrimitiveType::U64
+                | PrimitiveType::U128
+                | PrimitiveType::U256
+                | PrimitiveType::Address
+                | PrimitiveType::Signer,
+            ) => {
+                let lhs = lhs.into_int_value();
+                let rhs = rhs.into_int_value();
+                let cmp = llvm
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")?;
+                Ok(llvm
+                    .builder
+                    .build_int_z_extend(cmp, llvm.i8_type, "eq_ext")?)
+            }
+
+            // References: dereference both pointers, then compare the inner type
+            Type::Reference(_, inner) => {
+                let lhs_ptr = lhs.into_pointer_value();
+                let rhs_ptr = rhs.into_pointer_value();
+                let pointee_ty = self.state.lower_type(inner)?;
+                let lhs_val = llvm.builder.build_load(pointee_ty, lhs_ptr, "deref_l")?;
+                let rhs_val = llvm.builder.build_load(pointee_ty, rhs_ptr, "deref_r")?;
+                self.emit_eq_values(lhs_val, rhs_val, inner)
+            }
+
+            // Vectors: opaque pointers, delegate to runtime
+            Type::Vector(_) => {
+                let lhs_ptr = lhs.into_pointer_value();
+                let rhs_ptr = rhs.into_pointer_value();
+                let fn_type = llvm
+                    .i8_type
+                    .fn_type(&[llvm.ptr_type.into(), llvm.ptr_type.into()], false);
+                let func = self.state.declare_external("__move_rt_vec_eq", fn_type);
+                let result =
+                    llvm.builder
+                        .build_call(func, &[lhs_ptr.into(), rhs_ptr.into()], "vec_eq")?;
+                Ok(result.into_basic_value()?.into_int_value())
+            }
+
+            // Structs: field-by-field comparison, AND-reduce
+            Type::Datatype(module_id, datatype_id, type_args) => {
+                let struct_env = llvm.get_struct_env(*module_id, *datatype_id);
+                let fields: Vec<Type> = struct_env
+                    .get_fields()
+                    .map(|f| {
+                        let t = f.get_type();
+                        if type_args.is_empty() {
+                            t
+                        } else {
+                            t.instantiate(type_args)
+                        }
+                    })
+                    .collect();
+                let lhs_struct = lhs.into_struct_value();
+                let rhs_struct = rhs.into_struct_value();
+
+                let mut acc = llvm.i8_type.const_int(1, false);
+                for (i, field_ty) in fields.iter().enumerate() {
+                    let lhs_field = llvm.builder.build_extract_value(
+                        lhs_struct,
+                        i as u32,
+                        &format!("l_{i}"),
+                    )?;
+                    let rhs_field = llvm.builder.build_extract_value(
+                        rhs_struct,
+                        i as u32,
+                        &format!("r_{i}"),
+                    )?;
+                    let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty)?;
+                    acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
+                }
+                Ok(acc)
+            }
+
+            other => Err(CompileError::unsupported(other)),
+        }
     }
 
     fn emit_bitwise(
@@ -439,5 +535,88 @@ mod tests {
             Bytecode::CastU64,
         );
         assert!(asm.contains("cast_noop"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn eq_ref_u64() {
+        let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
+        let asm = comparison_op_asm("eq_ref_u64", ref_u64, Bytecode::Eq);
+        assert!(asm.contains("eq_ref_u64"), "missing symbol\n{asm}");
+        // Should dereference (ldr) and then compare (cmp + cset)
+        assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+    }
+
+    #[test]
+    fn neq_ref_u64() {
+        let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
+        let asm = comparison_op_asm("neq_ref_u64", ref_u64, Bytecode::Neq);
+        assert!(asm.contains("neq_ref_u64"), "missing symbol\n{asm}");
+        assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
+        // LLVM may optimize xor+zext into cset ne
+        assert!(
+            asm.contains("\teor\t") || asm.contains("ne"),
+            "missing negation path\n{asm}"
+        );
+    }
+
+    #[test]
+    fn eq_vector_u8() {
+        let vec_u8 = SignatureToken::Vector(Box::new(SignatureToken::U8));
+        let asm = comparison_op_asm("eq_vec_u8", vec_u8, Bytecode::Eq);
+        assert!(asm.contains("eq_vec_u8"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("__move_rt_vec_eq"),
+            "missing __move_rt_vec_eq call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn eq_ref_vector_u8() {
+        let ref_vec_u8 = SignatureToken::Reference(Box::new(SignatureToken::Vector(Box::new(
+            SignatureToken::U8,
+        ))));
+        let asm = comparison_op_asm("eq_ref_vec", ref_vec_u8, Bytecode::Eq);
+        assert!(asm.contains("eq_ref_vec"), "missing symbol\n{asm}");
+        // Should deref the reference, then call vec_eq
+        assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
+        assert!(
+            asm.contains("__move_rt_vec_eq"),
+            "missing __move_rt_vec_eq call\n{asm}"
+        );
+    }
+
+    #[test]
+    fn eq_struct() {
+        use move_binary_format::file_format::{AbilitySet, DatatypeHandleIndex};
+
+        let module = CompiledModuleBuilder::new()
+            .struct_definition(
+                "Point",
+                AbilitySet::EMPTY
+                    | move_binary_format::file_format::Ability::Copy
+                    | move_binary_format::file_format::Ability::Drop,
+                vec![("x", SignatureToken::U64), ("y", SignatureToken::U64)],
+            )
+            .function(
+                "eq_point",
+                vec![
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                ],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Eq,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(asm.contains("eq_point"), "missing symbol\n{asm}");
+        // Field-by-field comparison: at least one cmp (LLVM may fuse/optimize)
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
     }
 }

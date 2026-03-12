@@ -51,6 +51,11 @@
 //!     // ═══ Cross-module ═══
 //!     public fun call_double(x: u64): u64 { Dep::double(x) }
 //!
+//!     // ═══ Equality ═══
+//!     public fun eq_points(a: Point, b: Point): bool { a == b }
+//!     public fun eq_refs(a: &u64, b: &u64): bool { *a == *b }
+//!     public fun neq_u64(a: u64, b: u64): bool { a != b }
+//!
 //!     // ═══ Vectors ═══
 //!     public fun test_vec(a: u64, b: u64): u64 {
 //!         let v = vector::empty<u64>();
@@ -71,13 +76,13 @@ use move_binary_format::file_format::{
     AbilitySet,
     Bytecode::{
         self, Abort, Add, BrFalse, Branch, Call, CallGeneric, CastU8, CastU16, CastU32, CastU64,
-        CastU128, CastU256, CopyLoc, FreezeRef, Gt, ImmBorrowField, LdU64, Lt, MoveLoc,
-        MutBorrowField, MutBorrowLoc, Pack, Pop, ReadRef, Ret, StLoc, Sub, Unpack, WriteRef,
+        CastU128, CastU256, CopyLoc, Eq, FreezeRef, Gt, ImmBorrowField, LdU64, Lt, MoveLoc,
+        MutBorrowField, MutBorrowLoc, Neq, Pack, Pop, ReadRef, Ret, StLoc, Sub, Unpack, WriteRef,
     },
     DatatypeHandleIndex, FieldHandleIndex, FunctionHandleIndex, FunctionInstantiationIndex,
     SignatureToken::{
-        self, Datatype, MutableReference, Reference, TypeParameter, U8, U16, U32, U64, U128, U256,
-        Vector,
+        self, Bool, Datatype, MutableReference, Reference, TypeParameter, U8, U16, U32, U64, U128,
+        U256, Vector,
     },
     StructDefinitionIndex,
 };
@@ -90,7 +95,7 @@ impl CompiledModuleBuilder {
     ///
     /// Returns `(main_module, dependency_modules)`.
     ///
-    /// Contains 22 functions operating on a `Point { x: u64, y: u64 }` struct:
+    /// Contains 25 functions operating on a `Point { x: u64, y: u64 }` struct:
     ///
     /// | Index | Name              | Tests                                        |
     /// |-------|-------------------|----------------------------------------------|
@@ -117,6 +122,9 @@ impl CompiledModuleBuilder {
     /// | 20    | `double` (foreign)| declared in Dep module                       |
     /// | 21    | `call_double`     | cross-module call to Dep::double             |
     /// | 22    | `test_vec`        | vector ops (VecPack/PushBack/PopBack/Unpack) |
+    /// | 23    | `eq_points`       | struct field-by-field Eq                     |
+    /// | 24    | `eq_refs`         | reference deref + integer Eq                 |
+    /// | 25    | `neq_u64`         | Neq (xor negation path)                      |
     pub fn kitchen_sink() -> (CompiledModule, Vec<CompiledModule>) {
         let point = Datatype(DatatypeHandleIndex(0));
         let mut_point_ref = MutableReference(Box::new(point.clone()));
@@ -478,6 +486,31 @@ impl CompiledModuleBuilder {
                     Add,
                     Ret,
                 ],
+            )
+            // ═══ Equality (23–25) ═══
+            // --- FunctionHandleIndex(23): eq_points(a: Point, b: Point): bool ---
+            .function(
+                "eq_points",
+                vec![point.clone(), point.clone()],
+                vec![Bool],
+                vec![],
+                vec![CopyLoc(0), CopyLoc(1), Eq, Ret],
+            )
+            // --- FunctionHandleIndex(24): eq_refs(a: &u64, b: &u64): bool ---
+            .function(
+                "eq_refs",
+                vec![Reference(Box::new(U64)), Reference(Box::new(U64))],
+                vec![Bool],
+                vec![],
+                vec![CopyLoc(0), CopyLoc(1), Eq, Ret],
+            )
+            // --- FunctionHandleIndex(25): neq_u64(a: u64, b: u64): bool ---
+            .function(
+                "neq_u64",
+                vec![U64, U64],
+                vec![Bool],
+                vec![],
+                vec![CopyLoc(0), CopyLoc(1), Neq, Ret],
             )
             .build();
 

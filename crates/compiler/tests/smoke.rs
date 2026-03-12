@@ -45,6 +45,10 @@ fn kitchen_sink_compiles() {
         "call_double",
         // Vectors
         "test_vec",
+        // Equality
+        "eq_points",
+        "eq_refs",
+        "neq_u64",
     ] {
         assert!(
             asm.contains(name),

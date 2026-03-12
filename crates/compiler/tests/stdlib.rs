@@ -72,7 +72,6 @@ fn string() {
 }
 
 #[test]
-#[ignore = "Eq on reference types not yet supported"]
 fn type_name() {
     fixture().compile("type_name");
 }

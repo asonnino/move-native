@@ -13,19 +13,16 @@ fn fixture() -> ModuleFixture {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn accumulator() {
     fixture().compile("accumulator");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn accumulator_metadata() {
     fixture().compile("accumulator_metadata");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn accumulator_settlement() {
     fixture().compile("accumulator_settlement");
 }
@@ -42,7 +39,6 @@ fn address_alias() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn authenticator_state() {
     fixture().compile("authenticator_state");
 }
@@ -53,19 +49,16 @@ fn bag() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn balance() {
     fixture().compile("balance");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn bcs() {
     fixture().compile("bcs");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn bls12381() {
     fixture().compile("bls12381");
 }
@@ -76,13 +69,11 @@ fn borrow() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn clock() {
     fixture().compile("clock");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn coin() {
     fixture().compile("coin");
 }
@@ -94,13 +85,12 @@ fn coin_registry() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn config() {
     fixture().compile("config");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "expected non-void return from call"]
 fn deny_list() {
     fixture().compile("deny_list");
 }
@@ -111,7 +101,6 @@ fn derived_object() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got PointerValue"]
 fn display() {
     fixture().compile("display");
 }
@@ -162,7 +151,6 @@ fn groth16() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got PointerValue"]
 fn group_ops() {
     fixture().compile("group_ops");
 }
@@ -184,13 +172,11 @@ fn hmac() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn kiosk() {
     fixture().compile("kiosk");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn kiosk_extension() {
     fixture().compile("kiosk_extension");
 }
@@ -226,13 +212,11 @@ fn object_table() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got StructValue"]
 fn package() {
     fixture().compile("package");
 }
 
 #[test]
-#[ignore = "expected integer for local, got PointerValue"]
 fn party() {
     fixture().compile("party");
 }
@@ -264,13 +248,11 @@ fn prover() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn random() {
     fixture().compile("random");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn sui() {
     fixture().compile("sui");
 }
@@ -281,13 +263,13 @@ fn table() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "unresolved TypeParameter(0) in swap"]
 fn table_vec() {
     fixture().compile("table_vec");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
+#[ignore = "expected non-void return from call"]
 fn token() {
     fixture().compile("token");
 }
@@ -298,13 +280,12 @@ fn transfer() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got StructValue"]
+#[ignore = "unresolved TypeParameter(2) in remove_rule"]
 fn transfer_policy() {
     fixture().compile("transfer_policy");
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn tx_context() {
     fixture().compile("tx_context");
 }
@@ -345,7 +326,6 @@ fn zklogin_verified_id() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0)"]
 fn zklogin_verified_issuer() {
     fixture().compile("zklogin_verified_issuer");
 }
