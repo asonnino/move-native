@@ -8,9 +8,13 @@ license = "Apache-2.0"
 repository = "https://github.com/alberto/move-native"
 
 [workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
 inkwell = { version = "0.8", features = ["llvm18-1"] }
+object = { version = "0.38", default-features = false, features = ["elf", "macho", "read"] }
+runtime = { path = "crates/runtime" }
 tempfile = "3.27.0"
 thiserror = "2.0"
+verifier = { path = "crates/verifier" }
 yaxpeax-arm = "0.4"
 
 # Sui / Move crates

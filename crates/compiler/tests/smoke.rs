@@ -71,14 +71,10 @@ fn kitchen_sink_compiles() {
         "should contain abort runtime call"
     );
 
-    // Symbol aliases: LLVM emits underscore-prefixed, alias adds bare name
+    // LLVM emits underscore-prefixed symbols on macOS
     assert!(
         asm.contains("_make_point"),
         "should contain LLVM symbol _make_point\nassembly:\n{asm}"
-    );
-    assert!(
-        asm.contains("\nmake_point:"),
-        "should contain alias label make_point:\nassembly:\n{asm}"
     );
 
     // Cross-module call: call_double should emit a `bl` to the external `double` symbol

@@ -98,7 +98,7 @@ impl<'ctx> Compiler<'ctx> {
 
         self.asm_builder.optimize(&self.ctx.module)?;
         let mut asm = self.asm_builder.build(&self.ctx.module)?;
-        asm.add_symbol_aliases();
+        asm.strip_subsections();
         Ok(asm)
     }
 

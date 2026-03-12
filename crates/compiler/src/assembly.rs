@@ -15,35 +15,16 @@ use crate::target::{CPU, FEATURES, Target};
 pub struct Assembly(String);
 
 impl Assembly {
-    /// Post-process: add platform-compatible symbol aliases and strip
-    /// `.subsections_via_symbols`.
+    /// Strip `.subsections_via_symbols` — Mach-O's dead-stripping directive
+    /// that prevents the assembler from encoding `tbz`/`tbnz` branch-to-label
+    /// (the assembler can't guarantee range when subsections may be reordered).
     ///
-    /// On macOS (where LLVM emits `_name` symbols), adds unprefixed aliases
-    /// so that instrumenter and the runtime can find functions by their
-    /// Move names. On Linux, adds underscore-prefixed aliases for the same
-    /// cross-platform compatibility.
-    ///
-    /// Also strips `.subsections_via_symbols` — Mach-O's dead-stripping
-    /// directive that prevents the assembler from encoding `tbz`/`tbnz`
-    /// branch-to-label (the assembler can't guarantee range when subsections
-    /// may be reordered).
-    pub(crate) fn add_symbol_aliases(&mut self) {
+    /// Called by the pipeline before instrumentation. Does NOT add trampoline
+    /// aliases, so the output is safe to instrument and verify without false
+    /// back-edges.
+    pub fn strip_subsections(&mut self) {
         let asm = &self.0;
         let mut output = String::with_capacity(asm.len());
-        let mut global_names: Vec<&str> = Vec::new();
-
-        for line in asm.lines() {
-            let trimmed = line.trim();
-            if let Some(name) = trimmed
-                .strip_prefix(".globl\t")
-                .or_else(|| trimmed.strip_prefix(".globl "))
-            {
-                let name = name.trim();
-                global_names.push(name);
-            }
-        }
-
-        // Strip .subsections_via_symbols to allow tbz/tbnz with local labels
         for line in asm.lines() {
             if line.trim() == ".subsections_via_symbols" {
                 continue;
@@ -51,25 +32,50 @@ impl Assembly {
             output.push_str(line);
             output.push('\n');
         }
+        self.0 = output;
+    }
 
-        if !global_names.is_empty() {
-            output.push('\n');
-            for name in &global_names {
-                if let Some(bare) = name.strip_prefix('_') {
-                    // macOS: _add exists, add alias for bare name
-                    output.push_str(&format!(".globl {bare}\n"));
-                    output.push_str(&format!("{bare}:\n"));
-                    output.push_str(&format!("\tb {name}\n"));
-                } else {
-                    // Linux: add exists, add alias for _name
-                    output.push_str(&format!(".globl _{name}\n"));
-                    output.push_str(&format!("_{name}:\n"));
-                    output.push_str(&format!("\tb {name}\n"));
-                }
+    /// Post-process: strip `.subsections_via_symbols` and add platform-compatible
+    /// symbol aliases.
+    ///
+    /// On macOS (where LLVM emits `_name` symbols), adds unprefixed aliases
+    /// so that instrumenter and the runtime can find functions by their
+    /// Move names. On Linux, adds underscore-prefixed aliases for the same
+    /// cross-platform compatibility.
+    ///
+    /// The trampoline aliases (`b _name`) create backward branches that look
+    /// like back-edges to the verifier. Use [`Self::strip_subsections`] instead
+    /// when the output will go through the full pipeline.
+    pub fn add_symbol_aliases(&mut self) {
+        self.strip_subsections();
+
+        let mut global_names: Vec<String> = Vec::new();
+        for line in self.0.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = trimmed
+                .strip_prefix(".globl\t")
+                .or_else(|| trimmed.strip_prefix(".globl "))
+            {
+                global_names.push(name.trim().to_string());
             }
         }
 
-        self.0 = output;
+        if !global_names.is_empty() {
+            self.0.push('\n');
+            for name in &global_names {
+                if let Some(bare) = name.strip_prefix('_') {
+                    // macOS: _add exists, add alias for bare name
+                    self.0.push_str(&format!(".globl {bare}\n"));
+                    self.0.push_str(&format!("{bare}:\n"));
+                    self.0.push_str(&format!("\tb {name}\n"));
+                } else {
+                    // Linux: add exists, add alias for _name
+                    self.0.push_str(&format!(".globl _{name}\n"));
+                    self.0.push_str(&format!("_{name}:\n"));
+                    self.0.push_str(&format!("\tb {name}\n"));
+                }
+            }
+        }
     }
 }
 
@@ -187,8 +193,72 @@ mod tests {
 
     use super::Assembly;
 
+    // ── strip_subsections ────────────────────────────────────────────
+
     #[test]
-    fn macos_symbols_get_bare_alias() {
+    fn strip_subsections_removes_directive() {
+        let mut asm = Assembly(
+            indoc! {"
+                .globl\t_foo
+                _foo:
+                \tret
+                .subsections_via_symbols
+            "}
+            .into(),
+        );
+        asm.strip_subsections();
+        assert!(!asm.contains("subsections_via_symbols"));
+    }
+
+    #[test]
+    fn strip_subsections_preserves_content() {
+        let input = indoc! {"
+            .section\t__TEXT,__text
+            .globl\t_foo
+            .p2align\t2
+            _foo:
+            \tmov x0, #42
+            \tret
+            .subsections_via_symbols
+        "};
+        let mut asm = Assembly(input.into());
+        asm.strip_subsections();
+
+        // All non-directive lines survive
+        assert!(asm.contains(".section\t__TEXT,__text"));
+        assert!(asm.contains(".globl\t_foo"));
+        assert!(asm.contains("_foo:"));
+        assert!(asm.contains("\tmov x0, #42"));
+        assert!(asm.contains("\tret"));
+    }
+
+    #[test]
+    fn strip_subsections_does_not_add_aliases() {
+        let mut asm = Assembly(
+            indoc! {"
+                .globl\t_foo
+                _foo:
+                \tret
+                .subsections_via_symbols
+            "}
+            .into(),
+        );
+        asm.strip_subsections();
+        // Must NOT produce trampoline aliases
+        assert!(!asm.contains("\tb _foo"));
+        assert!(!asm.contains("foo:\n\tb"));
+    }
+
+    #[test]
+    fn strip_subsections_noop_when_absent() {
+        let input = ".globl\t_foo\n_foo:\n\tret\n";
+        let mut asm = Assembly(input.into());
+        asm.strip_subsections();
+        assert_eq!(&*asm, input);
+    }
+
+    #[test]
+    fn aliases_macos_underscore_prefix() {
         let mut asm = Assembly(
             indoc! {"
                 .globl\t_foo
@@ -204,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn linux_symbols_get_underscore_alias() {
+    fn aliases_linux_bare_name() {
         let mut asm = Assembly(
             indoc! {"
                 .globl\tfoo
@@ -220,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_subsections_via_symbols() {
+    fn aliases_also_strips_subsections() {
         let mut asm = Assembly(
             indoc! {"
                 .globl\t_foo
@@ -235,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn no_globals_no_alias_section() {
+    fn aliases_no_globals_no_trampolines() {
         let mut asm = Assembly(
             indoc! {"
                 ; just a comment
@@ -250,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn globl_with_space_separator() {
+    fn aliases_globl_with_space_separator() {
         let mut asm = Assembly(".globl _bar\n_bar:\n\tret\n".into());
         asm.add_symbol_aliases();
         assert!(asm.contains(".globl bar\n"));
@@ -258,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_globals_produce_multiple_aliases() {
+    fn aliases_multiple_globals() {
         let mut asm = Assembly(
             indoc! {"
                 .globl\t_alpha

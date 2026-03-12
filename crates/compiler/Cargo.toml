@@ -6,10 +6,6 @@ license.workspace = true
 repository.workspace = true
 description = "Compile Move bytecode to Arm64 via LLVM"
 
-[[bin]]
-name = "move-to-llvm"
-path = "src/main.rs"
-
 [lib]
 path = "src/lib.rs"
 

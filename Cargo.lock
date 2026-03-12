@@ -2123,6 +2123,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
+name = "runner"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "compiler",
+ "instrumenter",
+ "move-binary-format",
+ "object 0.38.1",
+ "runtime",
+ "tempfile",
+ "thiserror 2.0.18",
+ "verifier",
+]
+
+[[package]]
 name = "runtime"
 version = "0.1.0"
 dependencies = [

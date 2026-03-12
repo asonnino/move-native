@@ -6,10 +6,6 @@ license.workspace = true
 repository.workspace = true
 description = "Arm64 assembly gas instrumentation tool"
 
-[[bin]]
-name = "instrumenter"
-path = "src/main.rs"
-
 [lib]
 path = "src/lib.rs"
 
