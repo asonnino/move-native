@@ -58,9 +58,10 @@ impl<'ctx> Local<'ctx> {
         name: &str,
     ) -> CompileResult<Self> {
         let mty = if type_params.is_empty() {
-            ty.clone()
+            // Erase surviving type parameters (phantom) to a dummy concrete type.
+            FunctionState::erase_type_params(ty.clone())
         } else {
-            ty.instantiate(type_params)
+            FunctionState::erase_type_params(ty.instantiate(type_params))
         };
         let llvm_ty = TypeLowering::new(ctx).lower_type(&mty)?;
         let alloca = ctx.builder.build_alloca(llvm_ty, name)?;
@@ -286,7 +287,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
     /// Surviving type parameters must be phantom (the compiler only compiles
     /// functions at top level when all type params are phantom), so the
     /// concrete type chosen does not affect layout or codegen.
-    fn erase_type_params(ty: Type) -> Type {
+    pub(super) fn erase_type_params(ty: Type) -> Type {
         match ty {
             Type::TypeParameter(_) => Type::Primitive(PrimitiveType::U64),
             Type::Vector(inner) => Type::Vector(Box::new(Self::erase_type_params(*inner))),

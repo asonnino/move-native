@@ -1,9 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! One test per MoveStdlib module. Tests that currently fail are `#[ignore]`d
-//! with the error message so we can track compiler progress.
-
 use compiler::module::framework::ModuleFixture;
 
 fn fixture() -> ModuleFixture {

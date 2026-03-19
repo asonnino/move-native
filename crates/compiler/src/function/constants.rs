@@ -82,15 +82,15 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 call.into_basic_value()?
             }
             Constant::Vector(elements) => {
-                let function_type = llvm.ptr_type.fn_type(
-                    &[
-                        llvm.ptr_type.into(),
-                        llvm.i64_type.into(),
-                        llvm.i64_type.into(),
-                    ],
-                    false,
-                );
                 if elements.is_empty() {
+                    let function_type = llvm.ptr_type.fn_type(
+                        &[
+                            llvm.ptr_type.into(),
+                            llvm.i64_type.into(),
+                            llvm.i64_type.into(),
+                        ],
+                        false,
+                    );
                     let function = self
                         .state
                         .declare_external("__move_rt_const_vec", function_type);
@@ -103,23 +103,55 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     )?;
                     return self.state.store(destination, call.into_basic_value()?);
                 }
-                let (elem_size, buf) = Self::serialize_scalar_vector(elements)?;
-                let id = self.state.next_const_id();
-                let global = self
-                    .state
-                    .emit_const_global(&format!("const_vec_{id}"), &buf);
-                let function = self
-                    .state
-                    .declare_external("__move_rt_const_vec", function_type);
-                let ptr = global.as_pointer_value();
-                let count = llvm.i64_type.const_int(elements.len() as u64, false);
-                let esz = llvm.i64_type.const_int(elem_size as u64, false);
-                let call = llvm.builder.build_call(
-                    function,
-                    &[ptr.into(), count.into(), esz.into()],
-                    "const_vec",
-                )?;
-                call.into_basic_value()?
+                // Vector of ByteArrays → vector<vector<u8>>, needs a dedicated
+                // runtime helper because elements are variable-length.
+                if matches!(elements[0], Constant::ByteArray(_)) {
+                    let buf = Self::serialize_byte_array_vector(elements)?;
+                    let id = self.state.next_const_id();
+                    let global = self
+                        .state
+                        .emit_const_global(&format!("const_vec_bytes_{id}"), &buf);
+                    let function_type = llvm
+                        .ptr_type
+                        .fn_type(&[llvm.ptr_type.into(), llvm.i64_type.into()], false);
+                    let function = self
+                        .state
+                        .declare_external("__move_rt_const_vec_vec_u8", function_type);
+                    let ptr = global.as_pointer_value();
+                    let count = llvm.i64_type.const_int(elements.len() as u64, false);
+                    let call = llvm.builder.build_call(
+                        function,
+                        &[ptr.into(), count.into()],
+                        "const_vec_vec_u8",
+                    )?;
+                    call.into_basic_value()?
+                } else {
+                    let function_type = llvm.ptr_type.fn_type(
+                        &[
+                            llvm.ptr_type.into(),
+                            llvm.i64_type.into(),
+                            llvm.i64_type.into(),
+                        ],
+                        false,
+                    );
+                    let (elem_size, buf) = Self::serialize_scalar_vector(elements)?;
+                    let id = self.state.next_const_id();
+                    let global = self
+                        .state
+                        .emit_const_global(&format!("const_vec_{id}"), &buf);
+                    let function = self
+                        .state
+                        .declare_external("__move_rt_const_vec", function_type);
+                    let ptr = global.as_pointer_value();
+                    let count = llvm.i64_type.const_int(elements.len() as u64, false);
+                    let esz = llvm.i64_type.const_int(elem_size as u64, false);
+                    let call = llvm.builder.build_call(
+                        function,
+                        &[ptr.into(), count.into(), esz.into()],
+                        "const_vec",
+                    )?;
+                    call.into_basic_value()?
+                }
             }
         };
         self.state.store(destination, val)
@@ -136,6 +168,24 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
             buf.extend_from_slice(&padded);
         }
         buf
+    }
+
+    /// Serialize a `Vector` of `ByteArray` constants into a length-prefixed format.
+    ///
+    /// Layout: for each element, `[len: u64 LE, bytes...]`.
+    /// The runtime reads `count` length-prefixed entries to build `vector<vector<u8>>`.
+    fn serialize_byte_array_vector(elements: &[Constant]) -> CompileResult<Vec<u8>> {
+        let mut buf = Vec::new();
+        for element in elements {
+            match element {
+                Constant::ByteArray(bytes) => {
+                    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                    buf.extend_from_slice(bytes);
+                }
+                other => return Err(CompileError::unsupported(other)),
+            }
+        }
+        Ok(buf)
     }
 
     /// Serialize a `Vector` of scalar constants into a flat byte buffer.
@@ -376,6 +426,84 @@ mod tests {
             .build();
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(asm.contains("load_addr"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn byte_array_vec_single() {
+        let elements = vec![Constant::ByteArray(vec![0x48, 0x49])];
+        let buf = ConstantEmitter::serialize_byte_array_vector(&elements).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&2u64.to_le_bytes());
+        expected.extend_from_slice(&[0x48, 0x49]);
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn byte_array_vec_multiple() {
+        let elements = vec![
+            Constant::ByteArray(vec![1]),
+            Constant::ByteArray(vec![2, 3, 4]),
+        ];
+        let buf = ConstantEmitter::serialize_byte_array_vector(&elements).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&1u64.to_le_bytes());
+        expected.push(1);
+        expected.extend_from_slice(&3u64.to_le_bytes());
+        expected.extend_from_slice(&[2, 3, 4]);
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn byte_array_vec_empty_element() {
+        let elements = vec![Constant::ByteArray(vec![])];
+        let buf = ConstantEmitter::serialize_byte_array_vector(&elements).unwrap();
+        assert_eq!(buf, 0u64.to_le_bytes());
+    }
+
+    #[test]
+    fn byte_array_vec_rejects_non_byte_array() {
+        let elements = vec![Constant::ByteArray(vec![1]), Constant::U8(2)];
+        assert!(ConstantEmitter::serialize_byte_array_vector(&elements).is_err());
+    }
+
+    #[test]
+    fn compile_vec_vec_u8_constant() {
+        use move_binary_format::file_format::{
+            Bytecode, ConstantPoolIndex,
+            SignatureToken::{U8, Vector},
+        };
+
+        // BCS for vector<vector<u8>>: outer length, then each inner vec as length-prefixed bytes
+        let inner1: Vec<u8> = vec![0xAA, 0xBB];
+        let inner2: Vec<u8> = vec![0xCC];
+        let mut bcs_data = Vec::new();
+        bcs_data.push(2u8); // 2 elements
+        bcs_data.push(inner1.len() as u8);
+        bcs_data.extend_from_slice(&inner1);
+        bcs_data.push(inner2.len() as u8);
+        bcs_data.extend_from_slice(&inner2);
+
+        let vec_vec_u8 = Vector(Box::new(Vector(Box::new(U8))));
+        let module = CompiledModuleBuilder::new()
+            .constant(vec_vec_u8.clone(), bcs_data)
+            .function(
+                "get_vecs",
+                vec![],
+                vec![vec_vec_u8.clone()],
+                vec![vec_vec_u8],
+                vec![
+                    Bytecode::LdConst(ConstantPoolIndex(0)),
+                    Bytecode::StLoc(0),
+                    Bytecode::MoveLoc(0),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("__move_rt_const_vec_vec_u8"),
+            "missing runtime call\n{asm}"
+        );
     }
 
     #[test]

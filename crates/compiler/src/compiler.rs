@@ -337,6 +337,39 @@ mod tests {
     }
 
     #[test]
+    fn phantom_generic_with_type_param_local() {
+        // use_local<T>(x: &Balance<T>): u64 { let tmp: T; tmp = 42; tmp }
+        let balance_t = SignatureToken::DatatypeInstantiation(Box::new((
+            DatatypeHandleIndex(0),
+            vec![SignatureToken::TypeParameter(0)],
+        )));
+        let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
+
+        let module = CompiledModuleBuilder::balance()
+            .generic_function(
+                "use_local",
+                vec![AbilitySet::EMPTY],
+                vec![ref_balance_t],
+                vec![SignatureToken::U64],
+                // Explicit local of type TypeParameter(0) — the crux of this test.
+                vec![SignatureToken::TypeParameter(0)],
+                vec![
+                    Bytecode::LdU64(42),
+                    Bytecode::StLoc(1), // store into the TypeParameter(0) local
+                    Bytecode::MoveLoc(1),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("use_local"),
+            "phantom-generic with T-typed local should compile\n{asm}"
+        );
+    }
+
+    #[test]
     fn non_phantom_generic_not_compiled_at_top_level() {
         // identity<T>(x: T): T — T is NOT phantom (bare usage in params/returns).
         // This function should NOT be compiled at the top level.

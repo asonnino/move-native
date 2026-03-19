@@ -33,7 +33,7 @@ fn address() {
 }
 
 #[test]
-#[ignore = "expected integer for local, got PointerValue"]
+#[ignore = "StructId undefined in Move model"]
 fn address_alias() {
     fixture().compile("address_alias");
 }
@@ -160,7 +160,6 @@ fn hash() {
 }
 
 #[test]
-#[ignore = "unsupported constant: ByteArray"]
 fn hex() {
     fixture().compile("hex");
 }
@@ -261,7 +260,6 @@ fn table() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(0) in swap"]
 fn table_vec() {
     fixture().compile("table_vec");
 }
@@ -277,7 +275,6 @@ fn transfer() {
 }
 
 #[test]
-#[ignore = "unresolved TypeParameter(2) in remove_rule"]
 fn transfer_policy() {
     fixture().compile("transfer_policy");
 }
