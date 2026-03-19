@@ -82,6 +82,10 @@ fn kitchen_sink_compiles() {
         asm.contains("__move_rt_abort"),
         "should contain abort runtime call"
     );
+    assert!(
+        asm.contains("__move_rt_arithmetic_error"),
+        "should contain arithmetic error runtime call"
+    );
 
     // LLVM emits underscore-prefixed symbols on macOS
     assert!(

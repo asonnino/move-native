@@ -10,10 +10,6 @@ use move_stackless_bytecode::stackless_bytecode::Operation;
 use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
-const ABORT_OVERFLOW: u64 = 4001;
-const ABORT_DIV_BY_ZERO: u64 = 4002;
-const ABORT_OUT_OF_RANGE: u64 = 4003;
-
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
 /// and integer-cast operations.
 pub(crate) struct ArithmeticEmitter<'a, 'b, 'ctx> {
@@ -71,9 +67,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         Ok(())
     }
 
-    /// Emit a conditional abort: if `condition` is true, call `__move_rt_abort(error_code)`
+    /// Emit a conditional abort: if `condition` is true, call `__move_rt_arithmetic_error()`
     /// and mark the block unreachable; otherwise continue in a fresh basic block.
-    fn emit_abort_if(&self, condition: IntValue<'ctx>, error_code: u64) -> CompileResult<()> {
+    fn emit_abort_if(&self, condition: IntValue<'ctx>) -> CompileResult<()> {
         let llvm = self.state.ctx;
         let current_block = llvm
             .builder
@@ -89,14 +85,12 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             .build_conditional_branch(condition, abort_block, continue_block)?;
 
         llvm.builder.position_at_end(abort_block);
-        let abort_fn = self.state.declare_external(
-            "__move_rt_abort",
-            llvm.context
-                .void_type()
-                .fn_type(&[llvm.i64_type.into()], false),
+        let abort_function = self.state.declare_external(
+            "__move_rt_arithmetic_error",
+            llvm.context.void_type().fn_type(&[], false),
         );
-        let code = llvm.i64_type.const_int(error_code, false);
-        llvm.builder.build_call(abort_fn, &[code.into()], "abort")?;
+        llvm.builder
+            .build_call(abort_function, &[], "arithmetic_error")?;
         llvm.builder.build_unreachable()?;
 
         llvm.builder.position_at_end(continue_block);
@@ -117,14 +111,14 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let overflow =
                     llvm.builder
                         .build_int_compare(IntPredicate::ULT, result, lhs, "add_ov")?;
-                self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
+                self.emit_abort_if(overflow)?;
                 Ok(result)
             }
             Operation::Sub => {
                 let underflow =
                     llvm.builder
                         .build_int_compare(IntPredicate::ULT, lhs, rhs, "sub_uf")?;
-                self.emit_abort_if(underflow, ABORT_OVERFLOW)?;
+                self.emit_abort_if(underflow)?;
                 Ok(llvm.builder.build_int_sub(lhs, rhs, "sub")?)
             }
             Operation::Mul => {
@@ -145,7 +139,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                     llvm.builder
                         .build_int_compare(IntPredicate::NE, div_back, lhs, "mul_mm")?;
                 let overflow = llvm.builder.build_and(rhs_nonzero, mismatch, "mul_ov")?;
-                self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
+                self.emit_abort_if(overflow)?;
                 Ok(result)
             }
             Operation::Div => {
@@ -153,7 +147,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let is_zero =
                     llvm.builder
                         .build_int_compare(IntPredicate::EQ, rhs, zero, "div_z")?;
-                self.emit_abort_if(is_zero, ABORT_DIV_BY_ZERO)?;
+                self.emit_abort_if(is_zero)?;
                 Ok(llvm.builder.build_int_unsigned_div(lhs, rhs, "div")?)
             }
             Operation::Mod => {
@@ -161,7 +155,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let is_zero =
                     llvm.builder
                         .build_int_compare(IntPredicate::EQ, rhs, zero, "mod_z")?;
-                self.emit_abort_if(is_zero, ABORT_DIV_BY_ZERO)?;
+                self.emit_abort_if(is_zero)?;
                 Ok(llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?)
             }
             _ => unreachable!(),
@@ -344,7 +338,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let out_of_range =
             llvm.builder
                 .build_int_compare(IntPredicate::UGE, amt, bit_width, "shr_oor")?;
-        self.emit_abort_if(out_of_range, ABORT_OUT_OF_RANGE)?;
+        self.emit_abort_if(out_of_range)?;
 
         Ok(if matches!(operation, Operation::Shl) {
             llvm.builder.build_left_shift(val, amt, "shl")?
@@ -389,7 +383,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             let overflow =
                 llvm.builder
                     .build_int_compare(IntPredicate::NE, high_bits, zero, "cast_ov")?;
-            self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
+            self.emit_abort_if(overflow)?;
             llvm.builder.build_int_truncate(val, target_ty, "cast")?
         } else if source_bits < destination_bits {
             llvm.builder.build_int_z_extend(val, target_ty, "cast")?
@@ -728,12 +722,8 @@ mod tests {
     fn div_zero_emits_abort() {
         let asm = binary_op_asm("div_z", SignatureToken::U64, Bytecode::Div);
         assert!(
-            asm.contains("__move_rt_abort"),
-            "div should emit abort for zero check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4002"),
-            "div should use DIV_BY_ZERO error code 4002\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "div should emit arithmetic_error for zero check\n{asm}"
         );
     }
 
@@ -741,12 +731,8 @@ mod tests {
     fn add_overflow_emits_abort() {
         let asm = binary_op_asm("add_ov", SignatureToken::U64, Bytecode::Add);
         assert!(
-            asm.contains("__move_rt_abort"),
-            "add should emit abort for overflow check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4001"),
-            "add should use OVERFLOW error code 4001\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "add should emit arithmetic_error for overflow check\n{asm}"
         );
     }
 
@@ -754,12 +740,8 @@ mod tests {
     fn sub_underflow_emits_abort() {
         let asm = binary_op_asm("sub_uf", SignatureToken::U64, Bytecode::Sub);
         assert!(
-            asm.contains("__move_rt_abort"),
-            "sub should emit abort for underflow check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4001"),
-            "sub should use OVERFLOW error code 4001\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "sub should emit arithmetic_error for underflow check\n{asm}"
         );
     }
 
@@ -767,12 +749,8 @@ mod tests {
     fn mul_overflow_emits_abort() {
         let asm = binary_op_asm("mul_ov", SignatureToken::U64, Bytecode::Mul);
         assert!(
-            asm.contains("__move_rt_abort"),
-            "mul should emit abort for overflow check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4001"),
-            "mul should use OVERFLOW error code 4001\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "mul should emit arithmetic_error for overflow check\n{asm}"
         );
     }
 
@@ -794,12 +772,8 @@ mod tests {
             .build();
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("__move_rt_abort"),
-            "shift should emit abort for range check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4003"),
-            "shift should use OUT_OF_RANGE error code 4003\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "shift should emit arithmetic_error for range check\n{asm}"
         );
     }
 
@@ -812,12 +786,8 @@ mod tests {
             Bytecode::CastU8,
         );
         assert!(
-            asm.contains("__move_rt_abort"),
-            "narrowing cast should emit abort for overflow check\n{asm}"
-        );
-        assert!(
-            asm.contains("#4001"),
-            "narrowing cast should use OVERFLOW error code 4001\n{asm}"
+            asm.contains("__move_rt_arithmetic_error"),
+            "narrowing cast should emit arithmetic_error for overflow check\n{asm}"
         );
     }
 
@@ -830,8 +800,8 @@ mod tests {
             Bytecode::CastU64,
         );
         assert!(
-            !asm.contains("__move_rt_abort"),
-            "widening cast should NOT emit abort\n{asm}"
+            !asm.contains("__move_rt_arithmetic_error"),
+            "widening cast should NOT emit arithmetic_error\n{asm}"
         );
     }
 }
