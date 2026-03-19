@@ -168,6 +168,13 @@ impl<'ctx> LlvmContext<'ctx> {
         })
     }
 
+    /// Build a module-qualified function name to avoid cross-module symbol collisions.
+    pub(crate) fn qualified_function_name(env: &FunctionEnv<'_>) -> String {
+        let module_name = env.module_env.get_full_name_str().replace("::", "_");
+        let function_name = env.get_name_str();
+        format!("{module_name}_{function_name}")
+    }
+
     /// Mangle a Move type into a symbol-safe string.
     pub(crate) fn mangle_type(&self, ty: &Type) -> CompileResult<String> {
         Mangler::new(&self.env).mangle_type(ty)

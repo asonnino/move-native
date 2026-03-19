@@ -107,7 +107,7 @@ impl<'ctx> Compiler<'ctx> {
         &self,
         function_env: &FunctionEnv<'_>,
     ) -> CompileResult<FunctionValue<'ctx>> {
-        let name = function_env.get_name_str();
+        let name = LlvmContext::qualified_function_name(function_env);
         let function_type = TypeLowering::new(&self.ctx).lower_function_type(
             &function_env.get_parameter_types(),
             &function_env.get_return_types(),
@@ -232,7 +232,7 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("value"),
+            asm.contains("0x0_M_value"),
             "phantom-generic 'value' should be compiled\n{asm}"
         );
         assert!(asm.contains("ret"), "should contain ret\n{asm}");
@@ -269,7 +269,7 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("zero"),
+            asm.contains("0x0_M_zero"),
             "phantom-generic 'zero' should be compiled\n{asm}"
         );
     }
@@ -327,11 +327,11 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("phantom_read_x$u64"),
+            asm.contains("0x0_M_phantom_read_x$u64"),
             "should contain erased monomorphization phantom_read_x$u64\n{asm}"
         );
         assert!(
-            asm.contains("phantom_proxy"),
+            asm.contains("0x0_M_phantom_proxy"),
             "phantom_proxy should be compiled\n{asm}"
         );
     }
@@ -364,7 +364,7 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("use_local"),
+            asm.contains("0x0_M_use_local"),
             "phantom-generic with T-typed local should compile\n{asm}"
         );
     }
@@ -386,7 +386,7 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            !asm.contains("identity"),
+            !asm.contains("0x0_M_identity"),
             "non-phantom generic 'identity' should NOT be compiled at top level\n{asm}"
         );
     }

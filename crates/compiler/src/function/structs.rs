@@ -200,8 +200,8 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("new_point"),
-            "missing 'new_point' symbol\n{asm}"
+            asm.contains("0x0_M_new_point"),
+            "missing '0x0_M_new_point' symbol\n{asm}"
         );
     }
 
@@ -226,7 +226,10 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("get_x"), "missing 'get_x' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_get_x"),
+            "missing '0x0_M_get_x' symbol\n{asm}"
+        );
     }
 
     #[test]
@@ -248,7 +251,7 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("copy_via_ref"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_copy_via_ref"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -274,7 +277,7 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("overwrite"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_overwrite"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -307,6 +310,6 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("get_x_via_ref"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_get_x_via_ref"), "missing symbol\n{asm}");
     }
 }

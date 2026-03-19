@@ -8,6 +8,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use super::FunctionLowering;
 use super::state::{CallSiteValueExt, FunctionState};
+use crate::context::LlvmContext;
 use crate::error::{CompileContext, CompileError, CompileResult};
 
 /// Emits LLVM call instructions for Move function calls.
@@ -105,7 +106,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
         let llvm = &self.state.ctx;
         let inst_args = self.state.instantiate_types(type_args);
-        let callee_name = Self::qualified_function_name(callee_env);
+        let callee_name = LlvmContext::qualified_function_name(callee_env);
         let args = self.state.mangle_type_args(&inst_args)?;
         let mangled = format!("{callee_name}${args}");
         let f = match llvm.get_function(&mangled) {
@@ -159,7 +160,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         callee_env: &move_model::model::FunctionEnv<'_>,
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
         let llvm = &self.state.ctx;
-        let callee_name = callee_env.get_name_str();
+        let callee_name = LlvmContext::qualified_function_name(callee_env);
         let f = match llvm.get_function(&callee_name) {
             Some(f) => f,
             None => {
@@ -171,18 +172,6 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             }
         };
         Ok((f, callee_name))
-    }
-
-    /// Module-qualified function name for monomorphized symbols.
-    ///
-    /// Uses `module_name::function_name` (with `::` replaced by `_`) to avoid
-    /// collisions when different modules have functions with the same name
-    /// (e.g. two different `remove` functions monomorphized with the same type args).
-    fn qualified_function_name(callee_env: &move_model::model::FunctionEnv<'_>) -> String {
-        let module_env = &callee_env.module_env;
-        let module_name = module_env.get_full_name_str().replace("::", "_");
-        let function_name = callee_env.get_name_str();
-        format!("{module_name}_{function_name}")
     }
 }
 
@@ -225,8 +214,14 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("double"), "missing 'double' symbol\n{asm}");
-        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_double"),
+            "missing 'double' symbol\n{asm}"
+        );
+        assert!(
+            asm.contains("0x0_M_caller"),
+            "missing 'caller' symbol\n{asm}"
+        );
         assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
     }
 
@@ -257,10 +252,13 @@ mod tests {
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
         assert!(
-            asm.contains("identity$u64"),
+            asm.contains("0x0_M_identity$u64"),
             "missing monomorphized 'identity$u64' symbol\n{asm}"
         );
-        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_caller"),
+            "missing 'caller' symbol\n{asm}"
+        );
     }
 
     #[test]
@@ -286,7 +284,10 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("caller"), "missing 'caller' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_caller"),
+            "missing 'caller' symbol\n{asm}"
+        );
         assert!(
             asm.contains("__move_rt_0x0_M_native_add"),
             "missing mangled native symbol\n{asm}"

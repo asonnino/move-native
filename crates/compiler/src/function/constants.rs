@@ -425,7 +425,7 @@ mod tests {
             )
             .build();
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("load_addr"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_load_addr"), "missing symbol\n{asm}");
     }
 
     #[test]

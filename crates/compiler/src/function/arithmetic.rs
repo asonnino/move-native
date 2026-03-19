@@ -10,6 +10,10 @@ use move_stackless_bytecode::stackless_bytecode::Operation;
 use super::state::{CallSiteValueExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
+const ABORT_OVERFLOW: u64 = 4001;
+const ABORT_DIV_BY_ZERO: u64 = 4002;
+const ABORT_OUT_OF_RANGE: u64 = 4003;
+
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
 /// and integer-cast operations.
 pub(crate) struct ArithmeticEmitter<'a, 'b, 'ctx> {
@@ -67,6 +71,38 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         Ok(())
     }
 
+    /// Emit a conditional abort: if `condition` is true, call `__move_rt_abort(error_code)`
+    /// and mark the block unreachable; otherwise continue in a fresh basic block.
+    fn emit_abort_if(&self, condition: IntValue<'ctx>, error_code: u64) -> CompileResult<()> {
+        let llvm = self.state.ctx;
+        let current_block = llvm
+            .builder
+            .get_insert_block()
+            .ok_or(CompileError::llvm("no insert block"))?;
+        let function = current_block
+            .get_parent()
+            .ok_or(CompileError::llvm("block has no parent function"))?;
+        let abort_block = llvm.context.append_basic_block(function, "abort");
+        let continue_block = llvm.context.append_basic_block(function, "continue");
+
+        llvm.builder
+            .build_conditional_branch(condition, abort_block, continue_block)?;
+
+        llvm.builder.position_at_end(abort_block);
+        let abort_fn = self.state.declare_external(
+            "__move_rt_abort",
+            llvm.context
+                .void_type()
+                .fn_type(&[llvm.i64_type.into()], false),
+        );
+        let code = llvm.i64_type.const_int(error_code, false);
+        llvm.builder.build_call(abort_fn, &[code.into()], "abort")?;
+        llvm.builder.build_unreachable()?;
+
+        llvm.builder.position_at_end(continue_block);
+        Ok(())
+    }
+
     fn emit_arithmetic(
         &self,
         operation: &Operation,
@@ -75,14 +111,61 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let lhs = self.state.load_int(sources[0])?;
         let rhs = self.state.load_int(sources[1])?;
-        Ok(match operation {
-            Operation::Add => llvm.builder.build_int_add(lhs, rhs, "add")?,
-            Operation::Sub => llvm.builder.build_int_sub(lhs, rhs, "sub")?,
-            Operation::Mul => llvm.builder.build_int_mul(lhs, rhs, "mul")?,
-            Operation::Div => llvm.builder.build_int_unsigned_div(lhs, rhs, "div")?,
-            Operation::Mod => llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?,
+        match operation {
+            Operation::Add => {
+                let result = llvm.builder.build_int_add(lhs, rhs, "add")?;
+                let overflow =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::ULT, result, lhs, "add_ov")?;
+                self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
+                Ok(result)
+            }
+            Operation::Sub => {
+                let underflow =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::ULT, lhs, rhs, "sub_uf")?;
+                self.emit_abort_if(underflow, ABORT_OVERFLOW)?;
+                Ok(llvm.builder.build_int_sub(lhs, rhs, "sub")?)
+            }
+            Operation::Mul => {
+                let result = llvm.builder.build_int_mul(lhs, rhs, "mul")?;
+                let zero = rhs.get_type().const_int(0, false);
+                let one = rhs.get_type().const_int(1, false);
+                let rhs_nonzero =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::NE, rhs, zero, "rhs_nz")?;
+                let safe_divisor = llvm
+                    .builder
+                    .build_select(rhs_nonzero, rhs, one, "safe_div")?
+                    .into_int_value();
+                let div_back =
+                    llvm.builder
+                        .build_int_unsigned_div(result, safe_divisor, "div_back")?;
+                let mismatch =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::NE, div_back, lhs, "mul_mm")?;
+                let overflow = llvm.builder.build_and(rhs_nonzero, mismatch, "mul_ov")?;
+                self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
+                Ok(result)
+            }
+            Operation::Div => {
+                let zero = rhs.get_type().const_int(0, false);
+                let is_zero =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::EQ, rhs, zero, "div_z")?;
+                self.emit_abort_if(is_zero, ABORT_DIV_BY_ZERO)?;
+                Ok(llvm.builder.build_int_unsigned_div(lhs, rhs, "div")?)
+            }
+            Operation::Mod => {
+                let zero = rhs.get_type().const_int(0, false);
+                let is_zero =
+                    llvm.builder
+                        .build_int_compare(IntPredicate::EQ, rhs, zero, "mod_z")?;
+                self.emit_abort_if(is_zero, ABORT_DIV_BY_ZERO)?;
+                Ok(llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?)
+            }
             _ => unreachable!(),
-        })
+        }
     }
 
     fn emit_ord_cmp(
@@ -254,6 +337,15 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         } else {
             amt
         };
+
+        let bit_width = val
+            .get_type()
+            .const_int(val.get_type().get_bit_width() as u64, false);
+        let out_of_range =
+            llvm.builder
+                .build_int_compare(IntPredicate::UGE, amt, bit_width, "shr_oor")?;
+        self.emit_abort_if(out_of_range, ABORT_OUT_OF_RANGE)?;
+
         Ok(if matches!(operation, Operation::Shl) {
             llvm.builder.build_left_shift(val, amt, "shl")?
         } else {
@@ -289,6 +381,15 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let source_bits = val.get_type().get_bit_width();
         let destination_bits = target_ty.get_bit_width();
         Ok(if source_bits > destination_bits {
+            let shift_amt = val.get_type().const_int(destination_bits as u64, false);
+            let high_bits = llvm
+                .builder
+                .build_right_shift(val, shift_amt, false, "hi")?;
+            let zero = val.get_type().const_int(0, false);
+            let overflow =
+                llvm.builder
+                    .build_int_compare(IntPredicate::NE, high_bits, zero, "cast_ov")?;
+            self.emit_abort_if(overflow, ABORT_OVERFLOW)?;
             llvm.builder.build_int_truncate(val, target_ty, "cast")?
         } else if source_bits < destination_bits {
             llvm.builder.build_int_z_extend(val, target_ty, "cast")?
@@ -365,14 +466,17 @@ mod tests {
     #[test]
     fn add_u64() {
         let asm = binary_op_asm("add_fn", SignatureToken::U64, Bytecode::Add);
-        assert!(asm.contains("add_fn"), "missing symbol\n{asm}");
-        assert!(asm.contains("\tadd\t"), "missing add instruction\n{asm}");
+        assert!(asm.contains("0x0_M_add_fn"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("\tadd\t") || asm.contains("\tadds\t"),
+            "missing add instruction\n{asm}"
+        );
     }
 
     #[test]
     fn add_u256() {
         let asm = binary_op_asm("add_u256", SignatureToken::U256, Bytecode::Add);
-        assert!(asm.contains("add_u256"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_add_u256"), "missing symbol\n{asm}");
         // i256 add lowers to multi-word arithmetic with carry chain
         assert!(
             asm.contains("\tadds\t"),
@@ -500,7 +604,7 @@ mod tests {
             SignatureToken::Bool,
             Bytecode::Not,
         );
-        assert!(asm.contains("not_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_not_fn"), "missing symbol\n{asm}");
         assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
     }
 
@@ -512,7 +616,7 @@ mod tests {
             SignatureToken::U8,
             Bytecode::CastU8,
         );
-        assert!(asm.contains("trunc_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_trunc_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -523,7 +627,7 @@ mod tests {
             SignatureToken::U64,
             Bytecode::CastU64,
         );
-        assert!(asm.contains("extend_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_extend_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -534,14 +638,14 @@ mod tests {
             SignatureToken::U64,
             Bytecode::CastU64,
         );
-        assert!(asm.contains("cast_noop"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_cast_noop"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn eq_ref_u64() {
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
         let asm = comparison_op_asm("eq_ref_u64", ref_u64, Bytecode::Eq);
-        assert!(asm.contains("eq_ref_u64"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_eq_ref_u64"), "missing symbol\n{asm}");
         // Should dereference (ldr) and then compare (cmp + cset)
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
@@ -551,7 +655,7 @@ mod tests {
     fn neq_ref_u64() {
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
         let asm = comparison_op_asm("neq_ref_u64", ref_u64, Bytecode::Neq);
-        assert!(asm.contains("neq_ref_u64"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_neq_ref_u64"), "missing symbol\n{asm}");
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         // LLVM may optimize xor+zext into cset ne
         assert!(
@@ -564,7 +668,7 @@ mod tests {
     fn eq_vector_u8() {
         let vec_u8 = SignatureToken::Vector(Box::new(SignatureToken::U8));
         let asm = comparison_op_asm("eq_vec_u8", vec_u8, Bytecode::Eq);
-        assert!(asm.contains("eq_vec_u8"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_eq_vec_u8"), "missing symbol\n{asm}");
         assert!(
             asm.contains("__move_rt_vec_eq"),
             "missing __move_rt_vec_eq call\n{asm}"
@@ -577,7 +681,7 @@ mod tests {
             SignatureToken::U8,
         ))));
         let asm = comparison_op_asm("eq_ref_vec", ref_vec_u8, Bytecode::Eq);
-        assert!(asm.contains("eq_ref_vec"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_eq_ref_vec"), "missing symbol\n{asm}");
         // Should deref the reference, then call vec_eq
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         assert!(
@@ -615,8 +719,119 @@ mod tests {
             )
             .build();
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("eq_point"), "missing symbol\n{asm}");
+        assert!(asm.contains("0x0_M_eq_point"), "missing symbol\n{asm}");
         // Field-by-field comparison: at least one cmp (LLVM may fuse/optimize)
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
+    }
+
+    #[test]
+    fn div_zero_emits_abort() {
+        let asm = binary_op_asm("div_z", SignatureToken::U64, Bytecode::Div);
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "div should emit abort for zero check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4002"),
+            "div should use DIV_BY_ZERO error code 4002\n{asm}"
+        );
+    }
+
+    #[test]
+    fn add_overflow_emits_abort() {
+        let asm = binary_op_asm("add_ov", SignatureToken::U64, Bytecode::Add);
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "add should emit abort for overflow check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4001"),
+            "add should use OVERFLOW error code 4001\n{asm}"
+        );
+    }
+
+    #[test]
+    fn sub_underflow_emits_abort() {
+        let asm = binary_op_asm("sub_uf", SignatureToken::U64, Bytecode::Sub);
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "sub should emit abort for underflow check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4001"),
+            "sub should use OVERFLOW error code 4001\n{asm}"
+        );
+    }
+
+    #[test]
+    fn mul_overflow_emits_abort() {
+        let asm = binary_op_asm("mul_ov", SignatureToken::U64, Bytecode::Mul);
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "mul should emit abort for overflow check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4001"),
+            "mul should use OVERFLOW error code 4001\n{asm}"
+        );
+    }
+
+    #[test]
+    fn shift_range_emits_abort() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "shl_chk",
+                vec![SignatureToken::U64, SignatureToken::U8],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Shl,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "shift should emit abort for range check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4003"),
+            "shift should use OUT_OF_RANGE error code 4003\n{asm}"
+        );
+    }
+
+    #[test]
+    fn cast_narrowing_emits_abort() {
+        let asm = unary_op_asm(
+            "trunc_chk",
+            SignatureToken::U64,
+            SignatureToken::U8,
+            Bytecode::CastU8,
+        );
+        assert!(
+            asm.contains("__move_rt_abort"),
+            "narrowing cast should emit abort for overflow check\n{asm}"
+        );
+        assert!(
+            asm.contains("#4001"),
+            "narrowing cast should use OVERFLOW error code 4001\n{asm}"
+        );
+    }
+
+    #[test]
+    fn cast_widening_no_abort() {
+        let asm = unary_op_asm(
+            "widen_ok",
+            SignatureToken::U8,
+            SignatureToken::U64,
+            Bytecode::CastU64,
+        );
+        assert!(
+            !asm.contains("__move_rt_abort"),
+            "widening cast should NOT emit abort\n{asm}"
+        );
     }
 }

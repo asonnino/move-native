@@ -133,7 +133,11 @@ impl AssemblyBuilder {
     pub(crate) fn optimize(&self, module: &Module<'_>) -> CompileResult<()> {
         let options = PassBuilderOptions::create();
         module
-            .run_passes("mem2reg,instcombine,simplifycfg", &self.machine, options)
+            .run_passes(
+                "mem2reg,instcombine<max-iterations=2>,simplifycfg",
+                &self.machine,
+                options,
+            )
             .map_err(|e| CompileError::llvm(e.to_string()))
     }
 

@@ -105,7 +105,7 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("noop"), "missing 'noop' symbol\n{asm}");
+        assert!(asm.contains("0x0_M_noop"), "missing 'noop' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
@@ -122,7 +122,10 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("identity"), "missing 'identity' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_identity"),
+            "missing 'identity' symbol\n{asm}"
+        );
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
@@ -139,7 +142,7 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("swap"), "missing 'swap' symbol\n{asm}");
+        assert!(asm.contains("0x0_M_swap"), "missing 'swap' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
@@ -179,7 +182,10 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("sum_to_n"), "missing 'sum_to_n' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_sum_to_n"),
+            "missing 'sum_to_n' symbol\n{asm}"
+        );
         assert!(asm.contains("b."), "missing conditional branch\n{asm}");
     }
 
@@ -201,7 +207,10 @@ mod tests {
             .build();
 
         let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(asm.contains("abort_42"), "missing 'abort_42' symbol\n{asm}");
+        assert!(
+            asm.contains("0x0_M_abort_42"),
+            "missing 'abort_42' symbol\n{asm}"
+        );
         assert!(
             asm.contains("__move_rt_abort"),
             "missing '__move_rt_abort' call\n{asm}"
