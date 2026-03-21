@@ -16,7 +16,7 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 
 use crate::context::LlvmContext;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::types::TypeLowering;
 
 /// Extension trait for extracting a `BasicValueEnum` from a call result.
@@ -106,7 +106,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
 
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
             let parameter = function
-                .get_nth_param(i as u32)
+                .get_nth_param(to_field_index(i)?)
                 .ok_or(CompileError::llvm("missing parameter"))?;
             ctx.builder.build_store(local.alloca, parameter)?;
         }
@@ -270,16 +270,19 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         &self,
         name: &str,
         data: &[u8],
-    ) -> inkwell::values::GlobalValue<'ctx> {
+    ) -> CompileResult<inkwell::values::GlobalValue<'ctx>> {
         let ctx = &self.ctx;
-        let arr_ty = ctx.i8_type.array_type(data.len() as u32);
+        let len = u32::try_from(data.len()).map_err(|_| {
+            CompileError::internal(format!("constant data length {} exceeds u32", data.len()))
+        })?;
+        let arr_ty = ctx.i8_type.array_type(len);
         let arr_val = ctx.context.const_string(data, false);
         let global = ctx.module.add_global(arr_ty, None, name);
         global.set_initializer(&arr_val);
         global.set_constant(true);
         global.set_linkage(Linkage::Private);
         global.set_unnamed_addr(true);
-        global
+        Ok(global)
     }
 
     /// Replace any remaining `TypeParameter` with a dummy concrete type (`U64`).
@@ -301,6 +304,21 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             ),
             other => other,
         }
+    }
+
+    /// Checked access to a source operand index.
+    pub(crate) fn source(&self, sources: &[usize], i: usize) -> CompileResult<usize> {
+        sources
+            .get(i)
+            .copied()
+            .ok_or_else(|| CompileError::internal(format!("missing source operand at index {i}")))
+    }
+
+    /// Checked access to a destination operand index.
+    pub(crate) fn destination(&self, destinations: &[usize], i: usize) -> CompileResult<usize> {
+        destinations.get(i).copied().ok_or_else(|| {
+            CompileError::internal(format!("missing destination operand at index {i}"))
+        })
     }
 
     fn llvm_type_name(val: &BasicValueEnum<'_>) -> &'static str {

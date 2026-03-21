@@ -9,7 +9,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 use super::FunctionLowering;
 use super::state::{CallSiteValueExt, FunctionState};
 use crate::context::LlvmContext;
-use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
+use crate::error::{CompileContext, CompileError, CompileResult, catch_panic, to_field_index};
 
 /// Emits LLVM call instructions for Move function calls.
 ///
@@ -53,7 +53,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         if !destinations.is_empty() {
             let return_value = call.into_basic_value()?;
             if destinations.len() == 1 {
-                self.state.store(destinations[0], return_value)?;
+                self.state.store(self.state.destination(destinations, 0)?, return_value)?;
             } else {
                 let BasicValueEnum::StructValue(struct_val) = return_value else {
                     return Err(CompileError::TypeMismatch(format!(
@@ -63,7 +63,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 for (i, destination) in destinations.iter().enumerate() {
                     let field = llvm.builder.build_extract_value(
                         struct_val,
-                        i as u32,
+                        to_field_index(i)?,
                         &format!("call_ret_{i}"),
                     )?;
                     self.state.store(*destination, field)?;

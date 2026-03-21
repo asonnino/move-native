@@ -130,6 +130,11 @@ pub(crate) fn catch_panic<T>(label: &str, generate: impl FnOnce() -> T) -> Compi
     })
 }
 
+/// Checked cast of a bytecode-derived index to a u32 LLVM field index.
+pub(crate) fn to_field_index(i: usize) -> CompileResult<u32> {
+    u32::try_from(i).map_err(|_| CompileError::internal(format!("field index {i} exceeds u32")))
+}
+
 /// Extension trait for adding context to `CompileResult` via method chaining.
 pub(crate) trait CompileContext<T> {
     fn context(self, ctx: impl fmt::Display) -> CompileResult<T>;

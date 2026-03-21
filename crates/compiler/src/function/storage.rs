@@ -134,7 +134,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
 
         if !destinations.is_empty() {
             let ret_val = call.into_basic_value()?;
-            self.state.store(destinations[0], ret_val)?;
+            self.state.store(self.state.destination(destinations, 0)?, ret_val)?;
         }
         Ok(())
     }

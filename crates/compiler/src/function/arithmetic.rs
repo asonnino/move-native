@@ -9,7 +9,7 @@ use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::{CallSiteValueExt, FunctionState};
 use crate::context::DatatypeEnv;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
 
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
@@ -56,16 +56,29 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             Operation::Not => self.emit_not(sources)?,
 
             // Integer casts
-            Operation::CastU8 => self.lower_cast(sources[0], self.state.ctx.i8_type)?,
-            Operation::CastU16 => self.lower_cast(sources[0], self.state.ctx.i16_type)?,
-            Operation::CastU32 => self.lower_cast(sources[0], self.state.ctx.i32_type)?,
-            Operation::CastU64 => self.lower_cast(sources[0], self.state.ctx.i64_type)?,
-            Operation::CastU128 => self.lower_cast(sources[0], self.state.ctx.i128_type)?,
-            Operation::CastU256 => self.lower_cast(sources[0], self.state.ctx.i256_type)?,
+            Operation::CastU8 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i8_type)?
+            }
+            Operation::CastU16 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i16_type)?
+            }
+            Operation::CastU32 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i32_type)?
+            }
+            Operation::CastU64 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i64_type)?
+            }
+            Operation::CastU128 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i128_type)?
+            }
+            Operation::CastU256 => {
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i256_type)?
+            }
 
             _ => unreachable!("ArithmeticEmitter::emit called with non-arithmetic op"),
         };
-        self.state.store(destinations[0], result.into())?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, result.into())?;
         Ok(())
     }
 
@@ -105,8 +118,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_int(sources[0])?;
-        let rhs = self.state.load_int(sources[1])?;
+        let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
+        let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         match operation {
             Operation::Add => {
                 let result = llvm.builder.build_int_add(lhs, rhs, "add")?;
@@ -170,8 +183,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_int(sources[0])?;
-        let rhs = self.state.load_int(sources[1])?;
+        let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
+        let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         let pred = match operation {
             Operation::Lt => IntPredicate::ULT,
             Operation::Gt => IntPredicate::UGT,
@@ -191,9 +204,11 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_value(sources[0])?;
-        let rhs = self.state.load_value(sources[1])?;
-        let mty = self.state.get_local(sources[0])?.mty.clone();
+        let src0 = self.state.source(sources, 0)?;
+        let src1 = self.state.source(sources, 1)?;
+        let lhs = self.state.load_value(src0)?;
+        let rhs = self.state.load_value(src1)?;
+        let mty = self.state.get_local(src0)?.mty.clone();
         let eq = self.emit_eq_values(lhs, rhs, &mty)?;
         let result = if matches!(operation, Operation::Neq) {
             let one = llvm.i8_type.const_int(1, false);
@@ -299,12 +314,16 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let mut acc = llvm.i8_type.const_int(1, false);
         for (i, field_ty) in field_types.iter().enumerate() {
-            let lhs_field =
-                llvm.builder
-                    .build_extract_value(lhs_struct, i as u32, &format!("l_{i}"))?;
-            let rhs_field =
-                llvm.builder
-                    .build_extract_value(rhs_struct, i as u32, &format!("r_{i}"))?;
+            let lhs_field = llvm.builder.build_extract_value(
+                lhs_struct,
+                to_field_index(i)?,
+                &format!("l_{i}"),
+            )?;
+            let rhs_field = llvm.builder.build_extract_value(
+                rhs_struct,
+                to_field_index(i)?,
+                &format!("r_{i}"),
+            )?;
             let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty)?;
             acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
         }
@@ -371,8 +390,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_int(sources[0])?;
-        let rhs = self.state.load_int(sources[1])?;
+        let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
+        let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(match operation {
             Operation::BitAnd => llvm.builder.build_and(lhs, rhs, "and")?,
             Operation::BitOr => llvm.builder.build_or(lhs, rhs, "or")?,
@@ -387,8 +406,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let val = self.state.load_int(sources[0])?;
-        let amt = self.state.load_int(sources[1])?;
+        let val = self.state.load_int(self.state.source(sources, 0)?)?;
+        let amt = self.state.load_int(self.state.source(sources, 1)?)?;
         let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
             llvm.builder
                 .build_int_z_extend(amt, val.get_type(), "shl_ext")?
@@ -421,8 +440,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let lhs = self.state.load_int(sources[0])?;
-        let rhs = self.state.load_int(sources[1])?;
+        let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
+        let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(if matches!(operation, Operation::And) {
             llvm.builder.build_and(lhs, rhs, "land")?
         } else {
@@ -432,7 +451,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
     fn emit_not(&self, sources: &[usize]) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx;
-        let source = self.state.load_int(sources[0])?;
+        let source = self.state.load_int(self.state.source(sources, 0)?)?;
         let one = llvm.i8_type.const_int(1, false);
         Ok(llvm.builder.build_xor(source, one, "not")?)
     }

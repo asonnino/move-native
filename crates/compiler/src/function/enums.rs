@@ -8,7 +8,7 @@ use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
 use crate::context::DatatypeEnv;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
 
 /// Emits LLVM IR for enum construction and destructuring.
@@ -83,7 +83,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                 "enum_payload",
             )?
             .into_struct_value();
-        self.state.store(destinations[0], enum_value.into())?;
+        self.state.store(self.state.destination(destinations, 0)?, enum_value.into())?;
         Ok(())
     }
 
@@ -103,7 +103,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         let variant = layout.variant(variant_id);
         match ref_type {
             RefType::ByValue => {
-                let enum_value = self.state.load_struct(sources[0])?;
+                let enum_value = self.state.load_struct(self.state.source(sources, 0)?)?;
                 let payload = llvm
                     .builder
                     .build_extract_value(
@@ -116,14 +116,14 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                 for (i, destination) in destinations.iter().enumerate() {
                     let field = llvm.builder.build_extract_value(
                         payload,
-                        i as u32,
+                        to_field_index(i)?,
                         &format!("variant_field_{i}"),
                     )?;
                     self.state.store(*destination, field)?;
                 }
             }
             RefType::ByImmRef | RefType::ByMutRef => {
-                let enum_ptr = self.state.load_pointer(sources[0])?;
+                let enum_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
                 let payload_ptr = llvm.builder.build_struct_gep(
                     enum_type,
                     enum_ptr,
@@ -142,7 +142,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                     let field_ptr = llvm.builder.build_struct_gep(
                         payload_type,
                         payload_ptr,
-                        i as u32,
+                        to_field_index(i)?,
                         &format!("variant_field_ptr_{i}"),
                     )?;
                     self.state.store(*destination, field_ptr.into())?;
@@ -189,7 +189,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
             let field = self.state.load_value(*source)?;
             payload = llvm
                 .builder
-                .build_insert_value(payload, field, i as u32, &format!("payload_{i}"))?
+                .build_insert_value(payload, field, to_field_index(i)?, &format!("payload_{i}"))?
                 .into_struct_value();
         }
         Ok(payload)

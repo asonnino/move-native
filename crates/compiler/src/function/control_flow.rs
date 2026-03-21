@@ -7,7 +7,7 @@ use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Bytecode;
 
 use super::state::FunctionState;
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, to_field_index};
 
 /// Emits LLVM IR for control-flow bytecodes
 /// (Ret, Label, Jump, Branch, Abort).
@@ -41,7 +41,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                         let val = self.state.load_value(*r)?;
                         struct_value = llvm
                             .builder
-                            .build_insert_value(struct_value, val, i as u32, &format!("ret_{i}"))?
+                            .build_insert_value(struct_value, val, to_field_index(i)?, &format!("ret_{i}"))?
                             .into_struct_value();
                     }
                     llvm.builder.build_return(Some(&struct_value))?;

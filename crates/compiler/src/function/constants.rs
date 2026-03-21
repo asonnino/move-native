@@ -50,7 +50,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let id = self.state.next_const_id();
                 let global = self
                     .state
-                    .emit_const_global(&format!("const_bytes_{id}"), bytes);
+                    .emit_const_global(&format!("const_bytes_{id}"), bytes)?;
                 let func = self.state.declare_external(
                     "__move_rt_const_vec_u8",
                     llvm.ptr_type
@@ -68,7 +68,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 let buf = Self::serialize_address_array(addresses);
                 let global = self
                     .state
-                    .emit_const_global(&format!("const_addrs_{id}"), &buf);
+                    .emit_const_global(&format!("const_addrs_{id}"), &buf)?;
                 let func = self.state.declare_external(
                     "__move_rt_const_vec_address",
                     llvm.ptr_type
@@ -110,7 +110,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     let id = self.state.next_const_id();
                     let global = self
                         .state
-                        .emit_const_global(&format!("const_vec_bytes_{id}"), &buf);
+                        .emit_const_global(&format!("const_vec_bytes_{id}"), &buf)?;
                     let function_type = llvm
                         .ptr_type
                         .fn_type(&[llvm.ptr_type.into(), llvm.i64_type.into()], false);
@@ -138,7 +138,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     let id = self.state.next_const_id();
                     let global = self
                         .state
-                        .emit_const_global(&format!("const_vec_{id}"), &buf);
+                        .emit_const_global(&format!("const_vec_{id}"), &buf)?;
                     let function = self
                         .state
                         .declare_external("__move_rt_const_vec", function_type);

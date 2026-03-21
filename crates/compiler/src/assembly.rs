@@ -157,11 +157,11 @@ impl AssemblyBuilder {
         // where the ARM pair-store drags x23 along as the partner of x24.
         // This is benign — it preserves the gas counter across calls, which
         // is exactly what we want.  Assert that x23 only appears in stp/ldp.
-        debug_assert!(
-            !Self::has_x23_misuse(&asm),
-            "compiler used x23 (reserved for gas metering) outside stp/ldp save/restore\n\
-            assembly:\n{asm}"
-        );
+        if Self::has_x23_misuse(&asm) {
+            return Err(CompileError::codegen(
+                "x23 (reserved for gas metering) used outside stp/ldp save/restore",
+            ));
+        }
 
         Ok(Assembly(asm))
     }

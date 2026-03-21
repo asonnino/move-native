@@ -7,7 +7,7 @@ use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
-use crate::error::CompileResult;
+use crate::error::{CompileResult, to_field_index};
 
 /// Emits LLVM IR for struct and reference operations
 /// (Pack, Unpack, BorrowLoc, BorrowField, GetField, ReadRef, WriteRef,
@@ -74,10 +74,11 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
             let field_val = self.state.load_value(*source)?;
             agg = llvm
                 .builder
-                .build_insert_value(agg, field_val, i as u32, &format!("pack_{i}"))?
+                .build_insert_value(agg, field_val, to_field_index(i)?, &format!("pack_{i}"))?
                 .into_struct_value();
         }
-        self.state.store(destinations[0], agg.into())?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, agg.into())?;
         Ok(())
     }
 
@@ -91,21 +92,24 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
         let _type_args = self.state.instantiate_types(type_args);
-        let struct_val = self.state.load_struct(sources[0])?;
+        let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
         let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id)?;
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
-            let field_val =
-                llvm.builder
-                    .build_extract_value(struct_val, i as u32, &format!("unpack_{i}"))?;
+            let field_val = llvm.builder.build_extract_value(
+                struct_val,
+                to_field_index(i)?,
+                &format!("unpack_{i}"),
+            )?;
             self.state.store(*destination, field_val)?;
         }
         Ok(())
     }
 
     fn emit_borrow_loc(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
-        let ptr = self.state.get_local(sources[0])?.alloca;
-        self.state.store(destinations[0], ptr.into())?;
+        let ptr = self.state.get_local(self.state.source(sources, 0)?)?.alloca;
+        self.state
+            .store(self.state.destination(destinations, 0)?, ptr.into())?;
         Ok(())
     }
 
@@ -119,15 +123,19 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let struct_ptr = self.state.load_pointer(sources[0])?;
+        let struct_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let type_args = self.state.instantiate_types(type_args);
         let struct_ty =
             self.state
                 .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?;
-        let field_ptr =
-            llvm.builder
-                .build_struct_gep(struct_ty, struct_ptr, offset as u32, "borrow_field")?;
-        self.state.store(destinations[0], field_ptr.into())?;
+        let field_ptr = llvm.builder.build_struct_gep(
+            struct_ty,
+            struct_ptr,
+            to_field_index(offset)?,
+            "borrow_field",
+        )?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, field_ptr.into())?;
         Ok(())
     }
 
@@ -138,34 +146,37 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let struct_val = self.state.load_struct(sources[0])?;
-        let field_val = llvm
-            .builder
-            .build_extract_value(struct_val, offset as u32, "getfield")?;
-        self.state.store(destinations[0], field_val)?;
+        let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
+        let field_val =
+            llvm.builder
+                .build_extract_value(struct_val, to_field_index(offset)?, "getfield")?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, field_val)?;
         Ok(())
     }
 
     fn emit_read_ref(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let ptr = self.state.load_pointer(sources[0])?;
-        let pointee_ty = self.state.pointee_type(sources[0])?;
+        let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
+        let pointee_ty = self.state.pointee_type(self.state.source(sources, 0)?)?;
         let val = llvm.builder.build_load(pointee_ty, ptr, "read_ref")?;
-        self.state.store(destinations[0], val)?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, val)?;
         Ok(())
     }
 
     fn emit_write_ref(&self, sources: &[usize]) -> CompileResult<()> {
         let llvm = self.state.ctx;
-        let ptr = self.state.load_pointer(sources[0])?;
-        let val = self.state.load_value(sources[1])?;
+        let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
+        let val = self.state.load_value(self.state.source(sources, 1)?)?;
         llvm.builder.build_store(ptr, val)?;
         Ok(())
     }
 
     fn emit_freeze_ref(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
-        let ptr = self.state.load_value(sources[0])?;
-        self.state.store(destinations[0], ptr)?;
+        let ptr = self.state.load_value(self.state.source(sources, 0)?)?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, ptr)?;
         Ok(())
     }
 }
