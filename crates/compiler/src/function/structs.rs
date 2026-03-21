@@ -292,6 +292,33 @@ mod tests {
     }
 
     #[test]
+    fn freeze_ref() {
+        let mut_ref = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
+        let imm_ref = SignatureToken::Reference(Box::new(SignatureToken::U64));
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "freeze",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![mut_ref, imm_ref],
+                vec![
+                    Bytecode::MutBorrowLoc(0), // &mut x
+                    Bytecode::StLoc(1),        // r_mut = &mut x
+                    Bytecode::MoveLoc(1),       // push r_mut
+                    Bytecode::FreezeRef,       // &mut → &
+                    Bytecode::StLoc(2),        // r_imm = freeze(r_mut)
+                    Bytecode::MoveLoc(2),       // push r_imm
+                    Bytecode::ReadRef,         // *r_imm
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(asm.contains("0x0_M_freeze"), "missing symbol\n{asm}");
+    }
+
+    #[test]
     fn borrow_field() {
         let pt = SignatureToken::Datatype(DatatypeHandleIndex(0));
         let ref_point = SignatureToken::Reference(Box::new(pt.clone()));

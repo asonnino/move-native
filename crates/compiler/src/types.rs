@@ -157,6 +157,7 @@ mod tests {
 
     use super::TypeLowering;
     use crate::context::LlvmContext;
+    use crate::module::CompiledModuleBuilder;
 
     #[test]
     fn primitive_bit_widths() {
@@ -274,5 +275,38 @@ mod tests {
             .expect("should have a return type");
         let struct_ty = ret.into_struct_type();
         assert_eq!(struct_ty.count_fields(), 2);
+    }
+
+    #[test]
+    fn lower_enum_type() {
+        let compiled = CompiledModuleBuilder::option().build();
+        let ctx = LlvmContext::new_from_module(&compiled).unwrap();
+        let module_env = ctx.target_module().unwrap();
+        let enum_env = module_env.get_enums().next().expect("no enums");
+        let module_id = module_env.get_id();
+        let datatype_id = enum_env.get_id();
+
+        let lowering = TypeLowering::new(&ctx);
+        let ty = lowering
+            .lower_type(&Type::Datatype(module_id, datatype_id, vec![]))
+            .unwrap();
+
+        let struct_ty = ty.into_struct_type();
+        // 1 tag field + 2 variant payload slots = 3 fields
+        assert_eq!(
+            struct_ty.count_fields(),
+            3,
+            "expected 3 fields (tag + 2 variant payloads)"
+        );
+        // Tag field is i8 (≤256 variants)
+        assert_eq!(
+            struct_ty
+                .get_field_type_at_index(0)
+                .unwrap()
+                .into_int_type()
+                .get_bit_width(),
+            8,
+            "tag should be i8"
+        );
     }
 }

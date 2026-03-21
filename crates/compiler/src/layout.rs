@@ -92,3 +92,100 @@ impl<'env> EnumLayout<'env> {
         VariantLayout::new(self.env.get_variant(id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_model::ty::{PrimitiveType, Type};
+
+    use super::EnumLayout;
+    use crate::context::{DatatypeEnv, LlvmContext};
+    use crate::module::CompiledModuleBuilder;
+
+    /// Build an `EnumLayout` from a builder module that has exactly one enum.
+    fn layout_from_builder(builder: CompiledModuleBuilder) -> impl FnOnce() -> EnumLayout<'static> {
+        move || {
+            let compiled = builder.build();
+            let ctx: &'static LlvmContext<'static> =
+                Box::leak(Box::new(LlvmContext::new_from_module(&compiled).unwrap()));
+            let module_env = ctx.target_module().unwrap();
+            let enum_env = module_env.get_enums().next().expect("module has no enums");
+            let module_id = module_env.get_id();
+            let datatype_id = enum_env.get_id();
+            let DatatypeEnv::Enum(e) = ctx.get_datatype_env(module_id, datatype_id).unwrap()
+            else {
+                panic!("expected enum");
+            };
+            EnumLayout::new(e)
+        }
+    }
+
+    #[test]
+    fn tag_bit_width_small() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        assert_eq!(layout.tag_bit_width().unwrap(), 8);
+    }
+
+    #[test]
+    fn variant_count() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        assert_eq!(layout.variants().count(), 2);
+    }
+
+    #[test]
+    fn variant_tags() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        let tags: Vec<usize> = layout.variants().map(|v| v.tag()).collect();
+        assert_eq!(tags, vec![0, 1]);
+    }
+
+    #[test]
+    fn variant_payload_field_index() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        // Variant 0 (None) → payload at field index 1
+        assert_eq!(layout.variants().next().unwrap().payload_field_index().unwrap(), 1);
+        // Variant 1 (Some) → payload at field index 2
+        assert_eq!(layout.variants().nth(1).unwrap().payload_field_index().unwrap(), 2);
+    }
+
+    #[test]
+    fn variant_payload_field_types_none() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        let none_variant = layout.variants().next().unwrap();
+        let fields = none_variant.payload_field_types(&[]);
+        assert!(fields.is_empty(), "None variant should have no fields");
+    }
+
+    #[test]
+    fn variant_payload_field_types_some() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        let some_variant = layout.variants().nth(1).unwrap();
+        let fields = some_variant.payload_field_types(&[]);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0], Type::Primitive(PrimitiveType::U64));
+    }
+
+    #[test]
+    fn llvm_name_without_args() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        let name = layout.llvm_name(None);
+        assert!(name.contains("MyOption"), "expected MyOption in name: {name}");
+    }
+
+    #[test]
+    fn llvm_name_with_args() {
+        let make = layout_from_builder(CompiledModuleBuilder::option());
+        let layout = make();
+        let name = layout.llvm_name(Some("u64"));
+        assert!(
+            name.contains("MyOption") && name.contains("u64"),
+            "expected MyOption__u64 pattern: {name}"
+        );
+    }
+}

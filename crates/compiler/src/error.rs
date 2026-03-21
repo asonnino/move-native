@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use thiserror::Error;
 
@@ -117,8 +118,6 @@ pub type CompileResult<T> = Result<T, CompileError>;
 /// Used to guard calls into upstream crates (e.g. `StacklessBytecodeGenerator`)
 /// that may panic on unexpected input.
 pub(crate) fn catch_panic<T>(label: &str, generate: impl FnOnce() -> T) -> CompileResult<T> {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
     catch_unwind(AssertUnwindSafe(generate)).map_err(|payload| {
         let payload = payload.as_ref();
         let detail = payload
@@ -143,5 +142,46 @@ pub(crate) trait CompileContext<T> {
 impl<T> CompileContext<T> for CompileResult<T> {
     fn context(self, ctx: impl fmt::Display) -> CompileResult<T> {
         self.map_err(|e| e.context(ctx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompileError, catch_panic};
+
+    #[test]
+    fn root_cause_no_context() {
+        let err = CompileError::internal("boom");
+        assert!(matches!(err.root_cause(), CompileError::Internal(msg) if msg == "boom"));
+    }
+
+    #[test]
+    fn root_cause_single_wrap() {
+        let err = CompileError::internal("inner").context("outer");
+        assert!(matches!(err.root_cause(), CompileError::Internal(msg) if msg == "inner"));
+    }
+
+    #[test]
+    fn root_cause_double_wrap() {
+        let err = CompileError::internal("deep").context("mid").context("top");
+        assert!(matches!(err.root_cause(), CompileError::Internal(msg) if msg == "deep"));
+    }
+
+    #[test]
+    fn catch_panic_normal() {
+        let result = catch_panic("test", || 42);
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn catch_panic_string_panic() {
+        let result = catch_panic::<()>("test", || panic!("kaboom"));
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("kaboom"),
+            "error should contain panic message: {msg}"
+        );
+        assert!(matches!(err, CompileError::Internal(_)));
     }
 }

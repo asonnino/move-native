@@ -332,6 +332,41 @@ mod tests {
     }
 
     #[test]
+    fn x23_in_stp_ldp_is_ok() {
+        use super::AssemblyBuilder;
+        let asm = "stp\tx24, x23, [sp, #-16]!\nldp\tx24, x23, [sp], #16\n";
+        assert!(!AssemblyBuilder::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn x23_in_add_is_misuse() {
+        use super::AssemblyBuilder;
+        let asm = "\tadd\tx23, x0, x1\n";
+        assert!(AssemblyBuilder::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn x23_in_comment_is_ok() {
+        use super::AssemblyBuilder;
+        let asm = "; x23 is the gas register\n// x23 reserved\n";
+        assert!(!AssemblyBuilder::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn x23_in_directive_is_ok() {
+        use super::AssemblyBuilder;
+        let asm = ".cfi_offset x23, -8\n";
+        assert!(!AssemblyBuilder::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn no_x23_is_ok() {
+        use super::AssemblyBuilder;
+        let asm = "\tadd\tx0, x1, x2\n\tret\n";
+        assert!(!AssemblyBuilder::has_x23_misuse(asm));
+    }
+
+    #[test]
     fn aliases_multiple_globals() {
         let mut asm = Assembly(
             indoc! {"

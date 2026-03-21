@@ -242,6 +242,61 @@ mod tests {
     }
 
     #[test]
+    fn variant_switch() {
+        use move_binary_format::file_format::{
+            Ability, AbilitySet, DatatypeHandleIndex, EnumDefinitionIndex, JumpTableInner,
+            VariantJumpTable, VariantJumpTableIndex,
+        };
+
+        let ref_option = SignatureToken::Reference(Box::new(SignatureToken::Datatype(
+            DatatypeHandleIndex(0),
+        )));
+        let module = CompiledModuleBuilder::new()
+            .enum_definition(
+                "Color",
+                AbilitySet::EMPTY | Ability::Copy | Ability::Drop,
+                vec![
+                    ("Red", vec![]),
+                    ("Green", vec![]),
+                    ("Blue", vec![]),
+                ],
+            )
+            .variant_handle(0, 0) // Red
+            .variant_handle(0, 1) // Green
+            .variant_handle(0, 2) // Blue
+            .function_with_jump_tables(
+                "color_to_u64",
+                vec![ref_option.clone()],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    // 0: switch on the enum reference
+                    Bytecode::CopyLoc(0),
+                    Bytecode::VariantSwitch(VariantJumpTableIndex(0)),
+                    // 2: Red → return 1
+                    Bytecode::LdU64(1),
+                    Bytecode::Ret,
+                    // 4: Green → return 2
+                    Bytecode::LdU64(2),
+                    Bytecode::Ret,
+                    // 6: Blue → return 3
+                    Bytecode::LdU64(3),
+                    Bytecode::Ret,
+                ],
+                vec![VariantJumpTable {
+                    head_enum: EnumDefinitionIndex(0),
+                    jump_table: JumpTableInner::Full(vec![2, 4, 6]),
+                }],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("0x0_M_color_to_u64"),
+            "missing symbol\n{asm}"
+        );
+    }
+
+    #[test]
     fn abort() {
         let module = CompiledModuleBuilder::new()
             .function(

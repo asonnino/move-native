@@ -97,6 +97,38 @@ impl<'ctx> LlvmContext<'ctx> {
         Ok(())
     }
 
+    /// Create an `LlvmContext` from a `CompiledModule` for unit testing.
+    ///
+    /// Leaks the LLVM `Context` so the returned value is `'static` — fine for tests.
+    /// Builds a real `GlobalEnv` from the module, so Move-level lookups
+    /// (datatypes, functions) work.
+    #[cfg(test)]
+    pub(crate) fn new_from_module(module: &CompiledModule) -> CompileResult<LlvmContext<'static>> {
+        let context: &'static Context = Box::leak(Box::new(Context::create()));
+        let env = move_model::run_bytecode_model_builder(vec![module])
+            .map_err(|e| CompileError::model_builder(e.to_string()))?;
+        let module_name = env
+            .get_modules()
+            .last()
+            .ok_or_else(|| CompileError::internal("model builder produced empty environment"))?
+            .get_full_name_str();
+        let llvm_module = context.create_module(&module_name);
+        let builder = context.create_builder();
+        Ok(LlvmContext {
+            env,
+            context,
+            module: llvm_module,
+            builder,
+            i8_type: context.i8_type(),
+            i16_type: context.i16_type(),
+            i32_type: context.i32_type(),
+            i64_type: context.i64_type(),
+            i128_type: context.i128_type(),
+            i256_type: context.custom_width_int_type(256),
+            ptr_type: context.ptr_type(AddressSpace::default()),
+        })
+    }
+
     /// Create a minimal `LlvmContext` with an empty `GlobalEnv` for unit testing.
     ///
     /// Leaks the LLVM `Context` so the returned value is `'static` — fine for tests.

@@ -482,66 +482,38 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::{Bytecode, SignatureToken};
-
     use crate::module::CompiledModuleBuilder;
     use crate::{Assembly, compiler::Compiler, target::Target};
 
-    /// Build and compile `op(a: T, b: T) -> T { a <op> b }`.
+    use move_binary_format::file_format::{Bytecode, DatatypeHandleIndex, SignatureToken};
+
     fn binary_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                name,
-                vec![ty.clone(), ty.clone()],
-                vec![ty],
-                vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    op,
-                    Bytecode::Ret,
-                ],
-            )
-            .build();
-        Compiler::compile_module(&Target::host(), &module).unwrap()
+        Compiler::compile_module(
+            &Target::host(),
+            &CompiledModuleBuilder::binary_op(name, ty, op).build(),
+        )
+        .unwrap()
     }
 
-    /// Build and compile `op(a: T, b: T) -> Bool { a <op> b }`.
     fn comparison_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                name,
-                vec![ty.clone(), ty],
-                vec![SignatureToken::Bool],
-                vec![],
-                vec![
-                    Bytecode::CopyLoc(0),
-                    Bytecode::CopyLoc(1),
-                    op,
-                    Bytecode::Ret,
-                ],
-            )
-            .build();
-        Compiler::compile_module(&Target::host(), &module).unwrap()
+        Compiler::compile_module(
+            &Target::host(),
+            &CompiledModuleBuilder::comparison_op(name, ty, op).build(),
+        )
+        .unwrap()
     }
 
-    /// Build and compile `op(a: In) -> Out { <op>(a) }`.
     fn unary_op_asm(
         name: &str,
         input: SignatureToken,
         output: SignatureToken,
         op: Bytecode,
     ) -> Assembly {
-        let module = CompiledModuleBuilder::new()
-            .function(
-                name,
-                vec![input],
-                vec![output],
-                vec![],
-                vec![Bytecode::CopyLoc(0), op, Bytecode::Ret],
-            )
-            .build();
-        Compiler::compile_module(&Target::host(), &module).unwrap()
+        Compiler::compile_module(
+            &Target::host(),
+            &CompiledModuleBuilder::unary_op(name, input, output, op).build(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -890,5 +862,51 @@ mod tests {
             !asm.contains("__move_rt_arithmetic_error"),
             "widening cast should NOT emit arithmetic_error\n{asm}"
         );
+    }
+
+    #[test]
+    fn mod_zero_emits_abort() {
+        let asm = binary_op_asm("mod_z", SignatureToken::U64, Bytecode::Mod);
+        assert!(
+            asm.contains("__move_rt_arithmetic_error"),
+            "mod should emit arithmetic_error for zero check\n{asm}"
+        );
+    }
+
+    #[test]
+    fn logical_and() {
+        let asm = binary_op_asm("and_fn", SignatureToken::Bool, Bytecode::And);
+        assert!(asm.contains("0x0_M_and_fn"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn logical_or() {
+        let asm = binary_op_asm("or_fn", SignatureToken::Bool, Bytecode::Or);
+        assert!(asm.contains("0x0_M_or_fn"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn eq_enum() {
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "eq_option",
+                vec![
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                    SignatureToken::Datatype(DatatypeHandleIndex(0)),
+                ],
+                vec![SignatureToken::Bool],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Eq,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(asm.contains("0x0_M_eq_option"), "missing symbol\n{asm}");
+        // Should compare tag and payload fields
+        assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
     }
 }

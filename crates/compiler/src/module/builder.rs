@@ -6,10 +6,11 @@
 use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{
     AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, Constant, DatatypeHandle,
-    DatatypeHandleIndex, DatatypeTyParameter, FieldDefinition, FieldHandle, FunctionDefinition,
-    FunctionHandle, FunctionHandleIndex, FunctionInstantiation, IdentifierIndex, ModuleHandle,
-    ModuleHandleIndex, Signature, SignatureIndex, SignatureToken, StructDefInstantiation,
-    StructDefinition, StructDefinitionIndex, StructFieldInformation, TypeSignature, Visibility,
+    DatatypeHandleIndex, DatatypeTyParameter, EnumDefinition, EnumDefinitionIndex, FieldDefinition,
+    FieldHandle, FunctionDefinition, FunctionHandle, FunctionHandleIndex, FunctionInstantiation,
+    IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
+    StructDefInstantiation, StructDefinition, StructDefinitionIndex, StructFieldInformation,
+    TypeSignature, VariantDefinition, VariantHandle, VariantJumpTable, Visibility,
 };
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
@@ -31,6 +32,8 @@ pub struct CompiledModuleBuilder {
     struct_def_instantiations: Vec<StructDefInstantiation>,
     constant_pool: Vec<Constant>,
     foreign_modules: Vec<(AccountAddress, IdentifierIndex)>,
+    enum_defs: Vec<EnumDefinition>,
+    variant_handles: Vec<VariantHandle>,
 }
 
 impl Default for CompiledModuleBuilder {
@@ -60,6 +63,8 @@ impl CompiledModuleBuilder {
             field_handles: vec![],
             constant_pool: vec![],
             foreign_modules: vec![],
+            enum_defs: vec![],
+            variant_handles: vec![],
         }
     }
 
@@ -103,6 +108,50 @@ impl CompiledModuleBuilder {
                 locals: locals_idx,
                 code,
                 jump_tables: vec![],
+            }),
+        });
+
+        self
+    }
+
+    /// Add a public function with jump tables (for `VariantSwitch`).
+    pub fn function_with_jump_tables(
+        mut self,
+        name: &str,
+        params: Vec<SignatureToken>,
+        returns: Vec<SignatureToken>,
+        locals: Vec<SignatureToken>,
+        code: Vec<Bytecode>,
+        jump_tables: Vec<VariantJumpTable>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let params_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(params));
+        let returns_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(returns));
+        let locals_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(locals));
+
+        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
+        self.function_handles.push(FunctionHandle {
+            module: ModuleHandleIndex(0),
+            name: name_idx,
+            parameters: params_idx,
+            return_: returns_idx,
+            type_parameters: vec![],
+        });
+
+        self.function_definitions.push(FunctionDefinition {
+            function: handle_idx,
+            visibility: Visibility::Public,
+            is_entry: false,
+            acquires_global_resources: vec![],
+            code: Some(CodeUnit {
+                locals: locals_idx,
+                code,
+                jump_tables,
             }),
         });
 
@@ -351,6 +400,71 @@ impl CompiledModuleBuilder {
         self
     }
 
+    /// Add an enum definition with named variants.
+    ///
+    /// The `DatatypeHandleIndex` follows the same sequential numbering as structs.
+    /// The `EnumDefinitionIndex` equals the insertion order among enums (0, 1, …).
+    /// Each variant is `(name, fields)` where fields are `(field_name, type)`.
+    pub fn enum_definition(
+        mut self,
+        name: &str,
+        abilities: AbilitySet,
+        variants: Vec<(&str, Vec<(&str, SignatureToken)>)>,
+    ) -> Self {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let handle_idx = DatatypeHandleIndex(self.datatype_handles.len() as u16);
+        self.datatype_handles.push(DatatypeHandle {
+            module: ModuleHandleIndex(0),
+            name: name_idx,
+            abilities,
+            type_parameters: vec![],
+        });
+
+        let variant_defs: Vec<VariantDefinition> = variants
+            .into_iter()
+            .map(|(variant_name, fields)| {
+                let variant_name_idx = IdentifierIndex(self.identifiers.len() as u16);
+                self.identifiers.push(Identifier::new(variant_name).unwrap());
+                let field_defs = fields
+                    .into_iter()
+                    .map(|(field_name, ty)| {
+                        let field_name_idx = IdentifierIndex(self.identifiers.len() as u16);
+                        self.identifiers.push(Identifier::new(field_name).unwrap());
+                        FieldDefinition {
+                            name: field_name_idx,
+                            signature: TypeSignature(ty),
+                        }
+                    })
+                    .collect();
+                VariantDefinition {
+                    variant_name: variant_name_idx,
+                    fields: field_defs,
+                }
+            })
+            .collect();
+
+        self.enum_defs.push(EnumDefinition {
+            enum_handle: handle_idx,
+            variants: variant_defs,
+        });
+
+        self
+    }
+
+    /// Add a variant handle (for `PackVariant` / `UnpackVariant` bytecodes).
+    ///
+    /// The `VariantHandleIndex` equals the insertion order (0, 1, …).
+    /// `enum_def` is the index into the enum_defs vector, `variant` is the tag.
+    pub fn variant_handle(mut self, enum_def: usize, variant: u16) -> Self {
+        self.variant_handles.push(VariantHandle {
+            enum_def: EnumDefinitionIndex(enum_def as u16),
+            variant,
+        });
+        self
+    }
+
     /// Add a field handle (for `ImmBorrowField` / `MutBorrowField`).
     ///
     /// The `FieldHandleIndex` equals the insertion order (0, 1, …).
@@ -500,9 +614,9 @@ impl CompiledModuleBuilder {
             struct_def_instantiations: self.struct_def_instantiations,
             function_instantiations: self.function_instantiations,
             field_instantiations: vec![],
-            enum_defs: vec![],
+            enum_defs: self.enum_defs,
             enum_def_instantiations: vec![],
-            variant_handles: vec![],
+            variant_handles: self.variant_handles,
             variant_instantiation_handles: vec![],
         }
     }

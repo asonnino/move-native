@@ -300,6 +300,56 @@ mod tests {
     }
 
     #[test]
+    fn call_cross_module() {
+        use move_core_types::account_address::AccountAddress;
+
+        let (builder, dep_module) =
+            CompiledModuleBuilder::new().foreign_module(AccountAddress::ZERO, "Dep");
+        let module = builder
+            .foreign_function(
+                dep_module,
+                "helper",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+            )
+            .function(
+                "caller",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Call(FunctionHandleIndex(0)), // calls Dep::helper
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        // Build the dependency module
+        let dep = CompiledModuleBuilder::named("Dep", AccountAddress::ZERO)
+            .function(
+                "helper",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let asm =
+            Compiler::compile_module_with_dependencies(&Target::host(), &module, &[dep]).unwrap();
+        assert!(
+            asm.contains("0x0_M_caller"),
+            "missing 'caller' symbol\n{asm}"
+        );
+        // Cross-module call should reference the dependency's function
+        assert!(
+            asm.contains("0x0_Dep_helper"),
+            "missing cross-module 'helper' reference\n{asm}"
+        );
+    }
+
+    #[test]
     fn generic_generation_panic_is_compile_error() {
         let err = catch_panic::<()>("0x0_M_identity$u64", || panic!("boom")).unwrap_err();
         assert!(

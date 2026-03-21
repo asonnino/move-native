@@ -213,3 +213,123 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::{Bytecode, DatatypeHandleIndex, SignatureToken, VariantHandleIndex};
+
+    use crate::compiler::Compiler;
+    use crate::module::CompiledModuleBuilder;
+    use crate::target::Target;
+
+    #[test]
+    fn pack_variant_none() {
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "make_none",
+                vec![],
+                vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
+                vec![],
+                vec![
+                    Bytecode::PackVariant(VariantHandleIndex(0)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(asm.contains("0x0_M_make_none"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn pack_variant_some() {
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "make_some",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::PackVariant(VariantHandleIndex(1)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(asm.contains("0x0_M_make_some"), "missing symbol\n{asm}");
+    }
+
+    #[test]
+    fn unpack_variant_by_value() {
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "unwrap_some",
+                vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::UnpackVariant(VariantHandleIndex(1)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("0x0_M_unwrap_some"),
+            "missing symbol\n{asm}"
+        );
+    }
+
+    #[test]
+    fn unpack_variant_immref() {
+        let ref_option = SignatureToken::Reference(Box::new(SignatureToken::Datatype(
+            DatatypeHandleIndex(0),
+        )));
+        let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "borrow_some",
+                vec![ref_option],
+                vec![ref_u64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::UnpackVariantImmRef(VariantHandleIndex(1)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("0x0_M_borrow_some"),
+            "missing symbol\n{asm}"
+        );
+    }
+
+    #[test]
+    fn unpack_variant_mutref() {
+        let mutref_option = SignatureToken::MutableReference(Box::new(SignatureToken::Datatype(
+            DatatypeHandleIndex(0),
+        )));
+        let mutref_u64 = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
+        let module = CompiledModuleBuilder::option()
+            .function(
+                "borrow_some_mut",
+                vec![mutref_option],
+                vec![mutref_u64],
+                vec![],
+                vec![
+                    Bytecode::MoveLoc(0),
+                    Bytecode::UnpackVariantMutRef(VariantHandleIndex(1)),
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+        assert!(
+            asm.contains("0x0_M_borrow_some_mut"),
+            "missing symbol\n{asm}"
+        );
+    }
+}

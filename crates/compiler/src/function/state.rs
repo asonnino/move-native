@@ -332,3 +332,66 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_model::ty::{PrimitiveType, Type};
+
+    use super::FunctionState;
+
+    #[test]
+    fn erase_bare_type_param() {
+        let ty = Type::TypeParameter(0);
+        let erased = FunctionState::erase_type_params(ty);
+        assert_eq!(erased, Type::Primitive(PrimitiveType::U64));
+    }
+
+    #[test]
+    fn erase_nested_in_vector() {
+        let ty = Type::Vector(Box::new(Type::TypeParameter(1)));
+        let erased = FunctionState::erase_type_params(ty);
+        assert_eq!(
+            erased,
+            Type::Vector(Box::new(Type::Primitive(PrimitiveType::U64)))
+        );
+    }
+
+    #[test]
+    fn erase_nested_in_reference() {
+        let ty = Type::Reference(true, Box::new(Type::TypeParameter(0)));
+        let erased = FunctionState::erase_type_params(ty);
+        assert_eq!(
+            erased,
+            Type::Reference(true, Box::new(Type::Primitive(PrimitiveType::U64)))
+        );
+    }
+
+    #[test]
+    fn erase_deeply_nested() {
+        // Vector<&mut TypeParameter(2)>
+        let ty = Type::Vector(Box::new(Type::Reference(
+            true,
+            Box::new(Type::TypeParameter(2)),
+        )));
+        let erased = FunctionState::erase_type_params(ty);
+        assert_eq!(
+            erased,
+            Type::Vector(Box::new(Type::Reference(
+                true,
+                Box::new(Type::Primitive(PrimitiveType::U64))
+            )))
+        );
+    }
+
+    #[test]
+    fn preserve_concrete_types() {
+        let u8_ty = Type::Primitive(PrimitiveType::U8);
+        assert_eq!(FunctionState::erase_type_params(u8_ty.clone()), u8_ty);
+
+        let vec_bool = Type::Vector(Box::new(Type::Primitive(PrimitiveType::Bool)));
+        assert_eq!(
+            FunctionState::erase_type_params(vec_bool.clone()),
+            vec_bool,
+        );
+    }
+}
