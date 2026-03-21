@@ -128,8 +128,7 @@ mod tests {
             let enum_env = module_env.get_enums().next().expect("module has no enums");
             let module_id = module_env.get_id();
             let datatype_id = enum_env.get_id();
-            let DatatypeEnv::Enum(e) = ctx.get_datatype_env(module_id, datatype_id).unwrap()
-            else {
+            let DatatypeEnv::Enum(e) = ctx.get_datatype_env(module_id, datatype_id).unwrap() else {
                 panic!("expected enum");
             };
             EnumLayout::new(e)
@@ -163,9 +162,25 @@ mod tests {
         let make = layout_from_builder(CompiledModuleBuilder::option());
         let layout = make();
         // Variant 0 (None) → payload at field index 1
-        assert_eq!(layout.variants().next().unwrap().payload_field_index().unwrap(), 1);
+        assert_eq!(
+            layout
+                .variants()
+                .next()
+                .unwrap()
+                .payload_field_index()
+                .unwrap(),
+            1
+        );
         // Variant 1 (Some) → payload at field index 2
-        assert_eq!(layout.variants().nth(1).unwrap().payload_field_index().unwrap(), 2);
+        assert_eq!(
+            layout
+                .variants()
+                .nth(1)
+                .unwrap()
+                .payload_field_index()
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -192,7 +207,10 @@ mod tests {
         let make = layout_from_builder(CompiledModuleBuilder::option());
         let layout = make();
         let name = layout.llvm_name(None);
-        assert!(name.contains("MyOption"), "expected MyOption in name: {name}");
+        assert!(
+            name.contains("MyOption"),
+            "expected MyOption in name: {name}"
+        );
     }
 
     #[test]

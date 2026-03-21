@@ -236,9 +236,7 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::ConstantEmitter;
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn address_single() {
@@ -380,7 +378,7 @@ mod tests {
         bcs_data.extend_from_slice(&hello);
 
         let vec_u8 = Vector(Box::new(U8));
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .constant(vec_u8.clone(), bcs_data)
             .function(
                 "get_bytes",
@@ -394,8 +392,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_const_vec_u8"),
             "missing runtime call\n{asm}"
@@ -409,7 +406,7 @@ mod tests {
         let mut addr_bytes = [0u8; 32];
         addr_bytes[31] = 0x42;
 
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .constant(SignatureToken::Address, addr_bytes.to_vec())
             .function(
                 "load_addr",
@@ -423,8 +420,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_load_addr"), "missing symbol\n{asm}");
     }
 
@@ -484,7 +480,7 @@ mod tests {
         bcs_data.extend_from_slice(&inner2);
 
         let vec_vec_u8 = Vector(Box::new(Vector(Box::new(U8))));
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .constant(vec_vec_u8.clone(), bcs_data)
             .function(
                 "get_vecs",
@@ -498,8 +494,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_const_vec_vec_u8"),
             "missing runtime call\n{asm}"
@@ -521,7 +516,7 @@ mod tests {
         }
 
         let vec_u64 = Vector(Box::new(U64));
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .constant(vec_u64.clone(), bcs_data)
             .function(
                 "get_vec",
@@ -535,8 +530,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_const_vec"),
             "missing runtime call\n{asm}"

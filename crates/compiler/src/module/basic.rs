@@ -6,8 +6,19 @@ use move_binary_format::file_format::{
 };
 
 use super::CompiledModuleBuilder;
+use crate::assembly::Assembly;
+use crate::compiler::Compiler;
+use crate::target::Target;
 
 impl CompiledModuleBuilder {
+    /// Build and compile the module on the host target, panicking on failure.
+    ///
+    /// Shorthand for `.build()` + `Compiler::compile_module` — intended for tests.
+    pub fn compile(self) -> Assembly {
+        let module = self.build();
+        Compiler::compile_module(&Target::host(), &module).unwrap()
+    }
+
     /// Builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.
     pub fn point() -> Self {
         Self::new().struct_definition(
@@ -65,7 +76,12 @@ impl CompiledModuleBuilder {
             vec![ty.clone(), ty.clone()],
             vec![ty],
             vec![],
-            vec![Bytecode::CopyLoc(0), Bytecode::CopyLoc(1), op, Bytecode::Ret],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
         )
     }
 
@@ -76,7 +92,12 @@ impl CompiledModuleBuilder {
             vec![ty.clone(), ty],
             vec![SignatureToken::Bool],
             vec![],
-            vec![Bytecode::CopyLoc(0), Bytecode::CopyLoc(1), op, Bytecode::Ret],
+            vec![
+                Bytecode::CopyLoc(0),
+                Bytecode::CopyLoc(1),
+                op,
+                Bytecode::Ret,
+            ],
         )
     }
 

@@ -399,9 +399,6 @@ mod tests {
         assert_eq!(FunctionState::erase_type_params(u8_ty.clone()), u8_ty);
 
         let vec_bool = Type::Vector(Box::new(Type::Primitive(PrimitiveType::Bool)));
-        assert_eq!(
-            FunctionState::erase_type_params(vec_bool.clone()),
-            vec_bool,
-        );
+        assert_eq!(FunctionState::erase_type_params(vec_bool.clone()), vec_bool,);
     }
 }

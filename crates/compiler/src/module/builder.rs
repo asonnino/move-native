@@ -426,7 +426,8 @@ impl CompiledModuleBuilder {
             .into_iter()
             .map(|(variant_name, fields)| {
                 let variant_name_idx = IdentifierIndex(self.identifiers.len() as u16);
-                self.identifiers.push(Identifier::new(variant_name).unwrap());
+                self.identifiers
+                    .push(Identifier::new(variant_name).unwrap());
                 let field_defs = fields
                     .into_iter()
                     .map(|(field_name, ty)| {

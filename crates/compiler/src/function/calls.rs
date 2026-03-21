@@ -53,7 +53,8 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         if !destinations.is_empty() {
             let return_value = call.into_basic_value()?;
             if destinations.len() == 1 {
-                self.state.store(self.state.destination(destinations, 0)?, return_value)?;
+                self.state
+                    .store(self.state.destination(destinations, 0)?, return_value)?;
             } else {
                 let BasicValueEnum::StructValue(struct_val) = return_value else {
                     return Err(CompileError::TypeMismatch(format!(
@@ -192,7 +193,7 @@ mod tests {
 
     #[test]
     fn call_non_generic() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "double",
                 vec![SignatureToken::U64],
@@ -216,9 +217,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_double"),
             "missing 'double' symbol\n{asm}"
@@ -232,7 +231,7 @@ mod tests {
 
     #[test]
     fn call_generic() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .generic_function(
                 "identity",
                 vec![AbilitySet::EMPTY],
@@ -253,9 +252,7 @@ mod tests {
                 ],
             )
             .function_instantiation(FunctionHandleIndex(0), vec![SignatureToken::U64])
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_identity$u64"),
             "missing monomorphized 'identity$u64' symbol\n{asm}"
@@ -268,7 +265,7 @@ mod tests {
 
     #[test]
     fn call_native() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .native_function(
                 "native_add",
                 vec![SignatureToken::U64, SignatureToken::U64],
@@ -286,9 +283,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"

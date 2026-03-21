@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn assign_copies_local() {
         // f(x: u64): u64 { let y = x; y }
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "copy_local",
                 vec![SignatureToken::U64],
@@ -195,9 +195,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_copy_local"), "missing symbol\n{asm}");
         assert!(asm.contains("ret"), "missing ret\n{asm}");
     }
@@ -205,7 +203,7 @@ mod tests {
     #[test]
     fn load_integer_constant() {
         // f(): u64 { 42 }
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "forty_two",
                 vec![],
@@ -218,9 +216,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_forty_two"), "missing symbol\n{asm}");
         // 42 = 0x2A, should appear as a mov immediate
         assert!(asm.contains("#42"), "missing immediate #42\n{asm}");
@@ -229,7 +225,7 @@ mod tests {
     #[test]
     fn load_bool_constant() {
         // f(): bool { true }
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "always_true",
                 vec![],
@@ -242,9 +238,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_always_true"), "missing symbol\n{asm}");
         assert!(asm.contains("#1"), "missing #1 immediate for LdTrue\n{asm}");
     }
@@ -343,7 +337,7 @@ mod tests {
 
     #[test]
     fn call_multi_return() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "swap",
                 vec![SignatureToken::U64, SignatureToken::U64],
@@ -363,9 +357,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_swap"), "missing 'swap' symbol\n{asm}");
         assert!(
             asm.contains("0x0_M_call_swap"),

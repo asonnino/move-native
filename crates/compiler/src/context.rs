@@ -32,7 +32,7 @@ impl<'env> DatatypeEnv<'env> {
     }
 
     /// Unwrap as a struct, returning an error if this is an enum.
-    pub(crate) fn as_struct(self) -> CompileResult<StructEnv<'env>> {
+    pub(crate) fn into_struct(self) -> CompileResult<StructEnv<'env>> {
         match self {
             DatatypeEnv::Struct(s) => Ok(s),
             DatatypeEnv::Enum(e) => Err(CompileError::TypeMismatch(format!(
@@ -43,7 +43,7 @@ impl<'env> DatatypeEnv<'env> {
     }
 
     /// Unwrap as an enum, returning an error if this is a struct.
-    pub(crate) fn as_enum(self) -> CompileResult<EnumEnv<'env>> {
+    pub(crate) fn into_enum(self) -> CompileResult<EnumEnv<'env>> {
         match self {
             DatatypeEnv::Enum(e) => Ok(e),
             DatatypeEnv::Struct(s) => Err(CompileError::TypeMismatch(format!(
@@ -197,7 +197,7 @@ impl<'ctx> LlvmContext<'ctx> {
         module_id: ModuleId,
         datatype_id: DatatypeId,
     ) -> CompileResult<StructEnv<'_>> {
-        self.get_datatype_env(module_id, datatype_id)?.as_struct()
+        self.get_datatype_env(module_id, datatype_id)?.into_struct()
     }
 
     /// Look up a function definition by module and function ID.

@@ -9,8 +9,8 @@ use std::path::Path;
 
 use move_binary_format::CompiledModule;
 
-use crate::assembly::Assembly;
 use crate::target::Target;
+use crate::{Compiler, assembly::Assembly};
 
 /// A collection of deserialized Move modules that can be compiled one at a
 /// time, using the rest as dependencies.
@@ -58,7 +58,7 @@ impl ModuleFixture {
             .chain(self.deps.iter().cloned())
             .collect();
 
-        crate::compile_module_with_deps(&Target::host(), target, &dependencies)
+        Compiler::compile_module_with_dependencies(&Target::host(), target, &dependencies)
             .unwrap_or_else(|e| panic!("{module_name} compilation failed: {e}"))
     }
 

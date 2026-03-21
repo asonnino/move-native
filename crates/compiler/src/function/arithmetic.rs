@@ -482,25 +482,17 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
+    use crate::Assembly;
     use crate::module::CompiledModuleBuilder;
-    use crate::{Assembly, compiler::Compiler, target::Target};
 
     use move_binary_format::file_format::{Bytecode, DatatypeHandleIndex, SignatureToken};
 
     fn binary_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
-        Compiler::compile_module(
-            &Target::host(),
-            &CompiledModuleBuilder::binary_op(name, ty, op).build(),
-        )
-        .unwrap()
+        CompiledModuleBuilder::binary_op(name, ty, op).compile()
     }
 
     fn comparison_op_asm(name: &str, ty: SignatureToken, op: Bytecode) -> Assembly {
-        Compiler::compile_module(
-            &Target::host(),
-            &CompiledModuleBuilder::comparison_op(name, ty, op).build(),
-        )
-        .unwrap()
+        CompiledModuleBuilder::comparison_op(name, ty, op).compile()
     }
 
     fn unary_op_asm(
@@ -509,11 +501,7 @@ mod tests {
         output: SignatureToken,
         op: Bytecode,
     ) -> Assembly {
-        Compiler::compile_module(
-            &Target::host(),
-            &CompiledModuleBuilder::unary_op(name, input, output, op).build(),
-        )
-        .unwrap()
+        CompiledModuleBuilder::unary_op(name, input, output, op).compile()
     }
 
     #[test]
@@ -610,7 +598,7 @@ mod tests {
     #[test]
     fn shift_left() {
         // Move shifts have signature (T, u8) -> T, exercising the z_extend path
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "shl_fn",
                 vec![SignatureToken::U64, SignatureToken::U8],
@@ -623,15 +611,14 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("\tlsl\t"), "missing lsl instruction\n{asm}");
     }
 
     #[test]
     fn shift_right() {
         // Move shifts have signature (T, u8) -> T, exercising the z_extend path
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "shr_fn",
                 vec![SignatureToken::U64, SignatureToken::U8],
@@ -644,8 +631,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("\tlsr\t"), "missing lsr instruction\n{asm}");
     }
 
@@ -747,7 +733,7 @@ mod tests {
     fn eq_struct() {
         use move_binary_format::file_format::{AbilitySet, DatatypeHandleIndex};
 
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .struct_definition(
                 "Point",
                 AbilitySet::EMPTY
@@ -770,8 +756,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_eq_point"), "missing symbol\n{asm}");
         // Field-by-field comparison: at least one cmp (LLVM may fuse/optimize)
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
@@ -815,7 +800,7 @@ mod tests {
 
     #[test]
     fn shift_range_emits_abort() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "shl_chk",
                 vec![SignatureToken::U64, SignatureToken::U8],
@@ -828,8 +813,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_arithmetic_error"),
             "shift should emit arithmetic_error for range check\n{asm}"
@@ -887,7 +871,7 @@ mod tests {
 
     #[test]
     fn eq_enum() {
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "eq_option",
                 vec![
@@ -903,8 +887,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_eq_option"), "missing symbol\n{asm}");
         // Should compare tag and payload fields
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");

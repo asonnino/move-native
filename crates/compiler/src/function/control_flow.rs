@@ -41,7 +41,12 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                         let val = self.state.load_value(*r)?;
                         struct_value = llvm
                             .builder
-                            .build_insert_value(struct_value, val, to_field_index(i)?, &format!("ret_{i}"))?
+                            .build_insert_value(
+                                struct_value,
+                                val,
+                                to_field_index(i)?,
+                                &format!("ret_{i}"),
+                            )?
                             .into_struct_value();
                     }
                     llvm.builder.build_return(Some(&struct_value))?;
@@ -144,26 +149,26 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
+    use move_binary_format::file_format::{
+        Ability, AbilitySet, DatatypeHandleIndex, EnumDefinitionIndex, JumpTableInner,
+        VariantJumpTable, VariantJumpTableIndex,
+    };
     use move_binary_format::file_format::{Bytecode, SignatureToken};
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn ret_void() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function("noop", vec![], vec![], vec![], vec![Bytecode::Ret])
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_noop"), "missing 'noop' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
     #[test]
     fn ret_single_value() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "identity",
                 vec![SignatureToken::U64],
@@ -171,9 +176,7 @@ mod tests {
                 vec![],
                 vec![Bytecode::CopyLoc(0), Bytecode::Ret],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_identity"),
             "missing 'identity' symbol\n{asm}"
@@ -183,7 +186,7 @@ mod tests {
 
     #[test]
     fn ret_multi_value() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "swap",
                 vec![SignatureToken::U64, SignatureToken::U64],
@@ -191,16 +194,14 @@ mod tests {
                 vec![],
                 vec![Bytecode::CopyLoc(1), Bytecode::CopyLoc(0), Bytecode::Ret],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_swap"), "missing 'swap' symbol\n{asm}");
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
     #[test]
     fn branch_and_jump() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "sum_to_n",
                 vec![SignatureToken::U64],
@@ -231,9 +232,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_sum_to_n"),
             "missing 'sum_to_n' symbol\n{asm}"
@@ -243,23 +242,13 @@ mod tests {
 
     #[test]
     fn variant_switch() {
-        use move_binary_format::file_format::{
-            Ability, AbilitySet, DatatypeHandleIndex, EnumDefinitionIndex, JumpTableInner,
-            VariantJumpTable, VariantJumpTableIndex,
-        };
-
-        let ref_option = SignatureToken::Reference(Box::new(SignatureToken::Datatype(
-            DatatypeHandleIndex(0),
-        )));
-        let module = CompiledModuleBuilder::new()
+        let ref_option =
+            SignatureToken::Reference(Box::new(SignatureToken::Datatype(DatatypeHandleIndex(0))));
+        let asm = CompiledModuleBuilder::new()
             .enum_definition(
                 "Color",
                 AbilitySet::EMPTY | Ability::Copy | Ability::Drop,
-                vec![
-                    ("Red", vec![]),
-                    ("Green", vec![]),
-                    ("Blue", vec![]),
-                ],
+                vec![("Red", vec![]), ("Green", vec![]), ("Blue", vec![])],
             )
             .variant_handle(0, 0) // Red
             .variant_handle(0, 1) // Green
@@ -288,17 +277,13 @@ mod tests {
                     jump_table: JumpTableInner::Full(vec![2, 4, 6]),
                 }],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(
-            asm.contains("0x0_M_color_to_u64"),
-            "missing symbol\n{asm}"
-        );
+            .compile();
+        assert!(asm.contains("0x0_M_color_to_u64"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn abort() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "abort_42",
                 vec![],
@@ -311,9 +296,7 @@ mod tests {
                     Bytecode::Abort,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_abort_42"),
             "missing 'abort_42' symbol\n{asm}"

@@ -12,8 +12,8 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 use crate::assembly::{Assembly, AssemblyBuilder};
 use crate::context::LlvmContext;
 use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
-use crate::mangle::Mangler;
 use crate::function::FunctionLowering;
+use crate::mangle::Mangler;
 use crate::target::Target;
 use crate::types::TypeLowering;
 
@@ -233,7 +233,7 @@ mod tests {
         )));
         let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
 
-        let module = CompiledModuleBuilder::balance()
+        let asm = CompiledModuleBuilder::balance()
             .field_handle(StructDefinitionIndex(0), 0)
             .generic_function(
                 "value",
@@ -248,9 +248,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_value"),
             "phantom-generic 'value' should be compiled\n{asm}"
@@ -266,7 +264,7 @@ mod tests {
             vec![SignatureToken::TypeParameter(0)],
         )));
 
-        let module = CompiledModuleBuilder::balance()
+        let asm = CompiledModuleBuilder::balance()
             .generic_function(
                 "zero",
                 vec![AbilitySet::EMPTY],
@@ -285,9 +283,7 @@ mod tests {
                 StructDefinitionIndex(0),
                 vec![SignatureToken::TypeParameter(0)],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_zero"),
             "phantom-generic 'zero' should be compiled\n{asm}"
@@ -307,7 +303,7 @@ mod tests {
         )));
         let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
 
-        let module = CompiledModuleBuilder::balance()
+        let asm = CompiledModuleBuilder::balance()
             .field_handle(StructDefinitionIndex(0), 0)
             // FunctionHandleIndex(0): phantom_read_x<T>
             .generic_function(
@@ -343,9 +339,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_phantom_read_x$u64"),
             "should contain erased monomorphization phantom_read_x$u64\n{asm}"
@@ -365,7 +359,7 @@ mod tests {
         )));
         let ref_balance_t = SignatureToken::Reference(Box::new(balance_t));
 
-        let module = CompiledModuleBuilder::balance()
+        let asm = CompiledModuleBuilder::balance()
             .generic_function(
                 "use_local",
                 vec![AbilitySet::EMPTY],
@@ -380,9 +374,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_use_local"),
             "phantom-generic with T-typed local should compile\n{asm}"
@@ -393,7 +385,7 @@ mod tests {
     fn non_phantom_generic_not_compiled_at_top_level() {
         // identity<T>(x: T): T — T is NOT phantom (bare usage in params/returns).
         // This function should NOT be compiled at the top level.
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .generic_function(
                 "identity",
                 vec![AbilitySet::EMPTY],
@@ -402,9 +394,7 @@ mod tests {
                 vec![],
                 vec![Bytecode::MoveLoc(0), Bytecode::Ret],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             !asm.contains("0x0_M_identity"),
             "non-phantom generic 'identity' should NOT be compiled at top level\n{asm}"

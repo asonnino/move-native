@@ -82,7 +82,8 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                 "enum_payload",
             )?
             .into_struct_value();
-        self.state.store(self.state.destination(destinations, 0)?, enum_value.into())?;
+        self.state
+            .store(self.state.destination(destinations, 0)?, enum_value.into())?;
         Ok(())
     }
 
@@ -158,7 +159,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         type_args: &[Type],
     ) -> CompileResult<(EnumLayout<'b>, inkwell::types::StructType<'ctx>)> {
         let llvm = self.state.ctx();
-        let enum_env = llvm.get_datatype_env(module_id, datatype_id)?.as_enum()?;
+        let enum_env = llvm.get_datatype_env(module_id, datatype_id)?.into_enum()?;
         let enum_type = self
             .state
             .lower_type(&Type::Datatype(module_id, datatype_id, type_args.to_vec()))?
@@ -201,33 +202,29 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use move_binary_format::file_format::{Bytecode, DatatypeHandleIndex, SignatureToken, VariantHandleIndex};
+    use move_binary_format::file_format::{
+        Bytecode, DatatypeHandleIndex, SignatureToken, VariantHandleIndex,
+    };
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn pack_variant_none() {
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "make_none",
                 vec![],
                 vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
                 vec![],
-                vec![
-                    Bytecode::PackVariant(VariantHandleIndex(0)),
-                    Bytecode::Ret,
-                ],
+                vec![Bytecode::PackVariant(VariantHandleIndex(0)), Bytecode::Ret],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_make_none"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn pack_variant_some() {
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "make_some",
                 vec![SignatureToken::U64],
@@ -239,14 +236,13 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_make_some"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn unpack_variant_by_value() {
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "unwrap_some",
                 vec![SignatureToken::Datatype(DatatypeHandleIndex(0))],
@@ -258,21 +254,16 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(
-            asm.contains("0x0_M_unwrap_some"),
-            "missing symbol\n{asm}"
-        );
+            .compile();
+        assert!(asm.contains("0x0_M_unwrap_some"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn unpack_variant_immref() {
-        let ref_option = SignatureToken::Reference(Box::new(SignatureToken::Datatype(
-            DatatypeHandleIndex(0),
-        )));
+        let ref_option =
+            SignatureToken::Reference(Box::new(SignatureToken::Datatype(DatatypeHandleIndex(0))));
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "borrow_some",
                 vec![ref_option],
@@ -284,12 +275,8 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
-        assert!(
-            asm.contains("0x0_M_borrow_some"),
-            "missing symbol\n{asm}"
-        );
+            .compile();
+        assert!(asm.contains("0x0_M_borrow_some"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -298,7 +285,7 @@ mod tests {
             DatatypeHandleIndex(0),
         )));
         let mutref_u64 = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
-        let module = CompiledModuleBuilder::option()
+        let asm = CompiledModuleBuilder::option()
             .function(
                 "borrow_some_mut",
                 vec![mutref_option],
@@ -310,8 +297,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_borrow_some_mut"),
             "missing symbol\n{asm}"

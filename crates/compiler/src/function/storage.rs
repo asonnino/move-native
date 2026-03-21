@@ -134,7 +134,8 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
 
         if !destinations.is_empty() {
             let ret_val = call.into_basic_value()?;
-            self.state.store(self.state.destination(destinations, 0)?, ret_val)?;
+            self.state
+                .store(self.state.destination(destinations, 0)?, ret_val)?;
         }
         Ok(())
     }
@@ -146,13 +147,11 @@ mod tests {
         Bytecode, DatatypeHandleIndex, SignatureToken, StructDefinitionIndex,
     };
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn exists_emits_runtime_call() {
-        let module = CompiledModuleBuilder::coin()
+        let asm = CompiledModuleBuilder::coin()
             .function(
                 "check_exists",
                 vec![SignatureToken::Address],
@@ -164,9 +163,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_exists"),
             "missing __move_rt_exists call\n{asm}"
@@ -175,7 +172,7 @@ mod tests {
 
     #[test]
     fn move_from_emits_runtime_call() {
-        let module = CompiledModuleBuilder::coin()
+        let asm = CompiledModuleBuilder::coin()
             .function(
                 "take_coin",
                 vec![SignatureToken::Address],
@@ -187,9 +184,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_move_from"),
             "missing __move_rt_move_from call\n{asm}"
@@ -198,7 +193,7 @@ mod tests {
 
     #[test]
     fn move_to_emits_runtime_call() {
-        let module = CompiledModuleBuilder::coin()
+        let asm = CompiledModuleBuilder::coin()
             .function(
                 "publish_coin",
                 vec![
@@ -214,9 +209,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_move_to"),
             "missing __move_rt_move_to call\n{asm}"
@@ -225,7 +218,7 @@ mod tests {
 
     #[test]
     fn borrow_global_emits_runtime_call() {
-        let module = CompiledModuleBuilder::coin()
+        let asm = CompiledModuleBuilder::coin()
             .function(
                 "borrow_coin",
                 vec![SignatureToken::Address],
@@ -239,9 +232,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("__move_rt_borrow_global"),
             "missing __move_rt_borrow_global call\n{asm}"

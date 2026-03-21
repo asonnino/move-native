@@ -187,14 +187,12 @@ mod tests {
         Bytecode, DatatypeHandleIndex, FieldHandleIndex, SignatureToken, StructDefinitionIndex,
     };
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
-    use crate::target::Target;
 
     #[test]
     fn pack_struct() {
         let pt = SignatureToken::Datatype(DatatypeHandleIndex(0));
-        let module = CompiledModuleBuilder::point()
+        let asm = CompiledModuleBuilder::point()
             .function(
                 "new_point",
                 vec![SignatureToken::U64, SignatureToken::U64],
@@ -207,9 +205,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_new_point"),
             "missing '0x0_M_new_point' symbol\n{asm}"
@@ -219,7 +215,7 @@ mod tests {
     #[test]
     fn unpack_struct() {
         let pt = SignatureToken::Datatype(DatatypeHandleIndex(0));
-        let module = CompiledModuleBuilder::point()
+        let asm = CompiledModuleBuilder::point()
             .function(
                 "get_x",
                 vec![pt],
@@ -234,9 +230,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(
             asm.contains("0x0_M_get_x"),
             "missing '0x0_M_get_x' symbol\n{asm}"
@@ -245,7 +239,7 @@ mod tests {
 
     #[test]
     fn borrow_and_read_ref() {
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "copy_via_ref",
                 vec![SignatureToken::U64],
@@ -259,16 +253,14 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_copy_via_ref"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn write_ref() {
         let mut_ref = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "overwrite",
                 vec![SignatureToken::U64, SignatureToken::U64],
@@ -285,9 +277,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_overwrite"), "missing symbol\n{asm}");
     }
 
@@ -295,7 +285,7 @@ mod tests {
     fn freeze_ref() {
         let mut_ref = SignatureToken::MutableReference(Box::new(SignatureToken::U64));
         let imm_ref = SignatureToken::Reference(Box::new(SignatureToken::U64));
-        let module = CompiledModuleBuilder::new()
+        let asm = CompiledModuleBuilder::new()
             .function(
                 "freeze",
                 vec![SignatureToken::U64],
@@ -304,17 +294,15 @@ mod tests {
                 vec![
                     Bytecode::MutBorrowLoc(0), // &mut x
                     Bytecode::StLoc(1),        // r_mut = &mut x
-                    Bytecode::MoveLoc(1),       // push r_mut
+                    Bytecode::MoveLoc(1),      // push r_mut
                     Bytecode::FreezeRef,       // &mut → &
                     Bytecode::StLoc(2),        // r_imm = freeze(r_mut)
-                    Bytecode::MoveLoc(2),       // push r_imm
+                    Bytecode::MoveLoc(2),      // push r_imm
                     Bytecode::ReadRef,         // *r_imm
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_freeze"), "missing symbol\n{asm}");
     }
 
@@ -323,7 +311,7 @@ mod tests {
         let pt = SignatureToken::Datatype(DatatypeHandleIndex(0));
         let ref_point = SignatureToken::Reference(Box::new(pt.clone()));
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
-        let module = CompiledModuleBuilder::point()
+        let asm = CompiledModuleBuilder::point()
             .field_handle(StructDefinitionIndex(0), 0) // FieldHandleIndex(0) → Point.x
             .function(
                 "get_x_via_ref",
@@ -345,9 +333,7 @@ mod tests {
                     Bytecode::Ret,
                 ],
             )
-            .build();
-
-        let asm = Compiler::compile_module(&Target::host(), &module).unwrap();
+            .compile();
         assert!(asm.contains("0x0_M_get_x_via_ref"), "missing symbol\n{asm}");
     }
 }
