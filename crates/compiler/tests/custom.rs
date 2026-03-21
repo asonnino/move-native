@@ -20,7 +20,7 @@ fn fixture_with_dependencies() -> ModuleBundle {
 /// End-to-end from the checked-in add.mv (two-argument u64 addition).
 #[test]
 fn add_module_from_mv_file() {
-    let asm = fixture().compile("M");
+    let asm = fixture().compile_checked("M");
     assert!(
         asm.contains("\tadd\t") || asm.contains("\tadds\t"),
         "assembly should contain 'add' instruction"
@@ -34,7 +34,7 @@ fn add_module_from_mv_file() {
 /// Nested loops and if/else branches (control_flow.mv).
 #[test]
 fn control_flow_module_from_mv_file() {
-    let asm = fixture().compile("control_flow");
+    let asm = fixture().compile_checked("control_flow");
     assert!(
         asm.contains("0x0_control_flow_sum_to"),
         "missing 0x0_control_flow_sum_to"
@@ -53,7 +53,7 @@ fn control_flow_module_from_mv_file() {
 /// intra-module calls, arithmetic (geometry.mv).
 #[test]
 fn geometry_module() {
-    let asm = fixture().compile("geometry");
+    let asm = fixture().compile_checked("geometry");
     assert!(
         asm.contains("0x0_geometry_new_point"),
         "missing 0x0_geometry_new_point"
@@ -79,7 +79,7 @@ fn geometry_module() {
 /// Bitwise ops, shifts, and integer width casts (bitmath.mv).
 #[test]
 fn bitmath_module() {
-    let asm = fixture().compile("bitmath");
+    let asm = fixture().compile_checked("bitmath");
     assert!(
         asm.contains("0x0_bitmath_mask_low_byte"),
         "missing 0x0_bitmath_mask_low_byte"
@@ -109,7 +109,7 @@ fn bitmath_module() {
 /// Abort, comparisons, multi-return, function chaining (checked_math.mv).
 #[test]
 fn checked_math_module() {
-    let asm = fixture().compile("checked_math");
+    let asm = fixture().compile_checked("checked_math");
     assert!(
         asm.contains("0x0_checked_math_checked_sub"),
         "missing 0x0_checked_math_checked_sub"
@@ -135,7 +135,7 @@ fn checked_math_module() {
 /// Generic structs + monomorphization via concrete callers (generics.mv).
 #[test]
 fn generics_module() {
-    let asm = fixture().compile("generics");
+    let asm = fixture().compile_checked("generics");
     assert!(
         asm.contains("0x0_generics_identity_u64"),
         "missing 0x0_generics_identity_u64 concrete caller"
@@ -149,7 +149,7 @@ fn generics_module() {
 /// Vector operations via move-stdlib natives (vectors.mv).
 #[test]
 fn vectors_module() {
-    let asm = fixture_with_dependencies().compile("vectors");
+    let asm = fixture_with_dependencies().compile_checked("vectors");
     assert!(
         asm.contains("0x0_vectors_sum_vec"),
         "missing 0x0_vectors_sum_vec"
@@ -167,7 +167,7 @@ fn vectors_module() {
 /// Sui objects with key ability, UID, transfer (objects.mv).
 #[test]
 fn objects_module() {
-    let asm = fixture_with_dependencies().compile("objects");
+    let asm = fixture_with_dependencies().compile_checked("objects");
     assert!(
         asm.contains("0x0_objects_create"),
         "missing 0x0_objects_create"

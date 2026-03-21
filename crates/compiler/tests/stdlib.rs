@@ -10,110 +10,110 @@ fn fixture() -> ModuleBundle {
 
 #[test]
 fn address() {
-    fixture().compile("address");
+    fixture().compile_checked("address");
 }
 
 #[test]
 fn ascii() {
-    fixture().compile("ascii");
+    fixture().compile_checked("ascii");
 }
 
 #[test]
 fn bcs() {
-    fixture().compile("bcs");
+    fixture().compile_checked("bcs");
 }
 
 #[test]
 fn bit_vector() {
-    fixture().compile("bit_vector");
+    fixture().compile_checked("bit_vector");
 }
 
 #[test]
 fn bool() {
-    fixture().compile("bool");
+    fixture().compile_checked("bool");
 }
 
 #[test]
 fn debug() {
-    fixture().compile("debug");
+    fixture().compile_checked("debug");
 }
 
 #[test]
 fn fixed_point32() {
-    fixture().compile("fixed_point32");
+    fixture().compile_checked("fixed_point32");
 }
 
 #[test]
 fn hash() {
-    fixture().compile("hash");
+    fixture().compile_checked("hash");
 }
 
 #[test]
 fn internal() {
-    fixture().compile("internal");
+    fixture().compile_checked("internal");
 }
 
 #[test]
 fn macros() {
-    fixture().compile("macros");
+    fixture().compile_checked("macros");
 }
 
 #[test]
 fn option() {
-    fixture().compile("option");
+    fixture().compile_checked("option");
 }
 
 #[test]
 fn string() {
-    fixture().compile("string");
+    fixture().compile_checked("string");
 }
 
 #[test]
 fn type_name() {
-    fixture().compile("type_name");
+    fixture().compile_checked("type_name");
 }
 
 #[test]
 fn u128() {
-    fixture().compile("u128");
+    fixture().compile_checked("u128");
 }
 
 #[test]
 fn u16() {
-    fixture().compile("u16");
+    fixture().compile_checked("u16");
 }
 
 #[test]
 fn u256() {
-    fixture().compile("u256");
+    fixture().compile_checked("u256");
 }
 
 #[test]
 fn u32() {
-    fixture().compile("u32");
+    fixture().compile_checked("u32");
 }
 
 #[test]
 fn u64() {
-    fixture().compile("u64");
+    fixture().compile_checked("u64");
 }
 
 #[test]
 fn u8() {
-    fixture().compile("u8");
+    fixture().compile_checked("u8");
 }
 
 #[test]
 fn uq32_32() {
-    fixture().compile("uq32_32");
+    fixture().compile_checked("uq32_32");
 }
 
 #[test]
 fn uq64_64() {
-    fixture().compile("uq64_64");
+    fixture().compile_checked("uq64_64");
 }
 
 #[test]
 fn vector() {
-    fixture().compile("vector");
+    fixture().compile_checked("vector");
 }
