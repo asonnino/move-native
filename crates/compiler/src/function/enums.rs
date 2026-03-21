@@ -161,7 +161,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let datatype_env = llvm.get_datatype_env(module_id, datatype_id)?;
         let DatatypeEnv::Enum(enum_env) = datatype_env else {
-            return Err(CompileError::Unsupported(format!(
+            return Err(CompileError::TypeMismatch(format!(
                 "expected enum datatype for variant op: {:?}",
                 Type::Datatype(module_id, datatype_id, type_args.to_vec())
             )));

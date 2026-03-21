@@ -89,10 +89,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let current_block = llvm
             .builder
             .get_insert_block()
-            .ok_or(CompileError::llvm("no insert block"))?;
+            .expect("builder has no insert block during function compilation");
         let function = current_block
             .get_parent()
-            .ok_or(CompileError::llvm("block has no parent function"))?;
+            .expect("basic block has no parent function");
         let abort_block = llvm.context.append_basic_block(function, "abort");
         let continue_block = llvm.context.append_basic_block(function, "continue");
 
@@ -173,7 +173,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 self.emit_abort_if(is_zero)?;
                 Ok(llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?)
             }
-            _ => unreachable!(),
+            _ => unreachable!("emit_arithmetic called with non-arithmetic op"),
         }
     }
 
@@ -190,7 +190,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             Operation::Gt => IntPredicate::UGT,
             Operation::Le => IntPredicate::ULE,
             Operation::Ge => IntPredicate::UGE,
-            _ => unreachable!(),
+            _ => unreachable!("emit_ord_cmp called with non-comparison op"),
         };
         let cmp = llvm.builder.build_int_compare(pred, lhs, rhs, "cmp")?;
         Ok(llvm
@@ -396,7 +396,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             Operation::BitAnd => llvm.builder.build_and(lhs, rhs, "and")?,
             Operation::BitOr => llvm.builder.build_or(lhs, rhs, "or")?,
             Operation::Xor => llvm.builder.build_xor(lhs, rhs, "xor")?,
-            _ => unreachable!(),
+            _ => unreachable!("emit_bitwise called with non-bitwise op"),
         })
     }
 

@@ -107,7 +107,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         for (i, local) in locals.iter().enumerate().take(parameter_count) {
             let parameter = function
                 .get_nth_param(to_field_index(i)?)
-                .ok_or(CompileError::llvm("missing parameter"))?;
+                .expect("LLVM parameter count mismatch");
             ctx.builder.build_store(local.alloca, parameter)?;
         }
 
@@ -197,7 +197,9 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         let local = self.get_local(idx)?;
         match &local.mty {
             Type::Reference(_, inner) => self.lower_type(inner),
-            other => Err(CompileError::unsupported(other)),
+            other => Err(CompileError::TypeMismatch(format!(
+                "expected reference type for pointee_type, got {other:?}"
+            ))),
         }
     }
 

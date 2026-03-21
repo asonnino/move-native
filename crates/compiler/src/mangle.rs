@@ -69,7 +69,7 @@ impl<'a> Mangler<'a> {
         } else if let Some(enum_env) = module_env.find_enum(symbol) {
             Ok(EnumLayout::new(enum_env).llvm_name(None).replace("::", "_"))
         } else {
-            Err(CompileError::internal(format!(
+            Err(CompileError::InvalidReference(format!(
                 "undefined datatype {symbol:?} in module {}",
                 module_env.get_full_name_str()
             )))

@@ -167,7 +167,7 @@ impl<'ctx> LlvmContext<'ctx> {
         } else if module_env.clone().find_enum(symbol).is_some() {
             Ok(DatatypeEnv::Enum(module_env.into_enum(datatype_id)))
         } else {
-            Err(CompileError::internal(format!(
+            Err(CompileError::InvalidReference(format!(
                 "undefined datatype {symbol:?} in module {}",
                 module_env.get_full_name_str()
             )))
@@ -182,7 +182,7 @@ impl<'ctx> LlvmContext<'ctx> {
     ) -> CompileResult<StructEnv<'_>> {
         match self.get_datatype_env(module_id, datatype_id)? {
             DatatypeEnv::Struct(struct_env) => Ok(struct_env),
-            DatatypeEnv::Enum(enum_env) => Err(CompileError::internal(format!(
+            DatatypeEnv::Enum(enum_env) => Err(CompileError::TypeMismatch(format!(
                 "expected struct datatype, found enum {}",
                 enum_env.get_full_name_str()
             ))),
