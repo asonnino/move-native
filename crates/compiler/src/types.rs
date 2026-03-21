@@ -41,7 +41,7 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
                 }
             }
             Type::TypeParameter(idx) => Err(CompileError::UnresolvedTypeParam(*idx)),
-            other => Err(CompileError::unsupported(other)),
+            other => Err(CompileError::not_implemented(other)),
         }
     }
 
@@ -98,16 +98,7 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
         }
 
         let enum_type = self.ctx.context.opaque_struct_type(&name);
-        let tag_type = match layout.tag_bit_width()? {
-            8 => self.ctx.i8_type.into(),
-            16 => self.ctx.i16_type.into(),
-            32 => self.ctx.i32_type.into(),
-            bits => {
-                return Err(CompileError::Unsupported(format!(
-                    "unsupported enum tag width: {bits}"
-                )));
-            }
-        };
+        let tag_type: BasicTypeEnum = layout.tag_int_type(self.ctx)?.into();
 
         let mut storage_fields = vec![tag_type];
         for variant in layout.variants() {

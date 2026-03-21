@@ -17,7 +17,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
     }
 
     pub(super) fn emit(&self, destination: usize, constant: &Constant) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let val = match constant {
             Constant::Bool(v) => llvm.i8_type.const_int(*v as u64, false).into(),
             Constant::U8(v) => llvm.i8_type.const_int(*v as u64, false).into(),
@@ -182,7 +182,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                     buf.extend_from_slice(bytes);
                 }
-                other => return Err(CompileError::unsupported(other)),
+                other => return Err(CompileError::not_implemented(other)),
             }
         }
         Ok(buf)
@@ -199,7 +199,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
             Constant::U64(_) => 8,
             Constant::U128(_) => 16,
             Constant::U256(_) | Constant::Address(_) => 32,
-            other => return Err(CompileError::unsupported(other)),
+            other => return Err(CompileError::not_implemented(other)),
         };
 
         let mut buf = Vec::with_capacity(elements.len() * element_size);
@@ -223,7 +223,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     padded[..len].copy_from_slice(&bytes[..len]);
                     buf.extend_from_slice(&padded);
                 }
-                other => return Err(CompileError::unsupported(other)),
+                other => return Err(CompileError::not_implemented(other)),
             }
         }
         Ok((element_size, buf))

@@ -63,7 +63,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let type_args = self.state.instantiate_types(type_args);
         let struct_ty = self
             .state
@@ -90,10 +90,10 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let _type_args = self.state.instantiate_types(type_args);
         let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
-        let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id)?;
+        let struct_env = self.state.ctx().get_struct_env(module_id, datatype_id)?;
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
             let field_val = llvm.builder.build_extract_value(
@@ -122,7 +122,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let struct_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let type_args = self.state.instantiate_types(type_args);
         let struct_ty =
@@ -145,7 +145,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
         let field_val =
             llvm.builder
@@ -156,7 +156,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     }
 
     fn emit_read_ref(&self, destinations: &[usize], sources: &[usize]) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let pointee_ty = self.state.pointee_type(self.state.source(sources, 0)?)?;
         let val = llvm.builder.build_load(pointee_ty, ptr, "read_ref")?;
@@ -166,7 +166,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     }
 
     fn emit_write_ref(&self, sources: &[usize]) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let val = self.state.load_value(self.state.source(sources, 1)?)?;
         llvm.builder.build_store(ptr, val)?;

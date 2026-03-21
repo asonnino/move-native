@@ -56,7 +56,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
     pub(crate) fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
         for byte_code in &function_data.code {
             self.lower_bytecode(byte_code)
-                .context(format!("at {byte_code:?}"))?;
+                .with_context(|| format!("at {byte_code:?}"))?;
         }
         Ok(())
     }
@@ -163,7 +163,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             )
             .emit_get_global(*module_id, *datatype_id, type_args, destinations, sources),
 
-            other => Err(CompileError::unsupported(other)),
+            other => Err(CompileError::not_implemented(other)),
         }
     }
 }

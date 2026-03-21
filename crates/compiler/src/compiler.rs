@@ -10,8 +10,9 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use crate::assembly::{Assembly, AssemblyBuilder};
-use crate::context::{DatatypeEnv, LlvmContext};
+use crate::context::LlvmContext;
 use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
+use crate::mangle::Mangler;
 use crate::function::FunctionLowering;
 use crate::target::Target;
 use crate::types::TypeLowering;
@@ -101,7 +102,7 @@ impl<'ctx> Compiler<'ctx> {
         for ((function_env, function_data), declaration) in targets.iter().zip(declarations) {
             let name = function_env.get_name_str();
             self.compile_function(declaration, function_env, function_data)
-                .context(format!("in function '{name}'"))?;
+                .with_context(|| format!("in function '{name}'"))?;
         }
 
         self.asm_builder.optimize(&self.ctx.module)?;
@@ -115,7 +116,7 @@ impl<'ctx> Compiler<'ctx> {
         &self,
         function_env: &FunctionEnv<'_>,
     ) -> CompileResult<FunctionValue<'ctx>> {
-        let name = LlvmContext::qualified_function_name(function_env);
+        let name = Mangler::qualified_function_name(function_env);
         let function_type = TypeLowering::new(&self.ctx).lower_function_type(
             &function_env.get_parameter_types(),
             &function_env.get_return_types(),
@@ -165,10 +166,7 @@ impl<'ctx> Compiler<'ctx> {
             Type::Datatype(module_id, datatype_id, type_args) => {
                 let datatype_env = self.ctx.get_datatype_env(*module_id, *datatype_id)?;
                 for (i, arg) in type_args.iter().enumerate() {
-                    let is_phantom = match &datatype_env {
-                        DatatypeEnv::Struct(struct_env) => struct_env.is_phantom_parameter(i),
-                        DatatypeEnv::Enum(enum_env) => enum_env.is_phantom_parameter(i),
-                    };
+                    let is_phantom = datatype_env.is_phantom_parameter(i);
                     if !is_phantom && !self.is_phantom_in_type(param_idx, arg)? {
                         return Ok(false);
                     }

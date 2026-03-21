@@ -7,7 +7,6 @@ use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
-use crate::context::DatatypeEnv;
 use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
 
@@ -61,7 +60,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let type_args = self.state.instantiate_types(type_args);
         let (layout, enum_type) = self.get_layout_and_type(module_id, datatype_id, &type_args)?;
         let variant = layout.variant(variant_id);
@@ -97,7 +96,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let type_args = self.state.instantiate_types(type_args);
         let (layout, enum_type) = self.get_layout_and_type(module_id, datatype_id, &type_args)?;
         let variant = layout.variant(variant_id);
@@ -158,14 +157,8 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         datatype_id: DatatypeId,
         type_args: &[Type],
     ) -> CompileResult<(EnumLayout<'b>, inkwell::types::StructType<'ctx>)> {
-        let llvm = self.state.ctx;
-        let datatype_env = llvm.get_datatype_env(module_id, datatype_id)?;
-        let DatatypeEnv::Enum(enum_env) = datatype_env else {
-            return Err(CompileError::TypeMismatch(format!(
-                "expected enum datatype for variant op: {:?}",
-                Type::Datatype(module_id, datatype_id, type_args.to_vec())
-            )));
-        };
+        let llvm = self.state.ctx();
+        let enum_env = llvm.get_datatype_env(module_id, datatype_id)?.as_enum()?;
         let enum_type = self
             .state
             .lower_type(&Type::Datatype(module_id, datatype_id, type_args.to_vec()))?
@@ -178,7 +171,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         field_types: &[Type],
         sources: &[usize],
     ) -> CompileResult<inkwell::values::StructValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let payload_types: Vec<BasicTypeEnum<'ctx>> = field_types
             .iter()
             .map(|ty| self.state.lower_type(ty))
@@ -200,17 +193,9 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         layout: &EnumLayout<'b>,
         tag: usize,
     ) -> CompileResult<inkwell::values::IntValue<'ctx>> {
-        let value = tag as u64;
-        Ok(match layout.tag_bit_width()? {
-            8 => self.state.ctx.i8_type.const_int(value, false),
-            16 => self.state.ctx.i16_type.const_int(value, false),
-            32 => self.state.ctx.i32_type.const_int(value, false),
-            bits => {
-                return Err(CompileError::Unsupported(format!(
-                    "unsupported enum tag width: {bits}"
-                )));
-            }
-        })
+        Ok(layout
+            .tag_int_type(self.state.ctx())?
+            .const_int(tag as u64, false))
     }
 }
 

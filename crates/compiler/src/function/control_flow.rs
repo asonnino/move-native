@@ -21,7 +21,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
     }
 
     pub(super) fn emit(&self, byte_code: &Bytecode) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         match byte_code {
             Bytecode::Ret(_, returns) => {
                 if returns.is_empty() {
@@ -101,7 +101,7 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                                 .build_load(tag_type, tag_ptr, "variant_tag")?
                                 .into_int_value()
                         }
-                        other => return Err(CompileError::unsupported(other)),
+                        other => return Err(CompileError::not_implemented(other)),
                     },
                     _ => self.state.load_struct(*source).and_then(|enum_value| {
                         llvm.builder

@@ -12,6 +12,9 @@ pub enum CompileError {
     #[error("unsupported: {0}")]
     Unsupported(String),
 
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
+
     #[error("type mismatch: {0}")]
     TypeMismatch(String),
 
@@ -60,8 +63,8 @@ pub enum CompileError {
 }
 
 impl CompileError {
-    pub(crate) fn unsupported(val: impl fmt::Debug) -> Self {
-        Self::Unsupported(format!("{val:?}"))
+    pub(crate) fn not_implemented(val: impl fmt::Debug) -> Self {
+        Self::NotImplemented(format!("{val:?}"))
     }
 
     pub(crate) fn llvm(msg: impl Into<String>) -> Self {
@@ -112,6 +115,19 @@ impl CompileError {
 /// Convenience alias used throughout the crate.
 pub type CompileResult<T> = Result<T, CompileError>;
 
+/// Extension trait for adding context to `CompileResult` via method chaining.
+///
+/// Defers formatting to the error path — the closure is only called on `Err`.
+pub(crate) trait CompileContext<T> {
+    fn with_context(self, f: impl FnOnce() -> String) -> CompileResult<T>;
+}
+
+impl<T> CompileContext<T> for CompileResult<T> {
+    fn with_context(self, f: impl FnOnce() -> String) -> CompileResult<T> {
+        self.map_err(|e| e.context(f()))
+    }
+}
+
 /// Run `generate` inside `catch_unwind`, converting any panic into a
 /// `CompileError::Internal`.
 ///
@@ -132,17 +148,6 @@ pub(crate) fn catch_panic<T>(label: &str, generate: impl FnOnce() -> T) -> Compi
 /// Checked cast of a bytecode-derived index to a u32 LLVM field index.
 pub(crate) fn to_field_index(i: usize) -> CompileResult<u32> {
     u32::try_from(i).map_err(|_| CompileError::internal(format!("field index {i} exceeds u32")))
-}
-
-/// Extension trait for adding context to `CompileResult` via method chaining.
-pub(crate) trait CompileContext<T> {
-    fn context(self, ctx: impl fmt::Display) -> CompileResult<T>;
-}
-
-impl<T> CompileContext<T> for CompileResult<T> {
-    fn context(self, ctx: impl fmt::Display) -> CompileResult<T> {
-        self.map_err(|e| e.context(ctx))
-    }
 }
 
 #[cfg(test)]

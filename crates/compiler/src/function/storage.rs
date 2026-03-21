@@ -27,7 +27,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let (symbol, datatype) =
             self.resolve_symbol("move_to", module_id, datatype_id, type_args)?;
         let parameter_type = self.state.lower_type(&datatype)?.into();
@@ -46,7 +46,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let (symbol, datatype) =
             self.resolve_symbol("move_from", module_id, datatype_id, type_args)?;
         let return_type = self.state.lower_type(&datatype)?;
@@ -62,7 +62,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let (symbol, _) = self.resolve_symbol("exists", module_id, datatype_id, type_args)?;
         let function_type = llvm.i8_type.fn_type(&[llvm.i256_type.into()], false);
         self.call_and_store(&symbol, function_type, destinations, sources)
@@ -76,7 +76,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let (symbol, _) =
             self.resolve_symbol("borrow_global", module_id, datatype_id, type_args)?;
         let function_type = llvm.ptr_type.fn_type(&[llvm.i256_type.into()], false);
@@ -91,7 +91,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let (symbol, datatype) =
             self.resolve_symbol("get_global", module_id, datatype_id, type_args)?;
         let return_type = self.state.lower_type(&datatype)?;
@@ -122,7 +122,7 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let function_value = llvm.add_external_function(symbol, function_type);
 
         let args: Vec<_> = sources

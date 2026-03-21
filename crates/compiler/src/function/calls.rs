@@ -8,8 +8,8 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 
 use super::FunctionLowering;
 use super::state::{CallSiteValueExt, FunctionState};
-use crate::context::LlvmContext;
 use crate::error::{CompileContext, CompileError, CompileResult, catch_panic, to_field_index};
+use crate::mangle::Mangler;
 
 /// Emits LLVM call instructions for Move function calls.
 ///
@@ -32,8 +32,8 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         type_args: &[Type],
         sources: &[usize],
     ) -> CompileResult<()> {
-        let llvm = &self.state.ctx;
-        let callee_env = self.state.ctx.get_function_env(module_id, function_id);
+        let llvm = self.state.ctx();
+        let callee_env = self.state.ctx().get_function_env(module_id, function_id);
 
         let (callee_fn, call_name) = if callee_env.is_native() {
             self.emit_native(&callee_env, type_args)?
@@ -79,7 +79,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         callee_env: &move_model::model::FunctionEnv<'_>,
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let inst_args = self.state.instantiate_types(type_args);
         let mangled = self.state.mangle_native_symbol(callee_env, &inst_args)?;
         let inst_params: Vec<Type> = callee_env
@@ -104,9 +104,9 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         callee_env: &move_model::model::FunctionEnv<'_>,
         type_args: &[Type],
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let llvm = &self.state.ctx;
+        let llvm = self.state.ctx();
         let inst_args = self.state.instantiate_types(type_args);
-        let callee_name = LlvmContext::qualified_function_name(callee_env);
+        let callee_name = Mangler::qualified_function_name(callee_env);
         let args = self.state.mangle_type_args(&inst_args)?;
         let mangled = format!("{callee_name}${args}");
         let f = match llvm.get_function(&mangled) {
@@ -133,19 +133,19 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 let result = (|| -> CompileResult<()> {
                     let generator = StacklessBytecodeGenerator::new(callee_env);
                     let function_data = catch_panic(&mangled, || generator.generate_function())
-                        .context(format!("in monomorphized '{mangled}'"))?;
+                        .with_context(|| format!("in monomorphized '{mangled}'"))?;
                     let param_count = callee_env.get_parameter_count();
                     let callee_lowering = FunctionLowering::new(
-                        self.state.ctx,
+                        self.state.ctx(),
                         function,
                         param_count,
                         &function_data,
                         inst_args,
                     )
-                    .context(format!("in monomorphized '{mangled}'"))?;
+                    .with_context(|| format!("in monomorphized '{mangled}'"))?;
                     callee_lowering
                         .lower_function(&function_data)
-                        .context(format!("in monomorphized '{mangled}'"))?;
+                        .with_context(|| format!("in monomorphized '{mangled}'"))?;
                     Ok(())
                 })();
                 llvm.builder.position_at_end(saved_block);
@@ -163,8 +163,8 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
         &self,
         callee_env: &move_model::model::FunctionEnv<'_>,
     ) -> CompileResult<(FunctionValue<'ctx>, String)> {
-        let llvm = &self.state.ctx;
-        let callee_name = LlvmContext::qualified_function_name(callee_env);
+        let llvm = self.state.ctx();
+        let callee_name = Mangler::qualified_function_name(callee_env);
         let f = match llvm.get_function(&callee_name) {
             Some(f) => f,
             None => {

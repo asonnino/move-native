@@ -17,6 +17,13 @@ impl<'a> Mangler<'a> {
         Self { env }
     }
 
+    /// Build a module-qualified function name to avoid cross-module symbol collisions.
+    pub(crate) fn qualified_function_name(env: &FunctionEnv<'_>) -> String {
+        let module_name = env.module_env.get_full_name_str().replace("::", "_");
+        let function_name = env.get_name_str();
+        format!("{module_name}_{function_name}")
+    }
+
     /// Create a `Mangler` backed by an empty `GlobalEnv` for unit testing.
     ///
     /// The leaked env is never accessed for primitive, vector, reference, or
@@ -52,7 +59,7 @@ impl<'a> Mangler<'a> {
             Type::Reference(false, inner) => Ok(format!("ref${}", self.mangle_type(inner)?)),
             Type::Reference(true, inner) => Ok(format!("mut${}", self.mangle_type(inner)?)),
             Type::TypeParameter(idx) => Ok(format!("T{idx}")),
-            other => Err(CompileError::unsupported(other)),
+            other => Err(CompileError::not_implemented(other)),
         }
     }
 

@@ -1,9 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use inkwell::types::IntType;
 use move_model::model::{EnumEnv, VariantEnv, VariantId};
 use move_model::ty::Type;
 
+use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult};
 
 pub(crate) struct VariantLayout<'env> {
@@ -81,6 +83,21 @@ impl<'env> EnumLayout<'env> {
                 "enum has too many variants: {}",
                 self.env.get_full_name_str()
             )))
+        }
+    }
+
+    /// Return the LLVM integer type for the enum discriminant tag.
+    pub(crate) fn tag_int_type<'ctx>(
+        &self,
+        ctx: &LlvmContext<'ctx>,
+    ) -> CompileResult<IntType<'ctx>> {
+        match self.tag_bit_width()? {
+            8 => Ok(ctx.i8_type),
+            16 => Ok(ctx.i16_type),
+            32 => Ok(ctx.i32_type),
+            bits => Err(CompileError::internal(format!(
+                "unexpected tag bit width {bits}"
+            ))),
         }
     }
 

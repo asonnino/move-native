@@ -78,7 +78,7 @@ impl<'ctx> Local<'ctx> {
 /// Contains everything emitters need (locals, type params, mangling, LLVM helpers)
 /// without exposing the orchestration surface (bytecode lowering, operation dispatch).
 pub(crate) struct FunctionState<'a, 'ctx> {
-    pub(crate) ctx: &'a LlvmContext<'ctx>,
+    ctx: &'a LlvmContext<'ctx>,
     /// All locals (params + locals + compiler-generated temps).
     pub(crate) locals: Vec<Local<'ctx>>,
     /// Pre-created basic blocks for each Label in the bytecode.
@@ -86,10 +86,18 @@ pub(crate) struct FunctionState<'a, 'ctx> {
     /// Concrete types for the function's type parameters (empty for non-generic).
     type_params: Vec<Type>,
     /// Counter for unique global constant names.
+    ///
+    /// Uses `Cell` because all methods take `&self` — the LLVM builder API
+    /// is interior-mutable via FFI, so `&mut self` would ripple needlessly
+    /// through every emitter call site.
     const_counter: Cell<usize>,
 }
 
 impl<'a, 'ctx> FunctionState<'a, 'ctx> {
+    pub(crate) fn ctx(&self) -> &'a LlvmContext<'ctx> {
+        self.ctx
+    }
+
     pub(crate) fn new(
         ctx: &'a LlvmContext<'ctx>,
         function: FunctionValue<'ctx>,

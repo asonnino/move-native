@@ -57,22 +57,22 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
             // Integer casts
             Operation::CastU8 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i8_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i8_type)?
             }
             Operation::CastU16 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i16_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i16_type)?
             }
             Operation::CastU32 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i32_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i32_type)?
             }
             Operation::CastU64 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i64_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i64_type)?
             }
             Operation::CastU128 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i128_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i128_type)?
             }
             Operation::CastU256 => {
-                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx.i256_type)?
+                self.lower_cast(self.state.source(sources, 0)?, self.state.ctx().i256_type)?
             }
 
             _ => unreachable!("ArithmeticEmitter::emit called with non-arithmetic op"),
@@ -85,7 +85,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
     /// Emit a conditional abort: if `condition` is true, call `__move_rt_arithmetic_error()`
     /// and mark the block unreachable; otherwise continue in a fresh basic block.
     fn emit_abort_if(&self, condition: IntValue<'ctx>) -> CompileResult<()> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let current_block = llvm
             .builder
             .get_insert_block()
@@ -117,7 +117,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         match operation {
@@ -182,7 +182,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         let pred = match operation {
@@ -203,7 +203,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let src0 = self.state.source(sources, 0)?;
         let src1 = self.state.source(sources, 1)?;
         let lhs = self.state.load_value(src0)?;
@@ -227,7 +227,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         rhs: BasicValueEnum<'ctx>,
         mty: &Type,
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         match mty {
             // Integer-like types: direct int compare
             Type::Primitive(
@@ -301,7 +301,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 }
             }
 
-            other => Err(CompileError::unsupported(other)),
+            other => Err(CompileError::not_implemented(other)),
         }
     }
 
@@ -311,7 +311,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         rhs_struct: StructValue<'ctx>,
         field_types: &[Type],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let mut acc = llvm.i8_type.const_int(1, false);
         for (i, field_ty) in field_types.iter().enumerate() {
             let lhs_field = llvm.builder.build_extract_value(
@@ -344,7 +344,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         layout: &EnumLayout<'b>,
         type_args: &[Type],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
 
         debug_assert!(
             layout.variants().count() > 0,
@@ -389,7 +389,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(match operation {
@@ -405,7 +405,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let val = self.state.load_int(self.state.source(sources, 0)?)?;
         let amt = self.state.load_int(self.state.source(sources, 1)?)?;
         let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
@@ -439,7 +439,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         operation: &Operation,
         sources: &[usize],
     ) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(if matches!(operation, Operation::And) {
@@ -450,14 +450,14 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
     }
 
     fn emit_not(&self, sources: &[usize]) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let source = self.state.load_int(self.state.source(sources, 0)?)?;
         let one = llvm.i8_type.const_int(1, false);
         Ok(llvm.builder.build_xor(source, one, "not")?)
     }
 
     fn lower_cast(&self, source: usize, target_ty: IntType<'ctx>) -> CompileResult<IntValue<'ctx>> {
-        let llvm = self.state.ctx;
+        let llvm = self.state.ctx();
         let val = self.state.load_int(source)?;
         let source_bits = val.get_type().get_bit_width();
         let destination_bits = target_ty.get_bit_width();

@@ -22,6 +22,38 @@ pub(crate) enum DatatypeEnv<'env> {
     Enum(EnumEnv<'env>),
 }
 
+impl<'env> DatatypeEnv<'env> {
+    /// Check whether the `i`-th type parameter is phantom.
+    pub(crate) fn is_phantom_parameter(&self, i: usize) -> bool {
+        match self {
+            DatatypeEnv::Struct(s) => s.is_phantom_parameter(i),
+            DatatypeEnv::Enum(e) => e.is_phantom_parameter(i),
+        }
+    }
+
+    /// Unwrap as a struct, returning an error if this is an enum.
+    pub(crate) fn as_struct(self) -> CompileResult<StructEnv<'env>> {
+        match self {
+            DatatypeEnv::Struct(s) => Ok(s),
+            DatatypeEnv::Enum(e) => Err(CompileError::TypeMismatch(format!(
+                "expected struct datatype, found enum {}",
+                e.get_full_name_str()
+            ))),
+        }
+    }
+
+    /// Unwrap as an enum, returning an error if this is a struct.
+    pub(crate) fn as_enum(self) -> CompileResult<EnumEnv<'env>> {
+        match self {
+            DatatypeEnv::Enum(e) => Ok(e),
+            DatatypeEnv::Struct(s) => Err(CompileError::TypeMismatch(format!(
+                "expected enum datatype, found struct {}",
+                s.get_full_name_str()
+            ))),
+        }
+    }
+}
+
 /// Wraps the LLVM Context, Module, and Builder for a single compilation unit.
 ///
 /// Also owns the Move `GlobalEnv` (semantic model) so that all central
@@ -61,19 +93,7 @@ impl<'ctx> LlvmContext<'ctx> {
         let llvm_module = context.create_module(&module_name);
         let builder = context.create_builder();
 
-        Ok(Self {
-            env,
-            context,
-            module: llvm_module,
-            builder,
-            i8_type: context.i8_type(),
-            i16_type: context.i16_type(),
-            i32_type: context.i32_type(),
-            i64_type: context.i64_type(),
-            i128_type: context.i128_type(),
-            i256_type: context.custom_width_int_type(256),
-            ptr_type: context.ptr_type(AddressSpace::default()),
-        })
+        Ok(Self::from_parts(context, llvm_module, builder, env))
     }
 
     /// Verify that all modules referenced by `module` are present in `dependencies`.
@@ -97,6 +117,27 @@ impl<'ctx> LlvmContext<'ctx> {
         Ok(())
     }
 
+    fn from_parts(
+        context: &'ctx Context,
+        module: Module<'ctx>,
+        builder: Builder<'ctx>,
+        env: GlobalEnv,
+    ) -> Self {
+        Self {
+            env,
+            context,
+            module,
+            builder,
+            i8_type: context.i8_type(),
+            i16_type: context.i16_type(),
+            i32_type: context.i32_type(),
+            i64_type: context.i64_type(),
+            i128_type: context.i128_type(),
+            i256_type: context.custom_width_int_type(256),
+            ptr_type: context.ptr_type(AddressSpace::default()),
+        }
+    }
+
     /// Create an `LlvmContext` from a `CompiledModule` for unit testing.
     ///
     /// Leaks the LLVM `Context` so the returned value is `'static` — fine for tests.
@@ -114,19 +155,7 @@ impl<'ctx> LlvmContext<'ctx> {
             .get_full_name_str();
         let llvm_module = context.create_module(&module_name);
         let builder = context.create_builder();
-        Ok(LlvmContext {
-            env,
-            context,
-            module: llvm_module,
-            builder,
-            i8_type: context.i8_type(),
-            i16_type: context.i16_type(),
-            i32_type: context.i32_type(),
-            i64_type: context.i64_type(),
-            i128_type: context.i128_type(),
-            i256_type: context.custom_width_int_type(256),
-            ptr_type: context.ptr_type(AddressSpace::default()),
-        })
+        Ok(LlvmContext::from_parts(context, llvm_module, builder, env))
     }
 
     /// Create a minimal `LlvmContext` with an empty `GlobalEnv` for unit testing.
@@ -139,19 +168,7 @@ impl<'ctx> LlvmContext<'ctx> {
         let context: &'static Context = Box::leak(Box::new(Context::create()));
         let llvm_module = context.create_module("test");
         let builder = context.create_builder();
-        LlvmContext {
-            env: GlobalEnv::new(),
-            context,
-            module: llvm_module,
-            builder,
-            i8_type: context.i8_type(),
-            i16_type: context.i16_type(),
-            i32_type: context.i32_type(),
-            i64_type: context.i64_type(),
-            i128_type: context.i128_type(),
-            i256_type: context.custom_width_int_type(256),
-            ptr_type: context.ptr_type(AddressSpace::default()),
-        }
+        LlvmContext::from_parts(context, llvm_module, builder, GlobalEnv::new())
     }
 
     /// Look up a datatype definition by module and datatype ID.
@@ -180,13 +197,7 @@ impl<'ctx> LlvmContext<'ctx> {
         module_id: ModuleId,
         datatype_id: DatatypeId,
     ) -> CompileResult<StructEnv<'_>> {
-        match self.get_datatype_env(module_id, datatype_id)? {
-            DatatypeEnv::Struct(struct_env) => Ok(struct_env),
-            DatatypeEnv::Enum(enum_env) => Err(CompileError::TypeMismatch(format!(
-                "expected struct datatype, found enum {}",
-                enum_env.get_full_name_str()
-            ))),
-        }
+        self.get_datatype_env(module_id, datatype_id)?.as_struct()
     }
 
     /// Look up a function definition by module and function ID.
@@ -230,13 +241,6 @@ impl<'ctx> LlvmContext<'ctx> {
             self.module
                 .add_function(name, function_type, Some(Linkage::External))
         })
-    }
-
-    /// Build a module-qualified function name to avoid cross-module symbol collisions.
-    pub(crate) fn qualified_function_name(env: &FunctionEnv<'_>) -> String {
-        let module_name = env.module_env.get_full_name_str().replace("::", "_");
-        let function_name = env.get_name_str();
-        format!("{module_name}_{function_name}")
     }
 
     /// Mangle a Move type into a symbol-safe string.
