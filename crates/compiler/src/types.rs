@@ -4,8 +4,9 @@
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use move_model::ty::{PrimitiveType, Type};
 
-use crate::context::LlvmContext;
+use crate::context::{DatatypeEnv, LlvmContext};
 use crate::error::{CompileError, CompileResult};
+use crate::layout::EnumLayout;
 
 /// Lightweight view for lowering Move types to LLVM types.
 ///
@@ -34,38 +35,91 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
             Type::Reference(_, _) => Ok(self.ctx.ptr_type.into()),
             Type::Vector(_) => Ok(self.ctx.ptr_type.into()),
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let struct_env = self.ctx.get_struct_env(*module_id, *datatype_id);
-                let name = if type_args.is_empty() {
-                    struct_env.get_full_name_str()
-                } else {
-                    let args = self.ctx.mangle_type_args(type_args)?;
-                    format!("{}__{}", struct_env.get_full_name_str(), args)
-                };
-
-                // Return cached struct type if already created
-                if let Some(existing) = self.ctx.context.get_struct_type(&name) {
-                    return Ok(existing.into());
+                match self.ctx.get_datatype_env(*module_id, *datatype_id)? {
+                    DatatypeEnv::Struct(struct_env) => self.lower_struct(struct_env, type_args),
+                    DatatypeEnv::Enum(enum_env) => self.lower_enum(enum_env, type_args),
                 }
-
-                // Create opaque struct, then set body (handles recursive types)
-                let struct_type = self.ctx.context.opaque_struct_type(&name);
-                let field_types: Vec<BasicTypeEnum<'ctx>> = struct_env
-                    .get_fields()
-                    .map(|f| {
-                        let t = if type_args.is_empty() {
-                            f.get_type()
-                        } else {
-                            f.get_type().instantiate(type_args)
-                        };
-                        self.lower_type(&t)
-                    })
-                    .collect::<Result<_, _>>()?;
-                struct_type.set_body(&field_types, false);
-                Ok(struct_type.into())
             }
             Type::TypeParameter(idx) => Err(CompileError::UnresolvedTypeParam(*idx)),
             other => Err(CompileError::unsupported(other)),
         }
+    }
+
+    /// Lower a Move struct to a named LLVM struct type, with caching.
+    fn lower_struct(
+        &self,
+        struct_env: move_model::model::StructEnv<'_>,
+        type_args: &[Type],
+    ) -> CompileResult<BasicTypeEnum<'ctx>> {
+        let name = if type_args.is_empty() {
+            struct_env.get_full_name_str()
+        } else {
+            let args = self.ctx.mangle_type_args(type_args)?;
+            format!("{}__{}", struct_env.get_full_name_str(), args)
+        };
+
+        if let Some(existing) = self.ctx.context.get_struct_type(&name) {
+            return Ok(existing.into());
+        }
+
+        // Create opaque struct first, then set body (handles recursive types).
+        let struct_type = self.ctx.context.opaque_struct_type(&name);
+        let field_types: Vec<BasicTypeEnum<'ctx>> = struct_env
+            .get_fields()
+            .map(|f| {
+                let t = if type_args.is_empty() {
+                    f.get_type()
+                } else {
+                    f.get_type().instantiate(type_args)
+                };
+                self.lower_type(&t)
+            })
+            .collect::<Result<_, _>>()?;
+        struct_type.set_body(&field_types, false);
+        Ok(struct_type.into())
+    }
+
+    /// Lower a Move enum to a tagged-union LLVM struct type, with caching.
+    fn lower_enum(
+        &self,
+        enum_env: move_model::model::EnumEnv<'_>,
+        type_args: &[Type],
+    ) -> CompileResult<BasicTypeEnum<'ctx>> {
+        let layout = EnumLayout::new(enum_env);
+        let mangled_args = if type_args.is_empty() {
+            None
+        } else {
+            Some(self.ctx.mangle_type_args(type_args)?)
+        };
+        let name = layout.llvm_name(mangled_args.as_deref());
+
+        if let Some(existing) = self.ctx.context.get_struct_type(&name) {
+            return Ok(existing.into());
+        }
+
+        let enum_type = self.ctx.context.opaque_struct_type(&name);
+        let tag_type = match layout.tag_bit_width()? {
+            8 => self.ctx.i8_type.into(),
+            16 => self.ctx.i16_type.into(),
+            32 => self.ctx.i32_type.into(),
+            bits => {
+                return Err(CompileError::Unsupported(format!(
+                    "unsupported enum tag width: {bits}"
+                )));
+            }
+        };
+
+        let mut storage_fields = vec![tag_type];
+        for variant in layout.variants() {
+            let payload_types: Vec<BasicTypeEnum<'ctx>> = variant
+                .payload_field_types(type_args)
+                .into_iter()
+                .map(|ty| self.lower_type(&ty))
+                .collect::<Result<_, _>>()?;
+            storage_fields.push(self.ctx.context.struct_type(&payload_types, false).into());
+        }
+        enum_type.set_body(&storage_fields, false);
+        Ok(enum_type.into())
     }
 
     /// Lower Move parameter and return types into an LLVM function type.

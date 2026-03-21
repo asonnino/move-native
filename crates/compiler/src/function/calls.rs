@@ -9,7 +9,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 use super::FunctionLowering;
 use super::state::{CallSiteValueExt, FunctionState};
 use crate::context::LlvmContext;
-use crate::error::{CompileContext, CompileError, CompileResult};
+use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
 
 /// Emits LLVM call instructions for Move function calls.
 ///
@@ -130,22 +130,26 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                     .get_insert_block()
                     .ok_or(CompileError::llvm("no insert block"))?;
 
-                let generator = StacklessBytecodeGenerator::new(callee_env);
-                let func_data = generator.generate_function();
-                let param_count = callee_env.get_parameter_count();
-                let callee_lowering = FunctionLowering::new(
-                    self.state.ctx,
-                    function,
-                    param_count,
-                    &func_data,
-                    inst_args,
-                )
-                .context(format!("in monomorphized '{mangled}'"))?;
-                callee_lowering
-                    .lower_function(&func_data)
+                let result = (|| -> CompileResult<()> {
+                    let generator = StacklessBytecodeGenerator::new(callee_env);
+                    let function_data = catch_panic(&mangled, || generator.generate_function())
+                        .context(format!("in monomorphized '{mangled}'"))?;
+                    let param_count = callee_env.get_parameter_count();
+                    let callee_lowering = FunctionLowering::new(
+                        self.state.ctx,
+                        function,
+                        param_count,
+                        &function_data,
+                        inst_args,
+                    )
                     .context(format!("in monomorphized '{mangled}'"))?;
-
+                    callee_lowering
+                        .lower_function(&function_data)
+                        .context(format!("in monomorphized '{mangled}'"))?;
+                    Ok(())
+                })();
                 llvm.builder.position_at_end(saved_block);
+                result?;
                 function
             }
         };
@@ -182,6 +186,7 @@ mod tests {
     };
 
     use crate::compiler::Compiler;
+    use crate::error::{CompileError, catch_panic};
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
 
@@ -291,6 +296,24 @@ mod tests {
         assert!(
             asm.contains("__move_rt_0x0_M_native_add"),
             "missing mangled native symbol\n{asm}"
+        );
+    }
+
+    #[test]
+    fn generic_generation_panic_is_compile_error() {
+        let err = catch_panic::<()>("0x0_M_identity$u64", || panic!("boom")).unwrap_err();
+        assert!(
+            matches!(err, CompileError::Internal(_)),
+            "expected internal compiler error, got {err}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("0x0_M_identity$u64"),
+            "missing symbol context in error: {message}"
+        );
+        assert!(
+            message.contains("boom"),
+            "missing panic detail in error: {message}"
         );
     }
 }

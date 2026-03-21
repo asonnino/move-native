@@ -9,12 +9,18 @@ use inkwell::types::{FunctionType, IntType, PointerType};
 use inkwell::values::FunctionValue;
 use move_binary_format::CompiledModule;
 use move_model::model::{
-    DatatypeId, FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId, StructEnv,
+    DatatypeId, EnumEnv, FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId, StructEnv,
 };
 use move_model::ty::Type;
 
 use crate::error::{CompileError, CompileResult};
 use crate::mangle::Mangler;
+
+/// Wrapper over Move datatypes so the compiler can distinguish structs from enums.
+pub(crate) enum DatatypeEnv<'env> {
+    Struct(StructEnv<'env>),
+    Enum(EnumEnv<'env>),
+}
 
 /// Wraps the LLVM Context, Module, and Builder for a single compilation unit.
 ///
@@ -50,7 +56,7 @@ impl<'ctx> LlvmContext<'ctx> {
         let module_name = env
             .get_modules()
             .last()
-            .expect("env always contains at least the target module")
+            .ok_or_else(|| CompileError::internal("model builder produced empty environment"))?
             .get_full_name_str();
         let llvm_module = context.create_module(&module_name);
         let builder = context.create_builder();
@@ -116,13 +122,39 @@ impl<'ctx> LlvmContext<'ctx> {
         }
     }
 
+    /// Look up a datatype definition by module and datatype ID.
+    pub(crate) fn get_datatype_env(
+        &self,
+        module_id: ModuleId,
+        datatype_id: DatatypeId,
+    ) -> CompileResult<DatatypeEnv<'_>> {
+        let symbol = datatype_id.symbol();
+        let module_env = self.env.get_module(module_id);
+        if module_env.clone().find_struct(symbol).is_some() {
+            Ok(DatatypeEnv::Struct(module_env.into_struct(datatype_id)))
+        } else if module_env.clone().find_enum(symbol).is_some() {
+            Ok(DatatypeEnv::Enum(module_env.into_enum(datatype_id)))
+        } else {
+            Err(CompileError::internal(format!(
+                "undefined datatype {symbol:?} in module {}",
+                module_env.get_full_name_str()
+            )))
+        }
+    }
+
     /// Look up a struct definition by module and datatype ID.
     pub(crate) fn get_struct_env(
         &self,
         module_id: ModuleId,
         datatype_id: DatatypeId,
-    ) -> StructEnv<'_> {
-        self.env.get_module(module_id).into_struct(datatype_id)
+    ) -> CompileResult<StructEnv<'_>> {
+        match self.get_datatype_env(module_id, datatype_id)? {
+            DatatypeEnv::Struct(struct_env) => Ok(struct_env),
+            DatatypeEnv::Enum(enum_env) => Err(CompileError::internal(format!(
+                "expected struct datatype, found enum {}",
+                enum_env.get_full_name_str()
+            ))),
+        }
     }
 
     /// Look up a function definition by module and function ID.
@@ -135,11 +167,11 @@ impl<'ctx> LlvmContext<'ctx> {
     }
 
     /// The module being compiled (always the last one added to the environment).
-    pub(crate) fn target_module(&self) -> ModuleEnv<'_> {
+    pub(crate) fn target_module(&self) -> CompileResult<ModuleEnv<'_>> {
         self.env
             .get_modules()
             .last()
-            .expect("env always contains at least the target module")
+            .ok_or_else(|| CompileError::internal("model builder produced empty environment"))
     }
 
     /// Look up an already-declared function by name.

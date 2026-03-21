@@ -5,6 +5,7 @@ mod arithmetic;
 mod calls;
 mod constants;
 mod control_flow;
+mod enums;
 mod state;
 mod storage;
 mod structs;
@@ -23,6 +24,7 @@ use arithmetic::ArithmeticEmitter;
 use calls::CallEmitter;
 use constants::ConstantEmitter;
 use control_flow::ControlFlowEmitter;
+use enums::EnumEmitter;
 use storage::StorageEmitter;
 use structs::StructEmitter;
 
@@ -76,8 +78,8 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Bytecode::Label(..)
             | Bytecode::Jump(..)
             | Bytecode::Branch(..)
+            | Bytecode::VariantSwitch(..)
             | Bytecode::Abort(..) => ControlFlowEmitter::new(&self.state).emit(byte_code)?,
-            other => return Err(CompileError::unsupported(other)),
         }
         Ok(())
     }
@@ -129,6 +131,10 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
             | Operation::FreezeRef
             | Operation::Destroy => {
                 StructEmitter::new(&self.state).emit(destinations, operation, sources)
+            }
+
+            Operation::PackVariant(..) | Operation::UnpackVariant(..) => {
+                EnumEmitter::new(&self.state).emit(destinations, operation, sources)
             }
 
             // Function calls

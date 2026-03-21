@@ -6,6 +6,7 @@ mod compiler;
 mod context;
 mod error;
 mod function;
+mod layout;
 mod mangle;
 pub mod module;
 mod target;

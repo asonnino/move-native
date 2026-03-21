@@ -3,12 +3,14 @@
 
 use inkwell::IntPredicate;
 use inkwell::types::IntType;
-use inkwell::values::{BasicValueEnum, IntValue};
+use inkwell::values::{BasicValueEnum, IntValue, StructValue};
 use move_model::ty::{PrimitiveType, Type};
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::{CallSiteValueExt, FunctionState};
+use crate::context::DatatypeEnv;
 use crate::error::{CompileError, CompileResult};
+use crate::layout::EnumLayout;
 
 /// Emits LLVM IR for arithmetic, comparison, bitwise, shift, logical,
 /// and integer-cast operations.
@@ -260,41 +262,107 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
             // Structs: field-by-field comparison, AND-reduce
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let struct_env = llvm.get_struct_env(*module_id, *datatype_id);
-                let fields: Vec<Type> = struct_env
-                    .get_fields()
-                    .map(|f| {
-                        let t = f.get_type();
-                        if type_args.is_empty() {
-                            t
-                        } else {
-                            t.instantiate(type_args)
-                        }
-                    })
-                    .collect();
                 let lhs_struct = lhs.into_struct_value();
                 let rhs_struct = rhs.into_struct_value();
-
-                let mut acc = llvm.i8_type.const_int(1, false);
-                for (i, field_ty) in fields.iter().enumerate() {
-                    let lhs_field = llvm.builder.build_extract_value(
-                        lhs_struct,
-                        i as u32,
-                        &format!("l_{i}"),
-                    )?;
-                    let rhs_field = llvm.builder.build_extract_value(
-                        rhs_struct,
-                        i as u32,
-                        &format!("r_{i}"),
-                    )?;
-                    let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty)?;
-                    acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
+                match llvm.get_datatype_env(*module_id, *datatype_id)? {
+                    DatatypeEnv::Struct(struct_env) => {
+                        let fields: Vec<Type> = struct_env
+                            .get_fields()
+                            .map(|f| {
+                                let t = f.get_type();
+                                if type_args.is_empty() {
+                                    t
+                                } else {
+                                    t.instantiate(type_args)
+                                }
+                            })
+                            .collect();
+                        self.compare_struct_fields(lhs_struct, rhs_struct, &fields)
+                    }
+                    DatatypeEnv::Enum(enum_env) => {
+                        let layout = EnumLayout::new(enum_env);
+                        self.compare_enum_values(lhs_struct, rhs_struct, &layout, type_args)
+                    }
                 }
-                Ok(acc)
             }
 
             other => Err(CompileError::unsupported(other)),
         }
+    }
+
+    fn compare_struct_fields(
+        &self,
+        lhs_struct: StructValue<'ctx>,
+        rhs_struct: StructValue<'ctx>,
+        field_types: &[Type],
+    ) -> CompileResult<IntValue<'ctx>> {
+        let llvm = self.state.ctx;
+        let mut acc = llvm.i8_type.const_int(1, false);
+        for (i, field_ty) in field_types.iter().enumerate() {
+            let lhs_field =
+                llvm.builder
+                    .build_extract_value(lhs_struct, i as u32, &format!("l_{i}"))?;
+            let rhs_field =
+                llvm.builder
+                    .build_extract_value(rhs_struct, i as u32, &format!("r_{i}"))?;
+            let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty)?;
+            acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
+        }
+        Ok(acc)
+    }
+
+    /// Compare two enum values for equality.
+    ///
+    /// Correctness relies on `PackVariant` zero-initializing the enum struct
+    /// (`const_zero()`) before setting only the active payload. Inactive variant
+    /// slots are therefore zero on both sides and compare equal, so we can
+    /// simply AND tag equality with all payload comparisons without masking by
+    /// the active variant.
+    fn compare_enum_values(
+        &self,
+        lhs_struct: StructValue<'ctx>,
+        rhs_struct: StructValue<'ctx>,
+        layout: &EnumLayout<'b>,
+        type_args: &[Type],
+    ) -> CompileResult<IntValue<'ctx>> {
+        let llvm = self.state.ctx;
+
+        debug_assert!(
+            layout.variants().count() > 0,
+            "enum with no variants should not reach equality comparison"
+        );
+
+        let lhs_tag = llvm
+            .builder
+            .build_extract_value(lhs_struct, 0, "lhs_enum_tag")?
+            .into_int_value();
+        let rhs_tag = llvm
+            .builder
+            .build_extract_value(rhs_struct, 0, "rhs_enum_tag")?
+            .into_int_value();
+        let tag_eq =
+            llvm.builder
+                .build_int_compare(IntPredicate::EQ, lhs_tag, rhs_tag, "enum_tag_eq")?;
+        let mut acc = llvm
+            .builder
+            .build_int_z_extend(tag_eq, llvm.i8_type, "enum_tag_eq_i8")?;
+
+        for variant in layout.variants() {
+            let payload_types = variant.payload_field_types(type_args);
+            let lhs_payload = llvm
+                .builder
+                .build_extract_value(lhs_struct, variant.payload_field_index()?, "lhs_payload")?
+                .into_struct_value();
+            let rhs_payload = llvm
+                .builder
+                .build_extract_value(rhs_struct, variant.payload_field_index()?, "rhs_payload")?
+                .into_struct_value();
+            let payload_eq =
+                self.compare_struct_fields(lhs_payload, rhs_payload, &payload_types)?;
+            acc = llvm.builder.build_and(acc, payload_eq, "enum_eq")?;
+        }
+
+        Ok(acc)
     }
 
     fn emit_bitwise(

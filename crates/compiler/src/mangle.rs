@@ -5,6 +5,7 @@ use move_model::model::{FunctionEnv, GlobalEnv};
 use move_model::ty::{PrimitiveType, Type};
 
 use crate::error::{CompileError, CompileResult};
+use crate::layout::EnumLayout;
 
 /// Name mangling for Move types and native symbols.
 pub(crate) struct Mangler<'a> {
@@ -40,8 +41,7 @@ impl<'a> Mangler<'a> {
             Type::Primitive(PrimitiveType::Signer) => Ok("signer".to_string()),
             Type::Vector(inner) => Ok(format!("vec${}", self.mangle_type(inner)?)),
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let struct_env = self.env.get_module(*module_id).into_struct(*datatype_id);
-                let base = struct_env.get_full_name_str().replace("::", "_");
+                let base = self.mangle_datatype_base(*module_id, *datatype_id)?;
                 if type_args.is_empty() {
                     Ok(base)
                 } else {
@@ -53,6 +53,26 @@ impl<'a> Mangler<'a> {
             Type::Reference(true, inner) => Ok(format!("mut${}", self.mangle_type(inner)?)),
             Type::TypeParameter(idx) => Ok(format!("T{idx}")),
             other => Err(CompileError::unsupported(other)),
+        }
+    }
+
+    /// Resolve the base mangled name for a struct or enum datatype.
+    fn mangle_datatype_base(
+        &self,
+        module_id: move_model::model::ModuleId,
+        datatype_id: move_model::model::DatatypeId,
+    ) -> CompileResult<String> {
+        let module_env = self.env.get_module(module_id);
+        let symbol = datatype_id.symbol();
+        if let Some(struct_env) = module_env.find_struct(symbol) {
+            Ok(struct_env.get_full_name_str().replace("::", "_"))
+        } else if let Some(enum_env) = module_env.find_enum(symbol) {
+            Ok(EnumLayout::new(enum_env).llvm_name(None).replace("::", "_"))
+        } else {
+            Err(CompileError::internal(format!(
+                "undefined datatype {symbol:?} in module {}",
+                module_env.get_full_name_str()
+            )))
         }
     }
 

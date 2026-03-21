@@ -3,6 +3,7 @@
 
 use inkwell::IntPredicate;
 use inkwell::types::BasicTypeEnum;
+use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Bytecode;
 
 use super::state::FunctionState;
@@ -72,6 +73,57 @@ impl<'a, 'b, 'ctx> ControlFlowEmitter<'a, 'b, 'ctx> {
                 let else_block = self.state.get_label_block(else_label)?;
                 llvm.builder
                     .build_conditional_branch(compare, then_block, else_block)?;
+            }
+            Bytecode::VariantSwitch(_, source, labels) => {
+                let tag = match &self.state.get_local(*source)?.mty {
+                    Type::Reference(_, inner) => match inner.as_ref() {
+                        Type::Datatype(..) => {
+                            let enum_ptr = self.state.load_pointer(*source)?;
+                            let pointee = self.state.pointee_type(*source)?;
+                            let BasicTypeEnum::StructType(enum_type) = pointee else {
+                                return Err(CompileError::TypeMismatch(format!(
+                                    "expected enum reference for VariantSwitch, got {pointee:?}"
+                                )));
+                            };
+                            let tag_ptr = llvm.builder.build_struct_gep(
+                                enum_type,
+                                enum_ptr,
+                                0,
+                                "variant_tag_ptr",
+                            )?;
+                            let tag_type =
+                                enum_type.get_field_type_at_index(0).ok_or_else(|| {
+                                    CompileError::InvalidReference(
+                                        "missing enum tag field for VariantSwitch".into(),
+                                    )
+                                })?;
+                            llvm.builder
+                                .build_load(tag_type, tag_ptr, "variant_tag")?
+                                .into_int_value()
+                        }
+                        other => return Err(CompileError::unsupported(other)),
+                    },
+                    _ => self.state.load_struct(*source).and_then(|enum_value| {
+                        llvm.builder
+                            .build_extract_value(enum_value, 0, "variant_tag")
+                            .map(|value| value.into_int_value())
+                            .map_err(Into::into)
+                    })?,
+                };
+                let default_block =
+                    self.state.get_label_block(labels.last().ok_or_else(|| {
+                        CompileError::InvalidReference("empty VariantSwitch".into())
+                    })?)?;
+                let cases: Vec<_> = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(tag_value, label)| {
+                        let block = self.state.get_label_block(label)?;
+                        let tag_const = tag.get_type().const_int(tag_value as u64, false);
+                        Ok((tag_const, block))
+                    })
+                    .collect::<CompileResult<_>>()?;
+                llvm.builder.build_switch(tag, default_block, &cases)?;
             }
             Bytecode::Abort(_, code_idx) => {
                 let code = self.state.load_value(*code_idx)?;

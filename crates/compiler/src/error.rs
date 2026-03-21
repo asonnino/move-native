@@ -31,6 +31,9 @@ pub enum CompileError {
     #[error("model builder failed: {0}")]
     ModelBuilder(String),
 
+    #[error("internal compiler error: {0}")]
+    Internal(String),
+
     // LLVM infrastructure errors
     #[error("LLVM builder error: {0}")]
     Builder(#[from] inkwell::builder::BuilderError),
@@ -84,6 +87,10 @@ impl CompileError {
         Self::ModelBuilder(msg.into())
     }
 
+    pub(crate) fn internal(msg: impl Into<String>) -> Self {
+        Self::Internal(msg.into())
+    }
+
     /// Wrap this error with additional context, preserving the original variant.
     pub fn context(self, ctx: impl fmt::Display) -> Self {
         Self::Contextualized {
@@ -103,6 +110,25 @@ impl CompileError {
 
 /// Convenience alias used throughout the crate.
 pub type CompileResult<T> = Result<T, CompileError>;
+
+/// Run `generate` inside `catch_unwind`, converting any panic into a
+/// `CompileError::Internal`.
+///
+/// Used to guard calls into upstream crates (e.g. `StacklessBytecodeGenerator`)
+/// that may panic on unexpected input.
+pub(crate) fn catch_panic<T>(label: &str, generate: impl FnOnce() -> T) -> CompileResult<T> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    catch_unwind(AssertUnwindSafe(generate)).map_err(|payload| {
+        let payload = payload.as_ref();
+        let detail = payload
+            .downcast_ref::<&'static str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        CompileError::internal(format!("upstream panic in '{label}': {detail}"))
+    })
+}
 
 /// Extension trait for adding context to `CompileResult` via method chaining.
 pub(crate) trait CompileContext<T> {

@@ -10,8 +10,8 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use crate::assembly::{Assembly, AssemblyBuilder};
-use crate::context::LlvmContext;
-use crate::error::{CompileContext, CompileError, CompileResult};
+use crate::context::{DatatypeEnv, LlvmContext};
+use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
 use crate::function::FunctionLowering;
 use crate::target::Target;
 use crate::types::TypeLowering;
@@ -64,7 +64,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn emit(&self) -> CompileResult<Assembly> {
-        let target_module_env = self.ctx.target_module();
+        let target_module_env = self.ctx.target_module()?;
 
         // Collect non-native functions that we can compile directly:
         // - Non-generic functions (no type params)
@@ -74,13 +74,21 @@ impl<'ctx> Compiler<'ctx> {
         // (see CallEmitter::emit_generic). Natives are implemented in Rust.
         let targets: Vec<_> = target_module_env
             .into_functions()
-            .filter(|t| !t.is_native() && self.has_only_phantom_type_params(t))
+            .filter(|t| !t.is_native())
             .map(|function_env| {
-                let generator = StacklessBytecodeGenerator::new(&function_env);
-                let function_data = generator.generate_function();
-                (function_env, function_data)
+                let dominated_by_phantom = self.has_only_phantom_type_params(&function_env)?;
+                Ok((function_env, dominated_by_phantom))
             })
-            .collect();
+            .collect::<CompileResult<Vec<_>>>()?
+            .into_iter()
+            .filter(|(_, phantom)| *phantom)
+            .map(|(function_env, _)| {
+                let name = function_env.get_name_str().to_string();
+                let generator = StacklessBytecodeGenerator::new(&function_env);
+                let function_data = catch_panic(&name, || generator.generate_function())?;
+                Ok((function_env, function_data))
+            })
+            .collect::<CompileResult<Vec<_>>>()?;
 
         // Pass 1: declare all functions (so callees are visible).
         let declarations: Vec<_> = targets
@@ -120,10 +128,10 @@ impl<'ctx> Compiler<'ctx> {
     ///
     /// Phantom-only generic functions can be compiled as-if non-generic because
     /// the phantom type parameters don't affect memory layout or code generation.
-    fn has_only_phantom_type_params(&self, function_env: &FunctionEnv<'_>) -> bool {
+    fn has_only_phantom_type_params(&self, function_env: &FunctionEnv<'_>) -> CompileResult<bool> {
         let count = function_env.get_type_parameter_count();
         if count == 0 {
-            return true;
+            return Ok(true);
         }
         // We only need to check the function signature (parameters + returns).
         // Move's bytecode verifier guarantees that phantom type parameters cannot
@@ -133,27 +141,41 @@ impl<'ctx> Compiler<'ctx> {
         let return_types = function_env.get_return_types();
         let all_types: Vec<&Type> = param_types.iter().chain(return_types.iter()).collect();
 
-        (0..count as u16).all(|idx| all_types.iter().all(|ty| self.is_phantom_in_type(idx, ty)))
+        for idx in 0..count as u16 {
+            for ty in &all_types {
+                if !self.is_phantom_in_type(idx, ty)? {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     /// Check that `TypeParameter(param_idx)` only appears in phantom positions within `ty`.
     ///
     /// Returns `true` if the type parameter is either absent or only used as a
     /// type argument in a phantom position of a struct.
-    fn is_phantom_in_type(&self, param_idx: u16, ty: &Type) -> bool {
+    fn is_phantom_in_type(&self, param_idx: u16, ty: &Type) -> CompileResult<bool> {
         match ty {
-            Type::TypeParameter(idx) => *idx != param_idx,
-            Type::Primitive(_) => true,
+            Type::TypeParameter(idx) => Ok(*idx != param_idx),
+            Type::Primitive(_) => Ok(true),
             Type::Reference(_, inner) | Type::Vector(inner) => {
                 self.is_phantom_in_type(param_idx, inner)
             }
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let struct_env = self.ctx.get_struct_env(*module_id, *datatype_id);
-                type_args.iter().enumerate().all(|(i, arg)| {
-                    struct_env.is_phantom_parameter(i) || self.is_phantom_in_type(param_idx, arg)
-                })
+                let datatype_env = self.ctx.get_datatype_env(*module_id, *datatype_id)?;
+                for (i, arg) in type_args.iter().enumerate() {
+                    let is_phantom = match &datatype_env {
+                        DatatypeEnv::Struct(struct_env) => struct_env.is_phantom_parameter(i),
+                        DatatypeEnv::Enum(enum_env) => enum_env.is_phantom_parameter(i),
+                    };
+                    if !is_phantom && !self.is_phantom_in_type(param_idx, arg)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }
-            _ => true,
+            _ => Ok(true),
         }
     }
 

@@ -92,7 +92,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx;
         let _type_args = self.state.instantiate_types(type_args);
         let struct_val = self.state.load_struct(sources[0])?;
-        let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id);
+        let struct_env = self.state.ctx.get_struct_env(module_id, datatype_id)?;
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
             let field_val =

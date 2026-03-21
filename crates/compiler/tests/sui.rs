@@ -1,9 +1,6 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! One test per Sui framework module. Tests that currently fail are `#[ignore]`d
-//! with the error message so we can track compiler progress.
-
 use compiler::module::framework::ModuleFixture;
 
 fn fixture() -> ModuleFixture {
@@ -33,7 +30,6 @@ fn address() {
 }
 
 #[test]
-#[ignore = "StructId undefined in Move model"]
 fn address_alias() {
     fixture().compile("address_alias");
 }
@@ -79,7 +75,6 @@ fn coin() {
 }
 
 #[test]
-#[ignore = "panic in stackless_bytecode_generator"]
 fn coin_registry() {
     fixture().compile("coin_registry");
 }
