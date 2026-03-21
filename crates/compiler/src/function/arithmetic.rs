@@ -8,7 +8,7 @@ use move_model::ty::{PrimitiveType, Type};
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::{CallSiteValueExt, FunctionState};
-use crate::context::DatatypeEnv;
+use crate::context::{DatatypeEnv, DatatypeHandle};
 use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
 
@@ -277,9 +277,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
 
             // Structs: field-by-field comparison, AND-reduce
             Type::Datatype(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
                 let lhs_struct = lhs.into_struct_value();
                 let rhs_struct = rhs.into_struct_value();
-                match llvm.get_datatype_env(*module_id, *datatype_id)? {
+                match llvm.get_datatype_env(handle)? {
                     DatatypeEnv::Struct(struct_env) => {
                         let fields: Vec<Type> = struct_env
                             .get_fields()

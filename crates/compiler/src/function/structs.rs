@@ -1,12 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use move_model::model::DatatypeId;
-use move_model::model::ModuleId;
 use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
+use crate::context::DatatypeHandle;
 use crate::error::{CompileResult, to_field_index};
 
 /// Emits LLVM IR for struct and reference operations
@@ -29,21 +28,18 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         match operation {
             Operation::Pack(module_id, datatype_id, type_args) => {
-                self.emit_pack(*module_id, *datatype_id, type_args, destinations, sources)
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                self.emit_pack(handle, type_args, destinations, sources)
             }
             Operation::Unpack(module_id, datatype_id, type_args) => {
-                self.emit_unpack(*module_id, *datatype_id, type_args, destinations, sources)
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                self.emit_unpack(handle, type_args, destinations, sources)
             }
             Operation::BorrowLoc => self.emit_borrow_loc(destinations, sources),
-            Operation::BorrowField(module_id, datatype_id, type_args, offset) => self
-                .emit_borrow_field(
-                    *module_id,
-                    *datatype_id,
-                    type_args,
-                    *offset,
-                    destinations,
-                    sources,
-                ),
+            Operation::BorrowField(module_id, datatype_id, type_args, offset) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                self.emit_borrow_field(handle, type_args, *offset, destinations, sources)
+            }
             Operation::GetField(_module_id, _datatype_id, _type_args, offset) => {
                 self.emit_get_field(*offset, destinations, sources)
             }
@@ -57,8 +53,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
 
     fn emit_pack(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
@@ -67,7 +62,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let type_args = self.state.instantiate_types(type_args);
         let struct_ty = self
             .state
-            .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?
+            .lower_type(&handle.to_type(type_args))?
             .into_struct_type();
         let mut agg = struct_ty.get_undef();
         for (i, source) in sources.iter().enumerate() {
@@ -84,8 +79,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
 
     fn emit_unpack(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
@@ -93,7 +87,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let _type_args = self.state.instantiate_types(type_args);
         let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
-        let struct_env = self.state.ctx().get_struct_env(module_id, datatype_id)?;
+        let struct_env = self.state.ctx().get_struct_env(handle)?;
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
             let field_val = llvm.builder.build_extract_value(
@@ -115,8 +109,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
 
     fn emit_borrow_field(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         offset: usize,
         destinations: &[usize],
@@ -125,9 +118,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let struct_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let type_args = self.state.instantiate_types(type_args);
-        let struct_ty =
-            self.state
-                .lower_type(&Type::Datatype(module_id, datatype_id, type_args))?;
+        let struct_ty = self.state.lower_type(&handle.to_type(type_args))?;
         let field_ptr = llvm.builder.build_struct_gep(
             struct_ty,
             struct_ptr,

@@ -4,7 +4,7 @@
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use move_model::ty::{PrimitiveType, Type};
 
-use crate::context::{DatatypeEnv, LlvmContext};
+use crate::context::{DatatypeEnv, DatatypeHandle, LlvmContext};
 use crate::error::{CompileError, CompileResult};
 use crate::layout::EnumLayout;
 
@@ -35,7 +35,8 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
             Type::Reference(_, _) => Ok(self.ctx.ptr_type.into()),
             Type::Vector(_) => Ok(self.ctx.ptr_type.into()),
             Type::Datatype(module_id, datatype_id, type_args) => {
-                match self.ctx.get_datatype_env(*module_id, *datatype_id)? {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                match self.ctx.get_datatype_env(handle)? {
                     DatatypeEnv::Struct(struct_env) => self.lower_struct(struct_env, type_args),
                     DatatypeEnv::Enum(enum_env) => self.lower_enum(enum_env, type_args),
                 }
@@ -147,7 +148,7 @@ mod tests {
     use move_model::ty::{PrimitiveType, Type};
 
     use super::TypeLowering;
-    use crate::context::LlvmContext;
+    use crate::context::{DatatypeHandle, LlvmContext};
     use crate::module::CompiledModuleBuilder;
 
     #[test]
@@ -277,10 +278,9 @@ mod tests {
         let module_id = module_env.get_id();
         let datatype_id = enum_env.get_id();
 
+        let handle = DatatypeHandle::new(module_id, datatype_id);
         let lowering = TypeLowering::new(&ctx);
-        let ty = lowering
-            .lower_type(&Type::Datatype(module_id, datatype_id, vec![]))
-            .unwrap();
+        let ty = lowering.lower_type(&handle.to_type(vec![])).unwrap();
 
         let struct_ty = ty.into_struct_type();
         // 1 tag field + 2 variant payload slots = 3 fields

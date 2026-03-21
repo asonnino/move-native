@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod basic;
 mod builder;
-pub mod framework;
+pub mod bundle;
 mod kitchen_sink;
 
 pub use builder::CompiledModuleBuilder;

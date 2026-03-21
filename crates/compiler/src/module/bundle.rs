@@ -15,14 +15,14 @@ use crate::{Compiler, assembly::Assembly};
 /// A collection of deserialized Move modules that can be compiled one at a
 /// time, using the rest as dependencies.
 ///
-/// Modules loaded via `from_dir` / `from_bytes` are *targets* — searchable
-/// by `compile`. Modules loaded via `with_deps_from_dir` are *deps only*.
-pub struct ModuleFixture {
+/// Modules loaded via `from_dir` are *targets* — searchable by `compile`.
+/// Modules loaded via `with_dependencies_from_dir` are *deps only*.
+pub struct ModuleBundle {
     targets: Vec<CompiledModule>,
     deps: Vec<CompiledModule>,
 }
 
-impl ModuleFixture {
+impl ModuleBundle {
     /// Load and deserialize all `.mv` files from a directory as targets.
     pub fn from_dir(dir: impl AsRef<Path>) -> Self {
         Self {

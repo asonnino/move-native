@@ -3,16 +3,16 @@
 
 //! Tests that compile real Move bytecode (.mv files) through the full pipeline.
 
-use compiler::module::framework::ModuleFixture;
+use compiler::module::bundle::ModuleBundle;
 
-fn fixture() -> ModuleFixture {
+fn fixture() -> ModuleBundle {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move/custom");
-    ModuleFixture::from_dir(dir)
+    ModuleBundle::from_dir(dir)
 }
 
-fn fixture_with_dependencies() -> ModuleFixture {
+fn fixture_with_dependencies() -> ModuleBundle {
     let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
-    ModuleFixture::from_dir(format!("{base}/custom"))
+    ModuleBundle::from_dir(format!("{base}/custom"))
         .with_dependencies_from_dir(format!("{base}/stdlib"))
         .with_dependencies_from_dir(format!("{base}/sui"))
 }

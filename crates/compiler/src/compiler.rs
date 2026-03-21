@@ -10,7 +10,7 @@ use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
 use crate::assembly::{Assembly, AssemblyBuilder};
-use crate::context::LlvmContext;
+use crate::context::{DatatypeHandle, LlvmContext};
 use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
 use crate::function::FunctionLowering;
 use crate::mangle::Mangler;
@@ -164,7 +164,8 @@ impl<'ctx> Compiler<'ctx> {
                 self.is_phantom_in_type(param_idx, inner)
             }
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let datatype_env = self.ctx.get_datatype_env(*module_id, *datatype_id)?;
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                let datatype_env = self.ctx.get_datatype_env(handle)?;
                 for (i, arg) in type_args.iter().enumerate() {
                     let is_phantom = datatype_env.is_phantom_parameter(i);
                     if !is_phantom && !self.is_phantom_in_type(param_idx, arg)? {

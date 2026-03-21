@@ -16,6 +16,29 @@ use move_model::ty::Type;
 use crate::error::{CompileError, CompileResult};
 use crate::mangle::Mangler;
 
+/// A `(ModuleId, DatatypeId)` pair identifying a Move struct or enum.
+///
+/// `DatatypeId` is a per-module index, only meaningful within its `ModuleId`.
+#[derive(Clone, Copy)]
+pub(crate) struct DatatypeHandle {
+    pub(crate) module_id: ModuleId,
+    pub(crate) datatype_id: DatatypeId,
+}
+
+impl DatatypeHandle {
+    pub(crate) fn new(module_id: ModuleId, datatype_id: DatatypeId) -> Self {
+        Self {
+            module_id,
+            datatype_id,
+        }
+    }
+
+    /// Construct a `Type::Datatype` from this handle and type arguments.
+    pub(crate) fn to_type(self, type_args: Vec<Type>) -> Type {
+        Type::Datatype(self.module_id, self.datatype_id, type_args)
+    }
+}
+
 /// Wrapper over Move datatypes so the compiler can distinguish structs from enums.
 pub(crate) enum DatatypeEnv<'env> {
     Struct(StructEnv<'env>),
@@ -171,18 +194,19 @@ impl<'ctx> LlvmContext<'ctx> {
         LlvmContext::from_parts(context, llvm_module, builder, GlobalEnv::new())
     }
 
-    /// Look up a datatype definition by module and datatype ID.
+    /// Look up a datatype definition by its handle.
     pub(crate) fn get_datatype_env(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
     ) -> CompileResult<DatatypeEnv<'_>> {
-        let symbol = datatype_id.symbol();
-        let module_env = self.env.get_module(module_id);
+        let symbol = handle.datatype_id.symbol();
+        let module_env = self.env.get_module(handle.module_id);
         if module_env.clone().find_struct(symbol).is_some() {
-            Ok(DatatypeEnv::Struct(module_env.into_struct(datatype_id)))
+            Ok(DatatypeEnv::Struct(
+                module_env.into_struct(handle.datatype_id),
+            ))
         } else if module_env.clone().find_enum(symbol).is_some() {
-            Ok(DatatypeEnv::Enum(module_env.into_enum(datatype_id)))
+            Ok(DatatypeEnv::Enum(module_env.into_enum(handle.datatype_id)))
         } else {
             Err(CompileError::InvalidReference(format!(
                 "undefined datatype {symbol:?} in module {}",
@@ -191,13 +215,9 @@ impl<'ctx> LlvmContext<'ctx> {
         }
     }
 
-    /// Look up a struct definition by module and datatype ID.
-    pub(crate) fn get_struct_env(
-        &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
-    ) -> CompileResult<StructEnv<'_>> {
-        self.get_datatype_env(module_id, datatype_id)?.into_struct()
+    /// Look up a struct definition by its handle.
+    pub(crate) fn get_struct_env(&self, handle: DatatypeHandle) -> CompileResult<StructEnv<'_>> {
+        self.get_datatype_env(handle)?.into_struct()
     }
 
     /// Look up a function definition by module and function ID.

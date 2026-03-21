@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use inkwell::types::BasicTypeEnum;
-use move_model::model::{DatatypeId, ModuleId, RefType, VariantId};
+use move_model::model::{RefType, VariantId};
 use move_model::ty::Type;
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
 use super::state::FunctionState;
+use crate::context::DatatypeHandle;
 use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
 
@@ -27,19 +28,14 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         sources: &[usize],
     ) -> CompileResult<()> {
         match operation {
-            Operation::PackVariant(module_id, datatype_id, variant_id, type_args) => self
-                .emit_pack_variant(
-                    *module_id,
-                    *datatype_id,
-                    *variant_id,
-                    type_args,
-                    destinations,
-                    sources,
-                ),
+            Operation::PackVariant(module_id, datatype_id, variant_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                self.emit_pack_variant(handle, *variant_id, type_args, destinations, sources)
+            }
             Operation::UnpackVariant(module_id, datatype_id, variant_id, type_args, ref_type) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
                 self.emit_unpack_variant(
-                    *module_id,
-                    *datatype_id,
+                    handle,
                     *variant_id,
                     type_args,
                     *ref_type,
@@ -53,8 +49,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
 
     fn emit_pack_variant(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         variant_id: VariantId,
         type_args: &[Type],
         destinations: &[usize],
@@ -62,7 +57,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
         let type_args = self.state.instantiate_types(type_args);
-        let (layout, enum_type) = self.get_layout_and_type(module_id, datatype_id, &type_args)?;
+        let (layout, enum_type) = self.get_layout_and_type(handle, &type_args)?;
         let variant = layout.variant(variant_id);
         let payload =
             self.build_payload_struct(&variant.payload_field_types(&type_args), sources)?;
@@ -89,8 +84,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
 
     fn emit_unpack_variant(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         variant_id: VariantId,
         type_args: &[Type],
         ref_type: RefType,
@@ -99,7 +93,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
         let type_args = self.state.instantiate_types(type_args);
-        let (layout, enum_type) = self.get_layout_and_type(module_id, datatype_id, &type_args)?;
+        let (layout, enum_type) = self.get_layout_and_type(handle, &type_args)?;
         let variant = layout.variant(variant_id);
         match ref_type {
             RefType::ByValue => {
@@ -154,15 +148,14 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
 
     fn get_layout_and_type(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
     ) -> CompileResult<(EnumLayout<'b>, inkwell::types::StructType<'ctx>)> {
         let llvm = self.state.ctx();
-        let enum_env = llvm.get_datatype_env(module_id, datatype_id)?.into_enum()?;
+        let enum_env = llvm.get_datatype_env(handle)?.into_enum()?;
         let enum_type = self
             .state
-            .lower_type(&Type::Datatype(module_id, datatype_id, type_args.to_vec()))?
+            .lower_type(&handle.to_type(type_args.to_vec()))?
             .into_struct_type();
         Ok((EnumLayout::new(enum_env), enum_type))
     }

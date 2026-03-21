@@ -4,6 +4,7 @@
 use move_model::model::{FunctionEnv, GlobalEnv};
 use move_model::ty::{PrimitiveType, Type};
 
+use crate::context::DatatypeHandle;
 use crate::error::{CompileError, CompileResult};
 use crate::layout::EnumLayout;
 
@@ -48,7 +49,8 @@ impl<'a> Mangler<'a> {
             Type::Primitive(PrimitiveType::Signer) => Ok("signer".to_string()),
             Type::Vector(inner) => Ok(format!("vec${}", self.mangle_type(inner)?)),
             Type::Datatype(module_id, datatype_id, type_args) => {
-                let base = self.mangle_datatype_base(*module_id, *datatype_id)?;
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                let base = self.mangle_datatype_base(handle)?;
                 if type_args.is_empty() {
                     Ok(base)
                 } else {
@@ -64,13 +66,9 @@ impl<'a> Mangler<'a> {
     }
 
     /// Resolve the base mangled name for a struct or enum datatype.
-    fn mangle_datatype_base(
-        &self,
-        module_id: move_model::model::ModuleId,
-        datatype_id: move_model::model::DatatypeId,
-    ) -> CompileResult<String> {
-        let module_env = self.env.get_module(module_id);
-        let symbol = datatype_id.symbol();
+    fn mangle_datatype_base(&self, handle: DatatypeHandle) -> CompileResult<String> {
+        let module_env = self.env.get_module(handle.module_id);
+        let symbol = handle.datatype_id.symbol();
         if let Some(struct_env) = module_env.find_struct(symbol) {
             Ok(struct_env.get_full_name_str().replace("::", "_"))
         } else if let Some(enum_env) = module_env.find_enum(symbol) {

@@ -1,11 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use compiler::module::framework::ModuleFixture;
+use compiler::module::bundle::ModuleBundle;
 
-fn fixture() -> ModuleFixture {
+fn fixture() -> ModuleBundle {
     let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
-    ModuleFixture::from_dir(format!("{base}/stdlib"))
+    ModuleBundle::from_dir(format!("{base}/stdlib"))
 }
 
 #[test]

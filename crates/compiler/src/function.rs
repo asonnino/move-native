@@ -15,7 +15,7 @@ use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Operation};
 
-use crate::context::LlvmContext;
+use crate::context::{DatatypeHandle, LlvmContext};
 use crate::error::{CompileContext, CompileError, CompileResult};
 
 pub(crate) use state::FunctionState;
@@ -142,26 +142,51 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
                 .emit(destinations, *module_id, *function_id, type_args, sources),
 
             // Global storage operations
-            Operation::MoveTo(module_id, datatype_id, type_args) => StorageEmitter::new(
-                &self.state,
-            )
-            .emit_move_to(*module_id, *datatype_id, type_args, destinations, sources),
-            Operation::MoveFrom(module_id, datatype_id, type_args) => StorageEmitter::new(
-                &self.state,
-            )
-            .emit_move_from(*module_id, *datatype_id, type_args, destinations, sources),
-            Operation::Exists(module_id, datatype_id, type_args) => StorageEmitter::new(
-                &self.state,
-            )
-            .emit_exists(*module_id, *datatype_id, type_args, destinations, sources),
-            Operation::BorrowGlobal(module_id, datatype_id, type_args) => StorageEmitter::new(
-                &self.state,
-            )
-            .emit_borrow_global(*module_id, *datatype_id, type_args, destinations, sources),
-            Operation::GetGlobal(module_id, datatype_id, type_args) => StorageEmitter::new(
-                &self.state,
-            )
-            .emit_get_global(*module_id, *datatype_id, type_args, destinations, sources),
+            Operation::MoveTo(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                StorageEmitter::new(&self.state).emit_move_to(
+                    handle,
+                    type_args,
+                    destinations,
+                    sources,
+                )
+            }
+            Operation::MoveFrom(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                StorageEmitter::new(&self.state).emit_move_from(
+                    handle,
+                    type_args,
+                    destinations,
+                    sources,
+                )
+            }
+            Operation::Exists(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                StorageEmitter::new(&self.state).emit_exists(
+                    handle,
+                    type_args,
+                    destinations,
+                    sources,
+                )
+            }
+            Operation::BorrowGlobal(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                StorageEmitter::new(&self.state).emit_borrow_global(
+                    handle,
+                    type_args,
+                    destinations,
+                    sources,
+                )
+            }
+            Operation::GetGlobal(module_id, datatype_id, type_args) => {
+                let handle = DatatypeHandle::new(*module_id, *datatype_id);
+                StorageEmitter::new(&self.state).emit_get_global(
+                    handle,
+                    type_args,
+                    destinations,
+                    sources,
+                )
+            }
 
             other => Err(CompileError::not_implemented(other)),
         }

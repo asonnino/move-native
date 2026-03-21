@@ -115,7 +115,7 @@ mod tests {
     use move_model::ty::{PrimitiveType, Type};
 
     use super::EnumLayout;
-    use crate::context::{DatatypeEnv, LlvmContext};
+    use crate::context::{DatatypeEnv, DatatypeHandle, LlvmContext};
     use crate::module::CompiledModuleBuilder;
 
     /// Build an `EnumLayout` from a builder module that has exactly one enum.
@@ -126,9 +126,8 @@ mod tests {
                 Box::leak(Box::new(LlvmContext::new_from_module(&compiled).unwrap()));
             let module_env = ctx.target_module().unwrap();
             let enum_env = module_env.get_enums().next().expect("module has no enums");
-            let module_id = module_env.get_id();
-            let datatype_id = enum_env.get_id();
-            let DatatypeEnv::Enum(e) = ctx.get_datatype_env(module_id, datatype_id).unwrap() else {
+            let handle = DatatypeHandle::new(module_env.get_id(), enum_env.get_id());
+            let DatatypeEnv::Enum(e) = ctx.get_datatype_env(handle).unwrap() else {
                 panic!("expected enum");
             };
             EnumLayout::new(e)

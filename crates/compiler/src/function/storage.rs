@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use inkwell::types::BasicType;
-use move_model::model::{DatatypeId, ModuleId};
 use move_model::ty::Type;
 
 use super::state::{CallSiteValueExt, FunctionState};
+use crate::context::DatatypeHandle;
 use crate::error::CompileResult;
 
 /// Emits LLVM calls for Move global storage operations
@@ -21,15 +21,13 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
 
     pub(super) fn emit_move_to(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
-        let (symbol, datatype) =
-            self.resolve_symbol("move_to", module_id, datatype_id, type_args)?;
+        let (symbol, datatype) = self.resolve_symbol("move_to", handle, type_args)?;
         let parameter_type = self.state.lower_type(&datatype)?.into();
         let function_type = llvm
             .context
@@ -40,15 +38,13 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
 
     pub(super) fn emit_move_from(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
-        let (symbol, datatype) =
-            self.resolve_symbol("move_from", module_id, datatype_id, type_args)?;
+        let (symbol, datatype) = self.resolve_symbol("move_from", handle, type_args)?;
         let return_type = self.state.lower_type(&datatype)?;
         let function_type = return_type.fn_type(&[llvm.i256_type.into()], false);
         self.call_and_store(&symbol, function_type, destinations, sources)
@@ -56,44 +52,39 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
 
     pub(super) fn emit_exists(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
-        let (symbol, _) = self.resolve_symbol("exists", module_id, datatype_id, type_args)?;
+        let (symbol, _) = self.resolve_symbol("exists", handle, type_args)?;
         let function_type = llvm.i8_type.fn_type(&[llvm.i256_type.into()], false);
         self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
     pub(super) fn emit_borrow_global(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
-        let (symbol, _) =
-            self.resolve_symbol("borrow_global", module_id, datatype_id, type_args)?;
+        let (symbol, _) = self.resolve_symbol("borrow_global", handle, type_args)?;
         let function_type = llvm.ptr_type.fn_type(&[llvm.i256_type.into()], false);
         self.call_and_store(&symbol, function_type, destinations, sources)
     }
 
     pub(super) fn emit_get_global(
         &self,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
         destinations: &[usize],
         sources: &[usize],
     ) -> CompileResult<()> {
         let llvm = self.state.ctx();
-        let (symbol, datatype) =
-            self.resolve_symbol("get_global", module_id, datatype_id, type_args)?;
+        let (symbol, datatype) = self.resolve_symbol("get_global", handle, type_args)?;
         let return_type = self.state.lower_type(&datatype)?;
         let function_type = return_type.fn_type(&[llvm.i256_type.into()], false);
         self.call_and_store(&symbol, function_type, destinations, sources)
@@ -103,12 +94,11 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
     fn resolve_symbol(
         &self,
         operation_name: &str,
-        module_id: ModuleId,
-        datatype_id: DatatypeId,
+        handle: DatatypeHandle,
         type_args: &[Type],
     ) -> CompileResult<(String, Type)> {
         let inst_args = self.state.instantiate_types(type_args);
-        let datatype = Type::Datatype(module_id, datatype_id, inst_args);
+        let datatype = handle.to_type(inst_args);
         let mangled = self.state.mangle_type(&datatype)?;
         let symbol = format!("__move_rt_{operation_name}${mangled}");
         Ok((symbol, datatype))
