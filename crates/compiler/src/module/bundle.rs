@@ -40,25 +40,31 @@ impl ModuleBundle {
 
     /// Find the named module among targets, compile it with all other
     /// targets and deps as dependencies, and return the assembly output.
-    /// Panics if the module is not found or compilation fails.
+    /// Uses the host architecture. Panics if the module is not found or
+    /// compilation fails.
     pub fn compile(&self, module_name: &str) -> Assembly {
-        let target_idx = self
+        self.compile_for_target(module_name, &Target::host())
+    }
+
+    /// Like [`compile`](Self::compile) but for an explicit [`Target`].
+    pub fn compile_for_target(&self, module_name: &str, target: &Target) -> Assembly {
+        let module_idx = self
             .targets
             .iter()
             .position(|m| m.self_id().name().as_str() == module_name)
             .unwrap_or_else(|| panic!("module {module_name} not found"));
 
-        let target = &self.targets[target_idx];
+        let module = &self.targets[module_idx];
         let dependencies: Vec<_> = self
             .targets
             .iter()
             .enumerate()
-            .filter(|(i, _)| *i != target_idx)
+            .filter(|(i, _)| *i != module_idx)
             .map(|(_, m)| m.clone())
             .chain(self.deps.iter().cloned())
             .collect();
 
-        Compiler::compile_module_with_dependencies(&Target::host(), target, &dependencies)
+        Compiler::compile_module_with_dependencies(target, module, &dependencies)
             .unwrap_or_else(|e| panic!("{module_name} compilation failed: {e}"))
     }
 
@@ -135,7 +141,13 @@ impl ModuleBundle {
     /// Also checks that at least one `ret` instruction exists when there
     /// are compiled functions (i.e., we produced real function bodies).
     pub fn compile_checked(&self, module_name: &str) -> Assembly {
-        let asm = self.compile(module_name);
+        self.compile_checked_for_target(module_name, &Target::host())
+    }
+
+    /// Like [`compile_checked`](Self::compile_checked) but for an explicit
+    /// [`Target`].
+    pub fn compile_checked_for_target(&self, module_name: &str, target: &Target) -> Assembly {
+        let asm = self.compile_for_target(module_name, target);
         let symbols = self.expected_symbols(module_name);
         for sym in &symbols {
             assert!(

@@ -9,7 +9,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{CodeModel, FileType, RelocMode, TargetMachine, TargetTriple};
 
 use crate::error::{CompileError, CompileResult};
-use crate::target::{CPU, FEATURES, Target};
+use crate::target::{CPU, Target};
 
 /// Assembly output from the compiler.
 pub struct Assembly(String);
@@ -102,6 +102,7 @@ impl fmt::Display for Assembly {
 /// Owns the LLVM `TargetMachine` and drives optimization and assembly emission.
 pub(crate) struct AssemblyBuilder {
     machine: TargetMachine,
+    check_gas_register: bool,
 }
 
 impl AssemblyBuilder {
@@ -116,14 +117,18 @@ impl AssemblyBuilder {
             .create_target_machine(
                 &triple,
                 CPU,
-                FEATURES,
+                target.features(),
                 OptimizationLevel::Default,
                 RelocMode::PIC,
                 CodeModel::Default,
             )
             .ok_or_else(|| CompileError::target_machine("failed to create target machine"))?;
 
-        Ok(Self { machine })
+        let check_gas_register = target.check_gas_register();
+        Ok(Self {
+            machine,
+            check_gas_register,
+        })
     }
 
     /// Run optimization passes on the module using the new pass manager.
@@ -157,7 +162,7 @@ impl AssemblyBuilder {
         // where the ARM pair-store drags x23 along as the partner of x24.
         // This is benign — it preserves the gas counter across calls, which
         // is exactly what we want.  Assert that x23 only appears in stp/ldp.
-        if Self::has_x23_misuse(&asm) {
+        if self.check_gas_register && Self::has_x23_misuse(&asm) {
             return Err(CompileError::codegen(
                 "x23 (reserved for gas metering) used outside stp/ldp save/restore",
             ));

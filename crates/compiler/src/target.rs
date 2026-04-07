@@ -12,6 +12,8 @@ pub(crate) const FEATURES: &str = "+reserve-x23";
 pub enum Target {
     /// AArch64 (Arm64).
     Aarch64,
+    /// RISC-V 64-bit.
+    Riscv64,
 }
 
 impl Target {
@@ -43,6 +45,15 @@ impl Target {
                     "aarch64-unknown-linux-gnu"
                 }
             }
+            Self::Riscv64 => "riscv64-unknown-linux-gnu",
+        }
+    }
+
+    /// Target-specific LLVM feature flags.
+    pub(crate) fn features(&self) -> &'static str {
+        match self {
+            Self::Aarch64 => FEATURES,
+            Self::Riscv64 => "",
         }
     }
 
@@ -53,6 +64,15 @@ impl Target {
             Self::Aarch64 => {
                 inkwell::targets::Target::initialize_aarch64(&config);
             }
+            Self::Riscv64 => {
+                inkwell::targets::Target::initialize_riscv(&config);
+            }
         }
+    }
+
+    /// Whether emitted assembly should be checked for reserved gas-register
+    /// misuse (x23 on Aarch64).
+    pub(crate) fn check_gas_register(&self) -> bool {
+        matches!(self, Self::Aarch64)
     }
 }
