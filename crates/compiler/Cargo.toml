@@ -22,5 +22,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 indoc = "2.0"
+inkwell.workspace = true
 move-binary-format.workspace = true
 move-core-types.workspace = true
+object.workspace = true

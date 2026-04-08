@@ -3,7 +3,7 @@
 
 //! ELF object file output from the compiler, with relocation support.
 
-use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget, SymbolKind};
+use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use crate::error::{CompileError, CompileResult};
 
@@ -83,10 +83,11 @@ impl ObjectFile {
             }
         }
 
-        // Find entry symbol.
+        // Find entry symbol (in .text section, any symbol kind — inline asm
+        // symbols may not have SymbolKind::Text).
         let entry_offset = obj
             .symbols()
-            .find(|s| s.name() == Ok(entry) && s.kind() == SymbolKind::Text)
+            .find(|s| s.name() == Ok(entry) && s.section_index() == Some(text_index))
             .map(|s| s.address() - text_addr)
             .ok_or_else(|| CompileError::codegen(format!("symbol '{entry}' not found")))?;
 
@@ -95,6 +96,7 @@ impl ObjectFile {
 }
 
 /// Relocated `.text` code ready for direct execution or ELF packaging.
+#[derive(Debug)]
 pub struct LinkedText {
     /// Machine code bytes with all internal relocations resolved.
     pub code: Vec<u8>,
@@ -121,4 +123,65 @@ fn apply_riscv_call(code: &mut [u8], offset: u64, target_offset: u64) {
 
     code[off..off + 4].copy_from_slice(&auipc.to_le_bytes());
     code[off + 4..off + 8].copy_from_slice(&jalr.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_riscv_call;
+
+    /// Decode the PC-relative offset from a patched auipc+jalr pair.
+    fn decode_call_offset(code: &[u8], off: usize) -> i64 {
+        let auipc = u32::from_le_bytes(code[off..off + 4].try_into().unwrap());
+        let jalr = u32::from_le_bytes(code[off + 4..off + 8].try_into().unwrap());
+        // Sign-extend hi20 (auipc uses bits [31:12] as a signed upper immediate).
+        let hi20 = ((auipc as i32) >> 12) as i64;
+        // Sign-extend lo12 (jalr uses bits [31:20] as a signed 12-bit immediate).
+        let lo12 = ((jalr as i32) >> 20) as i64;
+        (hi20 << 12) + lo12
+    }
+
+    /// Create a buffer with a bare auipc+jalr pair at the given offset.
+    fn make_call_pair(size: usize, off: usize) -> Vec<u8> {
+        let mut code = vec![0u8; size];
+        // auipc ra, 0  →  0x00000097
+        code[off..off + 4].copy_from_slice(&0x0000_0097u32.to_le_bytes());
+        // jalr ra, ra, 0  →  0x000080E7
+        code[off + 4..off + 8].copy_from_slice(&0x0000_80E7u32.to_le_bytes());
+        code
+    }
+
+    #[test]
+    fn forward_call() {
+        let mut code = make_call_pair(0x200, 0);
+        apply_riscv_call(&mut code, 0, 0x100);
+        assert_eq!(decode_call_offset(&code, 0), 0x100);
+    }
+
+    #[test]
+    fn backward_call() {
+        let mut code = make_call_pair(0x200, 0x100);
+        apply_riscv_call(&mut code, 0x100, 0);
+        assert_eq!(decode_call_offset(&code, 0x100), -0x100);
+    }
+
+    #[test]
+    fn zero_offset_call() {
+        let mut code = make_call_pair(16, 0);
+        apply_riscv_call(&mut code, 0, 0);
+        assert_eq!(decode_call_offset(&code, 0), 0);
+    }
+
+    #[test]
+    fn large_forward_call() {
+        let mut code = make_call_pair(16, 0);
+        apply_riscv_call(&mut code, 0, 0x8_0000);
+        assert_eq!(decode_call_offset(&code, 0), 0x8_0000);
+    }
+
+    #[test]
+    fn large_backward_call() {
+        let mut code = make_call_pair(0x10_0000, 0x8_0000);
+        apply_riscv_call(&mut code, 0x8_0000, 0);
+        assert_eq!(decode_call_offset(&code, 0x8_0000), -0x8_0000);
+    }
 }
