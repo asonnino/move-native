@@ -59,6 +59,7 @@
     "petgraph",
     "RETAA",
     "RETAB",
+    "riscv",
     "sigaction",
     "sigemptyset",
     "SIGINFO",

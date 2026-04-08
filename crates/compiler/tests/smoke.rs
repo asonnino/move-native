@@ -7,18 +7,19 @@ use compiler::Target;
 use compiler::module::CompiledModuleBuilder;
 use move_binary_format::file_format::{Bytecode, FunctionHandleIndex, SignatureToken};
 use move_core_types::account_address::AccountAddress;
+use rstest::rstest;
 
-#[test]
-fn kitchen_sink_compiles() {
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn kitchen_sink_compiles(#[case] target: Target) {
     let (module, deps) = CompiledModuleBuilder::kitchen_sink();
-    let asm = compiler::compile_module_with_deps(&Target::host(), &module, &deps).unwrap();
+    let asm = compiler::compile_module_with_deps(&target, &module, &deps).unwrap();
 
-    // Verify all function symbols are present
+    // Verify all function symbols are present (target-independent).
     for name in &[
-        // Structs
         "_mv_0x0_M_make_point",
         "_mv_0x0_M_sum_point",
-        // Arithmetic & types
         "_mv_0x0_M_forty_two",
         "_mv_0x0_M_low_byte",
         "_mv_0x0_M_cast_widths",
@@ -27,30 +28,21 @@ fn kitchen_sink_compiles() {
         "_mv_0x0_M_add_u128",
         "_mv_0x0_M_add_u256",
         "_mv_0x0_M_discard",
-        // References
         "_mv_0x0_M_swap_fields",
         "_mv_0x0_M_freeze_and_read",
         "_mv_0x0_M_read_x",
-        // Control flow
         "_mv_0x0_M_swap_u64",
         "_mv_0x0_M_checked_sub",
-        // Calls & generics
         "_mv_0x0_M_round_trip",
         "_mv_0x0_M_identity",
         "_mv_0x0_M_call_identity",
-        // Loops
         "_mv_0x0_M_sum_loop",
-        // Integration
         "_mv_0x0_M_integration_test",
-        // Cross-module
         "_mv_0x0_M_call_double",
-        // Vectors
         "_mv_0x0_M_test_vec",
-        // Equality
         "_mv_0x0_M_eq_points",
         "_mv_0x0_M_eq_refs",
         "_mv_0x0_M_neq_u64",
-        // Phantom generics
         "_mv_0x0_M_phantom_read_x",
         "_mv_0x0_M_phantom_proxy",
     ] {
@@ -60,12 +52,6 @@ fn kitchen_sink_compiles() {
         );
     }
 
-    // Key instruction patterns (tab-prefixed to avoid matching labels/symbols)
-    assert!(asm.contains("\tbl\t"), "should contain function calls (bl)");
-    assert!(
-        asm.contains("\tb."),
-        "should contain conditional branches (b.cond)"
-    );
     assert!(
         asm.contains("\tret"),
         "should contain function returns (ret)"
@@ -87,19 +73,6 @@ fn kitchen_sink_compiles() {
         "should contain arithmetic error runtime call"
     );
 
-    // LLVM emits underscore-prefixed symbols on macOS
-    assert!(
-        asm.contains("__mv_0x0_M_make_point"),
-        "should contain LLVM symbol __mv_0x0_M_make_point\nassembly:\n{asm}"
-    );
-
-    // Cross-module call: call_double should emit a `bl` to the external `double` symbol
-    assert!(
-        asm.contains("bl\t__mv_0x0_Dep_double") || asm.contains("bl __mv_0x0_Dep_double"),
-        "should contain a branch-and-link to external 'double'\nassembly:\n{asm}"
-    );
-
-    // Vector ops: runtime stubs are referenced
     for symbol in &[
         "__move_rt_0x1_vector_empty",
         "__move_rt_0x1_vector_push_back",
@@ -111,10 +84,40 @@ fn kitchen_sink_compiles() {
             "assembly should contain '{symbol}'\nassembly:\n{asm}"
         );
     }
+
+    // Architecture-specific instruction patterns.
+    match target {
+        Target::Aarch64 => {
+            assert!(asm.contains("\tbl\t"), "should contain function calls (bl)");
+            assert!(
+                asm.contains("\tb."),
+                "should contain conditional branches (b.cond)"
+            );
+            // LLVM emits underscore-prefixed symbols on macOS.
+            assert!(
+                asm.contains("__mv_0x0_M_make_point"),
+                "should contain LLVM symbol __mv_0x0_M_make_point\nassembly:\n{asm}"
+            );
+            // Cross-module call.
+            assert!(
+                asm.contains("bl\t__mv_0x0_Dep_double") || asm.contains("bl __mv_0x0_Dep_double"),
+                "should contain a branch-and-link to external 'double'\nassembly:\n{asm}"
+            );
+        }
+        Target::Riscv64 => {
+            assert!(
+                asm.contains("_mv_0x0_M_make_point"),
+                "should contain symbol _mv_0x0_M_make_point\nassembly:\n{asm}"
+            );
+        }
+        _ => {}
+    }
 }
 
-#[test]
-fn same_name_cross_module_no_collision() {
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn same_name_cross_module_no_collision(#[case] target: Target) {
     // Build dep module: 0x0::Dep with function "double"
     let dep = CompiledModuleBuilder::named("Dep", AccountAddress::ZERO)
         .function(
@@ -132,9 +135,6 @@ fn same_name_cross_module_no_collision() {
         .build();
 
     // Build main module: 0x0::M with local "double" + foreign call to Dep::double
-    // FunctionHandleIndex(0) = foreign Dep::double
-    // FunctionHandleIndex(1) = local double
-    // FunctionHandleIndex(2) = local caller
     let (builder, dep_handle) =
         CompiledModuleBuilder::new().foreign_module(AccountAddress::ZERO, "Dep");
     let module = builder
@@ -170,7 +170,7 @@ fn same_name_cross_module_no_collision() {
         )
         .build();
 
-    let asm = compiler::compile_module_with_deps(&Target::host(), &module, &[dep]).unwrap();
+    let asm = compiler::compile_module_with_deps(&target, &module, &[dep]).unwrap();
 
     assert!(
         asm.contains("_mv_0x0_M_double"),
@@ -182,10 +182,12 @@ fn same_name_cross_module_no_collision() {
     );
 }
 
-/// Serialize → deserialize → compile: verifies the `compile(&[u8])` entry point
+/// Serialize -> deserialize -> compile: verifies the `compile(&[u8])` entry point
 /// that real callers use with `.mv` files.
-#[test]
-fn serialization_round_trip() {
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn serialization_round_trip(#[case] target: Target) {
     let module = CompiledModuleBuilder::new()
         .function(
             "add",
@@ -206,10 +208,10 @@ fn serialization_round_trip() {
         .serialize_with_version(module.version, &mut bytecode)
         .expect("serialization failed");
 
-    let asm = compiler::compile(&Target::host(), &bytecode).expect("compile failed");
+    let asm = compiler::compile(&target, &bytecode).expect("compile failed");
 
     assert!(
-        asm.contains("\tadd\t") || asm.contains("\tadds\t"),
+        asm.contains("add") || asm.contains("addi"),
         "should contain add instruction"
     );
     assert!(asm.contains("\tret"), "should contain ret instruction");

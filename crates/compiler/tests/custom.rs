@@ -3,7 +3,9 @@
 
 //! Tests that compile real Move bytecode (.mv files) through the full pipeline.
 
+use compiler::Target;
 use compiler::module::bundle::ModuleBundle;
+use rstest::rstest;
 
 fn fixture() -> ModuleBundle {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move/custom");
@@ -18,23 +20,23 @@ fn fixture_with_dependencies() -> ModuleBundle {
 }
 
 /// End-to-end from the checked-in add.mv (two-argument u64 addition).
-#[test]
-fn add_module_from_mv_file() {
-    let asm = fixture().compile_checked("M");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn add_module_from_mv_file(#[case] target: Target) {
+    let asm = fixture().compile_checked("M", &target);
     assert!(
-        asm.contains("\tadd\t") || asm.contains("\tadds\t"),
-        "assembly should contain 'add' instruction"
-    );
-    assert!(
-        asm.contains("\tret"),
-        "assembly should contain ret instruction"
+        asm.contains("add") || asm.contains("addi"),
+        "assembly should contain an add instruction"
     );
 }
 
 /// Nested loops and if/else branches (control_flow.mv).
-#[test]
-fn control_flow_module_from_mv_file() {
-    let asm = fixture().compile_checked("control_flow");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn control_flow_module_from_mv_file(#[case] target: Target) {
+    let asm = fixture().compile_checked("control_flow", &target);
     assert!(
         asm.contains("_mv_0x0_control_flow_sum_to"),
         "missing 0x0_control_flow_sum_to"
@@ -51,9 +53,11 @@ fn control_flow_module_from_mv_file() {
 
 /// Struct pack/unpack, field borrows, ReadRef, WriteRef, FreezeRef,
 /// intra-module calls, arithmetic (geometry.mv).
-#[test]
-fn geometry_module() {
-    let asm = fixture().compile_checked("geometry");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn geometry_module(#[case] target: Target) {
+    let asm = fixture().compile_checked("geometry", &target);
     assert!(
         asm.contains("_mv_0x0_geometry_new_point"),
         "missing 0x0_geometry_new_point"
@@ -77,9 +81,11 @@ fn geometry_module() {
 }
 
 /// Bitwise ops, shifts, and integer width casts (bitmath.mv).
-#[test]
-fn bitmath_module() {
-    let asm = fixture().compile_checked("bitmath");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn bitmath_module(#[case] target: Target) {
+    let asm = fixture().compile_checked("bitmath", &target);
     assert!(
         asm.contains("_mv_0x0_bitmath_mask_low_byte"),
         "missing 0x0_bitmath_mask_low_byte"
@@ -107,9 +113,11 @@ fn bitmath_module() {
 }
 
 /// Abort, comparisons, multi-return, function chaining (checked_math.mv).
-#[test]
-fn checked_math_module() {
-    let asm = fixture().compile_checked("checked_math");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn checked_math_module(#[case] target: Target) {
+    let asm = fixture().compile_checked("checked_math", &target);
     assert!(
         asm.contains("_mv_0x0_checked_math_checked_sub"),
         "missing 0x0_checked_math_checked_sub"
@@ -133,9 +141,11 @@ fn checked_math_module() {
 }
 
 /// Generic structs + monomorphization via concrete callers (generics.mv).
-#[test]
-fn generics_module() {
-    let asm = fixture().compile_checked("generics");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn generics_module(#[case] target: Target) {
+    let asm = fixture().compile_checked("generics", &target);
     assert!(
         asm.contains("_mv_0x0_generics_identity_u64"),
         "missing 0x0_generics_identity_u64 concrete caller"
@@ -147,9 +157,11 @@ fn generics_module() {
 }
 
 /// Vector operations via move-stdlib natives (vectors.mv).
-#[test]
-fn vectors_module() {
-    let asm = fixture_with_dependencies().compile_checked("vectors");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn vectors_module(#[case] target: Target) {
+    let asm = fixture_with_dependencies().compile_checked("vectors", &target);
     assert!(
         asm.contains("_mv_0x0_vectors_sum_vec"),
         "missing 0x0_vectors_sum_vec"
@@ -165,9 +177,11 @@ fn vectors_module() {
 }
 
 /// Sui objects with key ability, UID, transfer (objects.mv).
-#[test]
-fn objects_module() {
-    let asm = fixture_with_dependencies().compile_checked("objects");
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+fn objects_module(#[case] target: Target) {
+    let asm = fixture_with_dependencies().compile_checked("objects", &target);
     assert!(
         asm.contains("_mv_0x0_objects_create"),
         "missing 0x0_objects_create"

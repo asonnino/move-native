@@ -4,7 +4,9 @@
 //! Compilation tests for SuiNS (Sui Name Service).
 //! Source: https://github.com/MystenLabs/suins-contracts  packages/suins
 
+use compiler::Target;
 use compiler::module::bundle::ModuleBundle;
+use rstest::rstest;
 
 fn fixture() -> ModuleBundle {
     let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/move");
@@ -13,76 +15,35 @@ fn fixture() -> ModuleBundle {
         .with_dependencies_from_dir(format!("{base}/sui"))
 }
 
-#[test]
-fn admin() {
-    fixture().compile_checked("admin");
-}
-
-#[test]
-fn auction() {
-    fixture().compile_checked("auction");
+macro_rules! compile_tests {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[rstest]
+            #[case::aarch64(Target::Aarch64)]
+            #[case::riscv64(Target::Riscv64)]
+            fn $name(#[case] target: Target) {
+                fixture().compile_checked(stringify!($name), &target);
+            }
+        )*
+    };
 }
 
 // `config` is a deprecated stub module — every function body is `{ abort 1337 }`.
-// Skipped because our testing framework (compile_checked) expects `ret`, which
-// all-abort modules don't produce.
+// Skipped because compile_checked expects `ret`, which all-abort modules don't produce.
 
-#[test]
-fn constants() {
-    fixture().compile_checked("constants");
-}
-
-#[test]
-fn controller() {
-    fixture().compile_checked("controller");
-}
-
-#[test]
-fn core_config() {
-    fixture().compile_checked("core_config");
-}
-
-#[test]
-fn domain() {
-    fixture().compile_checked("domain");
-}
-
-#[test]
-fn name_record() {
-    fixture().compile_checked("name_record");
-}
-
-#[test]
-fn payment() {
-    fixture().compile_checked("payment");
-}
-
-#[test]
-fn pricing_config() {
-    fixture().compile_checked("pricing_config");
-}
-
-#[test]
-fn registry() {
-    fixture().compile_checked("registry");
-}
-
-#[test]
-fn subdomain_registration() {
-    fixture().compile_checked("subdomain_registration");
-}
-
-#[test]
-fn suins() {
-    fixture().compile_checked("suins");
-}
-
-#[test]
-fn suins_registration() {
-    fixture().compile_checked("suins_registration");
-}
-
-#[test]
-fn update_image() {
-    fixture().compile_checked("update_image");
+compile_tests! {
+    admin,
+    auction,
+    constants,
+    controller,
+    core_config,
+    domain,
+    name_record,
+    payment,
+    pricing_config,
+    registry,
+    subdomain_registration,
+    suins,
+    suins_registration,
+    update_image,
 }

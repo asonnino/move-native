@@ -25,3 +25,4 @@ inkwell.workspace = true
 move-binary-format.workspace = true
 move-core-types.workspace = true
 object.workspace = true
+rstest.workspace = true

@@ -8,6 +8,7 @@ pub(crate) const CPU: &str = "generic";
 pub(crate) const FEATURES: &str = "+reserve-x23";
 
 /// Target architecture for code generation.
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Target {
     /// AArch64 (Arm64).

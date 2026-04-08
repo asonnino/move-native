@@ -11,6 +11,7 @@ repository = "https://github.com/alberto/move-native"
 clap = { version = "4", features = ["derive"] }
 inkwell = { version = "0.8", features = ["llvm18-1"] }
 object = { version = "0.38", default-features = false, features = ["elf", "macho", "read", "write"] }
+rstest = "0.25"
 runtime = { path = "crates/runtime" }
 tempfile = "3.27.0"
 thiserror = "2.0"

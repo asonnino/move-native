@@ -102,13 +102,7 @@ impl ModuleBundle {
     ///
     /// Also checks that at least one `ret` instruction exists when there
     /// are compiled functions (i.e., we produced real function bodies).
-    pub fn compile_checked(&self, module_name: &str) -> Assembly {
-        self.compile_checked_for_target(module_name, &Target::host())
-    }
-
-    /// Like [`compile_checked`](Self::compile_checked) but for an explicit
-    /// [`Target`].
-    pub fn compile_checked_for_target(&self, module_name: &str, target: &Target) -> Assembly {
+    pub fn compile_checked(&self, module_name: &str, target: &Target) -> Assembly {
         let asm = self.compile_for_target(module_name, target);
         let symbols = self.expected_symbols(module_name);
         for sym in &symbols {
