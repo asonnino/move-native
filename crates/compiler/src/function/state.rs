@@ -270,10 +270,13 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         self.ctx.mangle_native_symbol(callee_env, type_args)
     }
 
-    pub(crate) fn next_const_id(&self) -> usize {
+    pub(crate) fn next_const_id(&self) -> CompileResult<usize> {
         let id = self.const_counter.get();
-        self.const_counter.set(id + 1);
-        id
+        self.const_counter.set(
+            id.checked_add(1)
+                .ok_or_else(|| CompileError::internal("constant counter overflow"))?,
+        );
+        Ok(id)
     }
 
     pub(crate) fn emit_const_global(

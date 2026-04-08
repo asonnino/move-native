@@ -7,6 +7,7 @@ use move_binary_format::CompiledModule;
 use move_binary_format::file_format::Visibility;
 
 use crate::error::{CompileError, CompileResult};
+use crate::mangle::Mangler;
 
 /// Information about a single function in a Move module.
 #[derive(Debug, Clone)]
@@ -83,7 +84,8 @@ impl ModuleInfo {
                 .get(handle.return_.0 as usize)
                 .ok_or_else(|| CompileError::deserialize("invalid return signature index"))?;
 
-            let symbol = format!("_mv_{address}_{name}_{func_name}");
+            let module_qualified = format!("{address}_{name}");
+            let symbol = Mangler::function_symbol(&module_qualified, &func_name);
 
             functions.push(FunctionInfo {
                 name: func_name,

@@ -209,7 +209,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_value(src0)?;
         let rhs = self.state.load_value(src1)?;
         let mty = self.state.get_local(src0)?.mty.clone();
-        let eq = self.emit_eq_values(lhs, rhs, &mty)?;
+        let eq = self.emit_eq_values(lhs, rhs, &mty, 0)?;
         let result = if matches!(operation, Operation::Neq) {
             let one = llvm.i8_type.const_int(1, false);
             llvm.builder.build_xor(eq, one, "neq")?
@@ -226,7 +226,13 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         lhs: BasicValueEnum<'ctx>,
         rhs: BasicValueEnum<'ctx>,
         mty: &Type,
+        depth: usize,
     ) -> CompileResult<IntValue<'ctx>> {
+        if depth > 256 {
+            return Err(CompileError::internal(
+                "type nesting too deep in equality comparison",
+            ));
+        }
         let llvm = self.state.ctx();
         match mty {
             // Integer-like types: direct int compare
@@ -258,7 +264,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let pointee_ty = self.state.lower_type(inner)?;
                 let lhs_val = llvm.builder.build_load(pointee_ty, lhs_ptr, "deref_l")?;
                 let rhs_val = llvm.builder.build_load(pointee_ty, rhs_ptr, "deref_r")?;
-                self.emit_eq_values(lhs_val, rhs_val, inner)
+                self.emit_eq_values(lhs_val, rhs_val, inner, depth + 1)
             }
 
             // Vectors: opaque pointers, delegate to runtime
@@ -293,11 +299,11 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                                 }
                             })
                             .collect();
-                        self.compare_struct_fields(lhs_struct, rhs_struct, &fields)
+                        self.compare_struct_fields(lhs_struct, rhs_struct, &fields, depth)
                     }
                     DatatypeEnv::Enum(enum_env) => {
                         let layout = EnumLayout::new(enum_env);
-                        self.compare_enum_values(lhs_struct, rhs_struct, &layout, type_args)
+                        self.compare_enum_values(lhs_struct, rhs_struct, &layout, type_args, depth)
                     }
                 }
             }
@@ -311,6 +317,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         lhs_struct: StructValue<'ctx>,
         rhs_struct: StructValue<'ctx>,
         field_types: &[Type],
+        depth: usize,
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx();
         let mut acc = llvm.i8_type.const_int(1, false);
@@ -325,7 +332,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 to_field_index(i)?,
                 &format!("r_{i}"),
             )?;
-            let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty)?;
+            let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty, depth + 1)?;
             acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
         }
         Ok(acc)
@@ -344,6 +351,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         rhs_struct: StructValue<'ctx>,
         layout: &EnumLayout<'b>,
         type_args: &[Type],
+        depth: usize,
     ) -> CompileResult<IntValue<'ctx>> {
         let llvm = self.state.ctx();
 
@@ -378,7 +386,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 .build_extract_value(rhs_struct, variant.payload_field_index()?, "rhs_payload")?
                 .into_struct_value();
             let payload_eq =
-                self.compare_struct_fields(lhs_payload, rhs_payload, &payload_types)?;
+                self.compare_struct_fields(lhs_payload, rhs_payload, &payload_types, depth)?;
             acc = llvm.builder.build_and(acc, payload_eq, "enum_eq")?;
         }
 

@@ -22,7 +22,14 @@ impl<'a> Mangler<'a> {
     pub(crate) fn qualified_function_name(env: &FunctionEnv<'_>) -> String {
         let module_name = env.module_env.get_full_name_str().replace("::", "_");
         let function_name = env.get_name_str();
-        format!("_mv_{module_name}_{function_name}")
+        Self::function_symbol(&module_name, &function_name)
+    }
+
+    /// Canonical linker symbol for a Move function from raw name components.
+    ///
+    /// `module_qualified` is the `<address>_<module>` portion (e.g. `"0x1_vector"`).
+    pub(crate) fn function_symbol(module_qualified: &str, function_name: &str) -> String {
+        format!("_mv_{module_qualified}_{function_name}")
     }
 
     /// Create a `Mangler` backed by an empty `GlobalEnv` for unit testing.

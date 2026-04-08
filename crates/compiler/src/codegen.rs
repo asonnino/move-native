@@ -91,12 +91,13 @@ impl CodegenBackend {
         Ok(assembly)
     }
 
-    /// Returns true if x23 appears in any instruction other than `stp`/`ldp`
-    /// (callee-saved save/restore in function prologues/epilogues).
+    /// Returns true if x23 or w23 (its 32-bit alias) appears in any instruction
+    /// other than `stp`/`ldp` (callee-saved save/restore in prologues/epilogues).
+    /// Writing to w23 clears the upper 32 bits of x23, so it must be caught too.
     fn has_x23_misuse(asm: &str) -> bool {
         for line in asm.lines() {
             let trimmed = line.trim();
-            if !trimmed.contains("x23") {
+            if !trimmed.contains("x23") && !trimmed.contains("w23") {
                 continue;
             }
             if trimmed.starts_with("stp\t")
@@ -146,6 +147,18 @@ mod tests {
     #[test]
     fn no_x23_is_ok() {
         let asm = "\tadd\tx0, x1, x2\n\tret\n";
+        assert!(!CodegenBackend::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn w23_in_add_is_misuse() {
+        let asm = "\tadd\tw23, w0, #1\n";
+        assert!(CodegenBackend::has_x23_misuse(asm));
+    }
+
+    #[test]
+    fn w23_in_stp_is_ok() {
+        let asm = "stp\tw24, w23, [sp, #-16]!\n";
         assert!(!CodegenBackend::has_x23_misuse(asm));
     }
 }

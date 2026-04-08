@@ -12,7 +12,7 @@ use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGene
 use crate::assembly::Assembly;
 use crate::codegen::CodegenBackend;
 use crate::context::{DatatypeHandle, LlvmContext};
-use crate::error::{CompileContext, CompileResult, catch_panic};
+use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
 use crate::function::FunctionLowering;
 use crate::mangle::Mangler;
 use crate::object_file::ObjectFile;
@@ -146,7 +146,7 @@ impl<'ctx> Compiler<'ctx> {
 
         for idx in 0..count as u16 {
             for ty in &all_types {
-                if !self.is_phantom_in_type(idx, ty)? {
+                if !self.is_phantom_in_type(idx, ty, 0)? {
                     return Ok(false);
                 }
             }
@@ -158,19 +158,24 @@ impl<'ctx> Compiler<'ctx> {
     ///
     /// Returns `true` if the type parameter is either absent or only used as a
     /// type argument in a phantom position of a struct.
-    fn is_phantom_in_type(&self, param_idx: u16, ty: &Type) -> CompileResult<bool> {
+    fn is_phantom_in_type(&self, param_idx: u16, ty: &Type, depth: usize) -> CompileResult<bool> {
+        if depth > 256 {
+            return Err(CompileError::internal(
+                "type nesting too deep in phantom check",
+            ));
+        }
         match ty {
             Type::TypeParameter(idx) => Ok(*idx != param_idx),
             Type::Primitive(_) => Ok(true),
             Type::Reference(_, inner) | Type::Vector(inner) => {
-                self.is_phantom_in_type(param_idx, inner)
+                self.is_phantom_in_type(param_idx, inner, depth + 1)
             }
             Type::Datatype(module_id, datatype_id, type_args) => {
                 let handle = DatatypeHandle::new(*module_id, *datatype_id);
                 let datatype_env = self.ctx.get_datatype_env(handle)?;
                 for (i, arg) in type_args.iter().enumerate() {
                     let is_phantom = datatype_env.is_phantom_parameter(i);
-                    if !is_phantom && !self.is_phantom_in_type(param_idx, arg)? {
+                    if !is_phantom && !self.is_phantom_in_type(param_idx, arg, depth + 1)? {
                         return Ok(false);
                     }
                 }

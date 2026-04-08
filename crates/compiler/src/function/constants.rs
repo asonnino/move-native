@@ -47,7 +47,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 llvm.i256_type.const_int_arbitrary_precision(&words).into()
             }
             Constant::ByteArray(bytes) => {
-                let id = self.state.next_const_id();
+                let id = self.state.next_const_id()?;
                 let global = self
                     .state
                     .emit_const_global(&format!("const_bytes_{id}"), bytes)?;
@@ -64,7 +64,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 call.into_basic_value()?
             }
             Constant::AddressArray(addresses) => {
-                let id = self.state.next_const_id();
+                let id = self.state.next_const_id()?;
                 let buf = Self::serialize_address_array(addresses);
                 let global = self
                     .state
@@ -107,7 +107,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 // runtime helper because elements are variable-length.
                 if matches!(elements[0], Constant::ByteArray(_)) {
                     let buf = Self::serialize_byte_array_vector(elements)?;
-                    let id = self.state.next_const_id();
+                    let id = self.state.next_const_id()?;
                     let global = self
                         .state
                         .emit_const_global(&format!("const_vec_bytes_{id}"), &buf)?;
@@ -135,7 +135,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         false,
                     );
                     let (elem_size, buf) = Self::serialize_scalar_vector(elements)?;
-                    let id = self.state.next_const_id();
+                    let id = self.state.next_const_id()?;
                     let global = self
                         .state
                         .emit_const_global(&format!("const_vec_{id}"), &buf)?;

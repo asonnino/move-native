@@ -63,6 +63,10 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
             self.build_payload_struct(&variant.payload_field_types(&type_args), sources)?;
         let tag = self.tag_const(&layout, variant.tag())?;
 
+        // INVARIANT: inactive enum payload slots must be zero-initialized.
+        // This is guaranteed by starting from const_zero(). If enum values
+        // are ever constructed outside this path, this invariant must be
+        // maintained. See compare_enum_values in arithmetic.rs.
         let mut enum_value = enum_type.const_zero();
         enum_value = llvm
             .builder
