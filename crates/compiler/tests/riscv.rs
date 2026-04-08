@@ -33,7 +33,7 @@ fn add_module() {
 fn control_flow_module() {
     let asm = fixture().compile_checked_for_target("control_flow", &RISCV);
     assert!(
-        asm.contains("0x0_control_flow_sum_to"),
+        asm.contains("_mv_0x0_control_flow_sum_to"),
         "missing 0x0_control_flow_sum_to"
     );
 }
@@ -42,7 +42,7 @@ fn control_flow_module() {
 fn geometry_module() {
     let asm = fixture().compile_checked_for_target("geometry", &RISCV);
     assert!(
-        asm.contains("0x0_geometry_new_point"),
+        asm.contains("_mv_0x0_geometry_new_point"),
         "missing 0x0_geometry_new_point"
     );
 }
@@ -51,7 +51,7 @@ fn geometry_module() {
 fn bitmath_module() {
     let asm = fixture().compile_checked_for_target("bitmath", &RISCV);
     assert!(
-        asm.contains("0x0_bitmath_mask_low_byte"),
+        asm.contains("_mv_0x0_bitmath_mask_low_byte"),
         "missing 0x0_bitmath_mask_low_byte"
     );
 }
@@ -60,7 +60,7 @@ fn bitmath_module() {
 fn checked_math_module() {
     let asm = fixture().compile_checked_for_target("checked_math", &RISCV);
     assert!(
-        asm.contains("0x0_checked_math_checked_sub"),
+        asm.contains("_mv_0x0_checked_math_checked_sub"),
         "missing 0x0_checked_math_checked_sub"
     );
 }
@@ -69,7 +69,7 @@ fn checked_math_module() {
 fn generics_module() {
     let asm = fixture().compile_checked_for_target("generics", &RISCV);
     assert!(
-        asm.contains("0x0_generics_identity_u64"),
+        asm.contains("_mv_0x0_generics_identity_u64"),
         "missing 0x0_generics_identity_u64"
     );
 }
@@ -78,7 +78,7 @@ fn generics_module() {
 fn vectors_module() {
     let asm = fixture_with_dependencies().compile_checked_for_target("vectors", &RISCV);
     assert!(
-        asm.contains("0x0_vectors_sum_vec"),
+        asm.contains("_mv_0x0_vectors_sum_vec"),
         "missing 0x0_vectors_sum_vec"
     );
 }
@@ -87,7 +87,7 @@ fn vectors_module() {
 fn objects_module() {
     let asm = fixture_with_dependencies().compile_checked_for_target("objects", &RISCV);
     assert!(
-        asm.contains("0x0_objects_create"),
+        asm.contains("_mv_0x0_objects_create"),
         "missing 0x0_objects_create"
     );
 }

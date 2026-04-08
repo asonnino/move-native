@@ -251,7 +251,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_value"),
+            asm.contains("_mv_0x0_M_value"),
             "phantom-generic 'value' should be compiled\n{asm}"
         );
         assert!(asm.contains("ret"), "should contain ret\n{asm}");
@@ -286,7 +286,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_zero"),
+            asm.contains("_mv_0x0_M_zero"),
             "phantom-generic 'zero' should be compiled\n{asm}"
         );
     }
@@ -342,11 +342,11 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_phantom_read_x$u64"),
+            asm.contains("_mv_0x0_M_phantom_read_x$u64"),
             "should contain erased monomorphization phantom_read_x$u64\n{asm}"
         );
         assert!(
-            asm.contains("0x0_M_phantom_proxy"),
+            asm.contains("_mv_0x0_M_phantom_proxy"),
             "phantom_proxy should be compiled\n{asm}"
         );
     }
@@ -377,7 +377,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_use_local"),
+            asm.contains("_mv_0x0_M_use_local"),
             "phantom-generic with T-typed local should compile\n{asm}"
         );
     }
@@ -397,7 +397,7 @@ mod tests {
             )
             .compile();
         assert!(
-            !asm.contains("0x0_M_identity"),
+            !asm.contains("_mv_0x0_M_identity"),
             "non-phantom generic 'identity' should NOT be compiled at top level\n{asm}"
         );
     }

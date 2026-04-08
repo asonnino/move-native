@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn add_u64() {
         let asm = binary_op_asm("add_fn", SignatureToken::U64, Bytecode::Add);
-        assert!(asm.contains("0x0_M_add_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_add_fn"), "missing symbol\n{asm}");
         assert!(
             asm.contains("\tadd\t") || asm.contains("\tadds\t"),
             "missing add instruction\n{asm}"
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn add_u256() {
         let asm = binary_op_asm("add_u256", SignatureToken::U256, Bytecode::Add);
-        assert!(asm.contains("0x0_M_add_u256"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_add_u256"), "missing symbol\n{asm}");
         // i256 add lowers to multi-word arithmetic with carry chain
         assert!(
             asm.contains("\tadds\t"),
@@ -644,7 +644,7 @@ mod tests {
             SignatureToken::Bool,
             Bytecode::Not,
         );
-        assert!(asm.contains("0x0_M_not_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_not_fn"), "missing symbol\n{asm}");
         assert!(asm.contains("\teor\t"), "missing eor instruction\n{asm}");
     }
 
@@ -656,7 +656,7 @@ mod tests {
             SignatureToken::U8,
             Bytecode::CastU8,
         );
-        assert!(asm.contains("0x0_M_trunc_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_trunc_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod tests {
             SignatureToken::U64,
             Bytecode::CastU64,
         );
-        assert!(asm.contains("0x0_M_extend_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_extend_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -678,14 +678,17 @@ mod tests {
             SignatureToken::U64,
             Bytecode::CastU64,
         );
-        assert!(asm.contains("0x0_M_cast_noop"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_cast_noop"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn eq_ref_u64() {
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
         let asm = comparison_op_asm("eq_ref_u64", ref_u64, Bytecode::Eq);
-        assert!(asm.contains("0x0_M_eq_ref_u64"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_eq_ref_u64"),
+            "missing symbol\n{asm}"
+        );
         // Should dereference (ldr) and then compare (cmp + cset)
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
@@ -695,7 +698,10 @@ mod tests {
     fn neq_ref_u64() {
         let ref_u64 = SignatureToken::Reference(Box::new(SignatureToken::U64));
         let asm = comparison_op_asm("neq_ref_u64", ref_u64, Bytecode::Neq);
-        assert!(asm.contains("0x0_M_neq_ref_u64"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_neq_ref_u64"),
+            "missing symbol\n{asm}"
+        );
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         // LLVM may optimize xor+zext into cset ne
         assert!(
@@ -708,7 +714,7 @@ mod tests {
     fn eq_vector_u8() {
         let vec_u8 = SignatureToken::Vector(Box::new(SignatureToken::U8));
         let asm = comparison_op_asm("eq_vec_u8", vec_u8, Bytecode::Eq);
-        assert!(asm.contains("0x0_M_eq_vec_u8"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_eq_vec_u8"), "missing symbol\n{asm}");
         assert!(
             asm.contains("__move_rt_vec_eq"),
             "missing __move_rt_vec_eq call\n{asm}"
@@ -721,7 +727,10 @@ mod tests {
             SignatureToken::U8,
         ))));
         let asm = comparison_op_asm("eq_ref_vec", ref_vec_u8, Bytecode::Eq);
-        assert!(asm.contains("0x0_M_eq_ref_vec"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_eq_ref_vec"),
+            "missing symbol\n{asm}"
+        );
         // Should deref the reference, then call vec_eq
         assert!(asm.contains("\tldr\t"), "missing ldr (deref)\n{asm}");
         assert!(
@@ -758,7 +767,7 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_eq_point"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_eq_point"), "missing symbol\n{asm}");
         // Field-by-field comparison: at least one cmp (LLVM may fuse/optimize)
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
     }
@@ -861,13 +870,13 @@ mod tests {
     #[test]
     fn logical_and() {
         let asm = binary_op_asm("and_fn", SignatureToken::Bool, Bytecode::And);
-        assert!(asm.contains("0x0_M_and_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_and_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
     fn logical_or() {
         let asm = binary_op_asm("or_fn", SignatureToken::Bool, Bytecode::Or);
-        assert!(asm.contains("0x0_M_or_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_or_fn"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -889,7 +898,7 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_eq_option"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_eq_option"), "missing symbol\n{asm}");
         // Should compare tag and payload fields
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
     }

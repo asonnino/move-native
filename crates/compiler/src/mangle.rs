@@ -22,7 +22,7 @@ impl<'a> Mangler<'a> {
     pub(crate) fn qualified_function_name(env: &FunctionEnv<'_>) -> String {
         let module_name = env.module_env.get_full_name_str().replace("::", "_");
         let function_name = env.get_name_str();
-        format!("{module_name}_{function_name}")
+        format!("_mv_{module_name}_{function_name}")
     }
 
     /// Create a `Mangler` backed by an empty `GlobalEnv` for unit testing.

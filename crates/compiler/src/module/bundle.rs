@@ -130,7 +130,7 @@ impl ModuleBundle {
             .map(|def| {
                 let handle = &module.function_handles[def.function.0 as usize];
                 let func_name = module.identifiers[handle.name.0 as usize].as_str();
-                format!("{addr}_{mod_name}_{func_name}")
+                format!("_mv_{addr}_{mod_name}_{func_name}")
             })
             .collect()
     }

@@ -198,7 +198,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_new_point"),
+            asm.contains("_mv_0x0_M_new_point"),
             "missing '0x0_M_new_point' symbol\n{asm}"
         );
     }
@@ -223,7 +223,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_get_x"),
+            asm.contains("_mv_0x0_M_get_x"),
             "missing '0x0_M_get_x' symbol\n{asm}"
         );
     }
@@ -245,7 +245,10 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_copy_via_ref"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_copy_via_ref"),
+            "missing symbol\n{asm}"
+        );
     }
 
     #[test]
@@ -269,7 +272,7 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_overwrite"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_overwrite"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -294,7 +297,7 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_freeze"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_freeze"), "missing symbol\n{asm}");
     }
 
     #[test]
@@ -325,6 +328,9 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_get_x_via_ref"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_get_x_via_ref"),
+            "missing symbol\n{asm}"
+        );
     }
 }

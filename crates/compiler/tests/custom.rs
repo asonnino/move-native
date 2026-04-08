@@ -36,15 +36,15 @@ fn add_module_from_mv_file() {
 fn control_flow_module_from_mv_file() {
     let asm = fixture().compile_checked("control_flow");
     assert!(
-        asm.contains("0x0_control_flow_sum_to"),
+        asm.contains("_mv_0x0_control_flow_sum_to"),
         "missing 0x0_control_flow_sum_to"
     );
     assert!(
-        asm.contains("0x0_control_flow_sum_even"),
+        asm.contains("_mv_0x0_control_flow_sum_even"),
         "missing 0x0_control_flow_sum_even"
     );
     assert!(
-        asm.contains("0x0_control_flow_nested_sum"),
+        asm.contains("_mv_0x0_control_flow_nested_sum"),
         "missing 0x0_control_flow_nested_sum"
     );
 }
@@ -55,23 +55,23 @@ fn control_flow_module_from_mv_file() {
 fn geometry_module() {
     let asm = fixture().compile_checked("geometry");
     assert!(
-        asm.contains("0x0_geometry_new_point"),
+        asm.contains("_mv_0x0_geometry_new_point"),
         "missing 0x0_geometry_new_point"
     );
     assert!(
-        asm.contains("0x0_geometry_sum_fields"),
+        asm.contains("_mv_0x0_geometry_sum_fields"),
         "missing 0x0_geometry_sum_fields"
     );
     assert!(
-        asm.contains("0x0_geometry_distance_sq"),
+        asm.contains("_mv_0x0_geometry_distance_sq"),
         "missing 0x0_geometry_distance_sq"
     );
     assert!(
-        asm.contains("0x0_geometry_translate"),
+        asm.contains("_mv_0x0_geometry_translate"),
         "missing 0x0_geometry_translate"
     );
     assert!(
-        asm.contains("0x0_geometry_midpoint"),
+        asm.contains("_mv_0x0_geometry_midpoint"),
         "missing 0x0_geometry_midpoint"
     );
 }
@@ -81,27 +81,27 @@ fn geometry_module() {
 fn bitmath_module() {
     let asm = fixture().compile_checked("bitmath");
     assert!(
-        asm.contains("0x0_bitmath_mask_low_byte"),
+        asm.contains("_mv_0x0_bitmath_mask_low_byte"),
         "missing 0x0_bitmath_mask_low_byte"
     );
     assert!(
-        asm.contains("0x0_bitmath_set_bit"),
+        asm.contains("_mv_0x0_bitmath_set_bit"),
         "missing 0x0_bitmath_set_bit"
     );
     assert!(
-        asm.contains("0x0_bitmath_rotate_left"),
+        asm.contains("_mv_0x0_bitmath_rotate_left"),
         "missing 0x0_bitmath_rotate_left"
     );
     assert!(
-        asm.contains("0x0_bitmath_cast_chain"),
+        asm.contains("_mv_0x0_bitmath_cast_chain"),
         "missing 0x0_bitmath_cast_chain"
     );
     assert!(
-        asm.contains("0x0_bitmath_add_u128"),
+        asm.contains("_mv_0x0_bitmath_add_u128"),
         "missing 0x0_bitmath_add_u128"
     );
     assert!(
-        asm.contains("0x0_bitmath_xor_swap"),
+        asm.contains("_mv_0x0_bitmath_xor_swap"),
         "missing 0x0_bitmath_xor_swap"
     );
 }
@@ -111,23 +111,23 @@ fn bitmath_module() {
 fn checked_math_module() {
     let asm = fixture().compile_checked("checked_math");
     assert!(
-        asm.contains("0x0_checked_math_checked_sub"),
+        asm.contains("_mv_0x0_checked_math_checked_sub"),
         "missing 0x0_checked_math_checked_sub"
     );
     assert!(
-        asm.contains("0x0_checked_math_safe_div"),
+        asm.contains("_mv_0x0_checked_math_safe_div"),
         "missing 0x0_checked_math_safe_div"
     );
     assert!(
-        asm.contains("0x0_checked_math_divmod"),
+        asm.contains("_mv_0x0_checked_math_divmod"),
         "missing 0x0_checked_math_divmod"
     );
     assert!(
-        asm.contains("0x0_checked_math_clamp"),
+        asm.contains("_mv_0x0_checked_math_clamp"),
         "missing 0x0_checked_math_clamp"
     );
     assert!(
-        asm.contains("0x0_checked_math_abs_diff"),
+        asm.contains("_mv_0x0_checked_math_abs_diff"),
         "missing 0x0_checked_math_abs_diff"
     );
 }
@@ -137,11 +137,11 @@ fn checked_math_module() {
 fn generics_module() {
     let asm = fixture().compile_checked("generics");
     assert!(
-        asm.contains("0x0_generics_identity_u64"),
+        asm.contains("_mv_0x0_generics_identity_u64"),
         "missing 0x0_generics_identity_u64 concrete caller"
     );
     assert!(
-        asm.contains("0x0_generics_swap_u64_pair"),
+        asm.contains("_mv_0x0_generics_swap_u64_pair"),
         "missing 0x0_generics_swap_u64_pair concrete caller"
     );
 }
@@ -151,15 +151,15 @@ fn generics_module() {
 fn vectors_module() {
     let asm = fixture_with_dependencies().compile_checked("vectors");
     assert!(
-        asm.contains("0x0_vectors_sum_vec"),
+        asm.contains("_mv_0x0_vectors_sum_vec"),
         "missing 0x0_vectors_sum_vec"
     );
     assert!(
-        asm.contains("0x0_vectors_contains"),
+        asm.contains("_mv_0x0_vectors_contains"),
         "missing 0x0_vectors_contains"
     );
     assert!(
-        asm.contains("0x0_vectors_make_range"),
+        asm.contains("_mv_0x0_vectors_make_range"),
         "missing 0x0_vectors_make_range"
     );
 }
@@ -169,15 +169,15 @@ fn vectors_module() {
 fn objects_module() {
     let asm = fixture_with_dependencies().compile_checked("objects");
     assert!(
-        asm.contains("0x0_objects_create"),
+        asm.contains("_mv_0x0_objects_create"),
         "missing 0x0_objects_create"
     );
     assert!(
-        asm.contains("0x0_objects_increment"),
+        asm.contains("_mv_0x0_objects_increment"),
         "missing 0x0_objects_increment"
     );
     assert!(
-        asm.contains("0x0_objects_value"),
+        asm.contains("_mv_0x0_objects_value"),
         "missing 0x0_objects_value"
     );
 }

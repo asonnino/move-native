@@ -16,43 +16,43 @@ fn kitchen_sink_compiles() {
     // Verify all function symbols are present
     for name in &[
         // Structs
-        "0x0_M_make_point",
-        "0x0_M_sum_point",
+        "_mv_0x0_M_make_point",
+        "_mv_0x0_M_sum_point",
         // Arithmetic & types
-        "0x0_M_forty_two",
-        "0x0_M_low_byte",
-        "0x0_M_cast_widths",
-        "0x0_M_add_u16",
-        "0x0_M_add_u32",
-        "0x0_M_add_u128",
-        "0x0_M_add_u256",
-        "0x0_M_discard",
+        "_mv_0x0_M_forty_two",
+        "_mv_0x0_M_low_byte",
+        "_mv_0x0_M_cast_widths",
+        "_mv_0x0_M_add_u16",
+        "_mv_0x0_M_add_u32",
+        "_mv_0x0_M_add_u128",
+        "_mv_0x0_M_add_u256",
+        "_mv_0x0_M_discard",
         // References
-        "0x0_M_swap_fields",
-        "0x0_M_freeze_and_read",
-        "0x0_M_read_x",
+        "_mv_0x0_M_swap_fields",
+        "_mv_0x0_M_freeze_and_read",
+        "_mv_0x0_M_read_x",
         // Control flow
-        "0x0_M_swap_u64",
-        "0x0_M_checked_sub",
+        "_mv_0x0_M_swap_u64",
+        "_mv_0x0_M_checked_sub",
         // Calls & generics
-        "0x0_M_round_trip",
-        "0x0_M_identity",
-        "0x0_M_call_identity",
+        "_mv_0x0_M_round_trip",
+        "_mv_0x0_M_identity",
+        "_mv_0x0_M_call_identity",
         // Loops
-        "0x0_M_sum_loop",
+        "_mv_0x0_M_sum_loop",
         // Integration
-        "0x0_M_integration_test",
+        "_mv_0x0_M_integration_test",
         // Cross-module
-        "0x0_M_call_double",
+        "_mv_0x0_M_call_double",
         // Vectors
-        "0x0_M_test_vec",
+        "_mv_0x0_M_test_vec",
         // Equality
-        "0x0_M_eq_points",
-        "0x0_M_eq_refs",
-        "0x0_M_neq_u64",
+        "_mv_0x0_M_eq_points",
+        "_mv_0x0_M_eq_refs",
+        "_mv_0x0_M_neq_u64",
         // Phantom generics
-        "0x0_M_phantom_read_x",
-        "0x0_M_phantom_proxy",
+        "_mv_0x0_M_phantom_read_x",
+        "_mv_0x0_M_phantom_proxy",
     ] {
         assert!(
             asm.contains(name),
@@ -71,11 +71,11 @@ fn kitchen_sink_compiles() {
         "should contain function returns (ret)"
     );
     assert!(
-        asm.contains("0x0_M_identity$u64"),
+        asm.contains("_mv_0x0_M_identity$u64"),
         "should contain monomorphized generic (identity$u64)"
     );
     assert!(
-        asm.contains("0x0_M_phantom_read_x$u64"),
+        asm.contains("_mv_0x0_M_phantom_read_x$u64"),
         "should contain erased phantom monomorphization (phantom_read_x$u64)\nassembly:\n{asm}"
     );
     assert!(
@@ -89,13 +89,13 @@ fn kitchen_sink_compiles() {
 
     // LLVM emits underscore-prefixed symbols on macOS
     assert!(
-        asm.contains("_0x0_M_make_point"),
-        "should contain LLVM symbol _0x0_M_make_point\nassembly:\n{asm}"
+        asm.contains("__mv_0x0_M_make_point"),
+        "should contain LLVM symbol __mv_0x0_M_make_point\nassembly:\n{asm}"
     );
 
     // Cross-module call: call_double should emit a `bl` to the external `double` symbol
     assert!(
-        asm.contains("bl\t_0x0_Dep_double") || asm.contains("bl _0x0_Dep_double"),
+        asm.contains("bl\t__mv_0x0_Dep_double") || asm.contains("bl __mv_0x0_Dep_double"),
         "should contain a branch-and-link to external 'double'\nassembly:\n{asm}"
     );
 
@@ -173,11 +173,11 @@ fn same_name_cross_module_no_collision() {
     let asm = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[dep]).unwrap();
 
     assert!(
-        asm.contains("0x0_M_double"),
+        asm.contains("_mv_0x0_M_double"),
         "missing local symbol 0x0_M_double\nassembly:\n{asm}"
     );
     assert!(
-        asm.contains("0x0_Dep_double"),
+        asm.contains("_mv_0x0_Dep_double"),
         "missing external symbol 0x0_Dep_double\nassembly:\n{asm}"
     );
 }

@@ -421,7 +421,7 @@ mod tests {
                 ],
             )
             .compile();
-        assert!(asm.contains("0x0_M_load_addr"), "missing symbol\n{asm}");
+        assert!(asm.contains("_mv_0x0_M_load_addr"), "missing symbol\n{asm}");
     }
 
     #[test]

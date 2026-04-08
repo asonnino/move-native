@@ -219,11 +219,11 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_double"),
+            asm.contains("_mv_0x0_M_double"),
             "missing 'double' symbol\n{asm}"
         );
         assert!(
-            asm.contains("0x0_M_caller"),
+            asm.contains("_mv_0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"
         );
         assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
@@ -254,11 +254,11 @@ mod tests {
             .function_instantiation(FunctionHandleIndex(0), vec![SignatureToken::U64])
             .compile();
         assert!(
-            asm.contains("0x0_M_identity$u64"),
+            asm.contains("_mv_0x0_M_identity$u64"),
             "missing monomorphized 'identity$u64' symbol\n{asm}"
         );
         assert!(
-            asm.contains("0x0_M_caller"),
+            asm.contains("_mv_0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"
         );
     }
@@ -285,7 +285,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_caller"),
+            asm.contains("_mv_0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"
         );
         assert!(
@@ -334,26 +334,26 @@ mod tests {
         let asm =
             Compiler::compile_module_with_dependencies(&Target::host(), &module, &[dep]).unwrap();
         assert!(
-            asm.contains("0x0_M_caller"),
+            asm.contains("_mv_0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"
         );
         // Cross-module call should reference the dependency's function
         assert!(
-            asm.contains("0x0_Dep_helper"),
+            asm.contains("_mv_0x0_Dep_helper"),
             "missing cross-module 'helper' reference\n{asm}"
         );
     }
 
     #[test]
     fn generic_generation_panic_is_compile_error() {
-        let err = catch_panic::<()>("0x0_M_identity$u64", || panic!("boom")).unwrap_err();
+        let err = catch_panic::<()>("_mv_0x0_M_identity$u64", || panic!("boom")).unwrap_err();
         assert!(
             matches!(err, CompileError::Internal(_)),
             "expected internal compiler error, got {err}"
         );
         let message = err.to_string();
         assert!(
-            message.contains("0x0_M_identity$u64"),
+            message.contains("_mv_0x0_M_identity$u64"),
             "missing symbol context in error: {message}"
         );
         assert!(

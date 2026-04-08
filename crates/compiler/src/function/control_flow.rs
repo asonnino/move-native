@@ -162,7 +162,10 @@ mod tests {
         let asm = CompiledModuleBuilder::new()
             .function("noop", vec![], vec![], vec![], vec![Bytecode::Ret])
             .compile();
-        assert!(asm.contains("0x0_M_noop"), "missing 'noop' symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_noop"),
+            "missing 'noop' symbol\n{asm}"
+        );
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
@@ -178,7 +181,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_identity"),
+            asm.contains("_mv_0x0_M_identity"),
             "missing 'identity' symbol\n{asm}"
         );
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
@@ -195,7 +198,10 @@ mod tests {
                 vec![Bytecode::CopyLoc(1), Bytecode::CopyLoc(0), Bytecode::Ret],
             )
             .compile();
-        assert!(asm.contains("0x0_M_swap"), "missing 'swap' symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_swap"),
+            "missing 'swap' symbol\n{asm}"
+        );
         assert!(asm.contains("ret"), "missing 'ret' instruction\n{asm}");
     }
 
@@ -234,7 +240,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_sum_to_n"),
+            asm.contains("_mv_0x0_M_sum_to_n"),
             "missing 'sum_to_n' symbol\n{asm}"
         );
         assert!(asm.contains("b."), "missing conditional branch\n{asm}");
@@ -278,7 +284,10 @@ mod tests {
                 }],
             )
             .compile();
-        assert!(asm.contains("0x0_M_color_to_u64"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("_mv_0x0_M_color_to_u64"),
+            "missing symbol\n{asm}"
+        );
     }
 
     #[test]
@@ -298,7 +307,7 @@ mod tests {
             )
             .compile();
         assert!(
-            asm.contains("0x0_M_abort_42"),
+            asm.contains("_mv_0x0_M_abort_42"),
             "missing 'abort_42' symbol\n{asm}"
         );
         assert!(
