@@ -17,7 +17,6 @@ move-core-types.workspace = true
 move-model.workspace = true
 move-stackless-bytecode.workspace = true
 num-bigint = "0.4"
-object.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

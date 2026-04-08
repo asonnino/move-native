@@ -66,6 +66,7 @@
     "simplifycfg",
     "Stackless",
     "startproc",
+    "SYSCALL",
     "tbnz",
     "ucontext",
     "uninit",

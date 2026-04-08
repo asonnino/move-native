@@ -7134,6 +7134,7 @@ dependencies = [
  "compiler",
  "inkwell",
  "move-binary-format",
+ "object 0.38.1",
  "sp1-sdk",
  "thiserror 2.0.18",
  "tokio",

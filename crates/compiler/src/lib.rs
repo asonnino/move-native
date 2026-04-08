@@ -17,7 +17,8 @@ mod types;
 pub use assembly::Assembly;
 pub use compiler::Compiler;
 pub use error::{CompileError, CompileResult};
-pub use object_file::{LinkedText, ObjectFile};
+pub use module::ModuleInfo;
+pub use object_file::ObjectFile;
 pub use target::Target;
 
 /// Compile serialized Move bytecode to assembly text.

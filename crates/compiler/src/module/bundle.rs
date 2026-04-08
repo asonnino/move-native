@@ -9,8 +9,8 @@ use std::path::Path;
 
 use move_binary_format::CompiledModule;
 
-use crate::assembly::Assembly;
 use crate::target::Target;
+use crate::{ModuleInfo, assembly::Assembly};
 
 /// A collection of deserialized Move modules that can be compiled one at a
 /// time, using the rest as dependencies.
@@ -88,50 +88,12 @@ impl ModuleBundle {
             .find(|m| m.self_id().name().as_str() == module_name)
             .unwrap_or_else(|| panic!("module {module_name} not found"));
 
-        let self_handle = &module.module_handles[module.self_module_handle_idx.0 as usize];
-        let addr_bytes = module.address_identifiers[self_handle.address.0 as usize];
-        // Format address as short hex (strip leading zeros), matching the
-        // mangler which uses `get_full_name_str()` → "0x0::M" → "0x0_M".
-        // `get_full_name_str` formats addresses as "0x" + short hex, so
-        // we replicate that: "0x" prefix + stripped leading-zero hex.
-        let hex_digits: String = addr_bytes
-            .into_bytes()
+        ModuleInfo::from_module(module)
+            .unwrap_or_else(|e| panic!("{module_name}: {e}"))
+            .functions
             .iter()
-            .skip_while(|b| **b == 0)
-            .enumerate()
-            .fold(String::new(), |mut s, (i, b)| {
-                use std::fmt::Write;
-                if i == 0 {
-                    write!(s, "{b:x}").unwrap();
-                } else {
-                    write!(s, "{b:02x}").unwrap();
-                }
-                s
-            });
-        let addr = if hex_digits.is_empty() {
-            "0x0".to_string()
-        } else {
-            format!("0x{hex_digits}")
-        };
-        let mod_name = module.identifiers[self_handle.name.0 as usize].as_str();
-
-        module
-            .function_defs
-            .iter()
-            .filter(|def| {
-                // Skip native functions (no code body)
-                if def.code.is_none() {
-                    return false;
-                }
-                // Skip generic functions (type_parameters non-empty)
-                let handle = &module.function_handles[def.function.0 as usize];
-                handle.type_parameters.is_empty()
-            })
-            .map(|def| {
-                let handle = &module.function_handles[def.function.0 as usize];
-                let func_name = module.identifiers[handle.name.0 as usize].as_str();
-                format!("_mv_{addr}_{mod_name}_{func_name}")
-            })
+            .filter(|f| !f.is_native && !f.is_generic)
+            .map(|f| f.symbol.clone())
             .collect()
     }
 
