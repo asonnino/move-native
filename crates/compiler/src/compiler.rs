@@ -403,4 +403,43 @@ mod tests {
             "non-phantom generic 'identity' should NOT be compiled at top level\n{asm}"
         );
     }
+
+    #[test]
+    fn set_module_assembly_injects_symbols() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "add",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Add,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let context = inkwell::context::Context::create();
+        let compiler = super::Compiler::new(&Target::Riscv64, &context, &module, &[]).unwrap();
+        compiler.set_module_assembly(".globl _start\n_start:\n\tret\n");
+        let object = compiler.emit_object().unwrap();
+
+        let parsed = object::File::parse(object.as_bytes()).unwrap();
+        use object::{Object, ObjectSymbol};
+        let symbols: Vec<String> = parsed
+            .symbols()
+            .filter_map(|s| s.name().ok().map(|n| n.to_string()))
+            .collect();
+
+        assert!(
+            symbols.iter().any(|s| s == "_start"),
+            "injected _start missing: {symbols:?}"
+        );
+        assert!(
+            symbols.iter().any(|s| s.contains("_mv_0x0_M_add")),
+            "Move function symbol missing: {symbols:?}"
+        );
+    }
 }

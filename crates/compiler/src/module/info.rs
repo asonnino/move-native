@@ -120,3 +120,126 @@ impl ModuleInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use move_binary_format::file_format::{AbilitySet, Bytecode, SignatureToken};
+
+    use super::ModuleInfo;
+    use crate::module::CompiledModuleBuilder;
+
+    #[test]
+    fn from_module_basic_metadata() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "add",
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![
+                    Bytecode::CopyLoc(0),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Add,
+                    Bytecode::Ret,
+                ],
+            )
+            .build();
+
+        let info = ModuleInfo::from_module(&module).unwrap();
+        assert_eq!(info.address, "0x0");
+        assert_eq!(info.name, "M");
+        assert_eq!(info.functions.len(), 1);
+
+        let f = &info.functions[0];
+        assert_eq!(f.name, "add");
+        assert_eq!(f.symbol, "_mv_0x0_M_add");
+        assert_eq!(f.arg_count, 2);
+        assert_eq!(f.ret_count, 1);
+        assert!(f.is_public);
+        assert!(!f.is_native);
+        assert!(!f.is_generic);
+    }
+
+    #[test]
+    fn function_lookup() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "alpha",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+            )
+            .function(
+                "beta",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::CopyLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let info = ModuleInfo::from_module(&module).unwrap();
+        assert!(info.function("alpha").is_some());
+        assert!(info.function("beta").is_some());
+        assert!(info.function("gamma").is_none());
+    }
+
+    #[test]
+    fn only_function_single() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "sole",
+                vec![],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::LdU64(0), Bytecode::Ret],
+            )
+            .build();
+
+        let info = ModuleInfo::from_module(&module).unwrap();
+        let f = info.only_function().expect("should find sole function");
+        assert_eq!(f.name, "sole");
+    }
+
+    #[test]
+    fn only_function_multiple_returns_none() {
+        let module = CompiledModuleBuilder::new()
+            .function(
+                "a",
+                vec![],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::LdU64(0), Bytecode::Ret],
+            )
+            .function(
+                "b",
+                vec![],
+                vec![SignatureToken::U64],
+                vec![],
+                vec![Bytecode::LdU64(1), Bytecode::Ret],
+            )
+            .build();
+
+        let info = ModuleInfo::from_module(&module).unwrap();
+        assert!(info.only_function().is_none(), "ambiguous: two functions");
+    }
+
+    #[test]
+    fn generic_function_flagged() {
+        let module = CompiledModuleBuilder::new()
+            .generic_function(
+                "identity",
+                vec![AbilitySet::EMPTY],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![SignatureToken::TypeParameter(0)],
+                vec![],
+                vec![Bytecode::MoveLoc(0), Bytecode::Ret],
+            )
+            .build();
+
+        let info = ModuleInfo::from_module(&module).unwrap();
+        assert_eq!(info.functions.len(), 1);
+        assert!(info.functions[0].is_generic);
+    }
+}
