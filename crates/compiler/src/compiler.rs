@@ -9,62 +9,67 @@ use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode_generator::StacklessBytecodeGenerator;
 
-use crate::assembly::{Assembly, AssemblyBuilder};
+use crate::assembly::Assembly;
+use crate::codegen::CodegenBackend;
 use crate::context::{DatatypeHandle, LlvmContext};
-use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
+use crate::error::{CompileContext, CompileResult, catch_panic};
 use crate::function::FunctionLowering;
 use crate::mangle::Mangler;
+use crate::object_file::ObjectFile;
 use crate::target::Target;
 use crate::types::TypeLowering;
 
-/// Top-level compiler that owns the full Move -> AArch64 pipeline.
+/// Move bytecode compiler.
 ///
-/// Bundles the LLVM context (which includes the Move `GlobalEnv`)
-/// and the code generator so that callers never need to thread
-/// infrastructure through every function call.
+/// Builder-style API: create with [`new`](Self::new), optionally inject extra
+/// assembly with [`set_module_assembly`](Self::set_module_assembly), then call
+/// [`emit_assembly`](Self::emit_assembly) or [`emit_object`](Self::emit_object).
 pub struct Compiler<'ctx> {
     pub(crate) ctx: LlvmContext<'ctx>,
-    asm_builder: AssemblyBuilder,
+    codegen: CodegenBackend,
 }
 
 impl<'ctx> Compiler<'ctx> {
-    /// Compile serialized Move bytecode to assembly.
-    pub fn compile(target: &Target, bytecode: &[u8]) -> CompileResult<Assembly> {
-        let module = CompiledModule::deserialize_with_defaults(bytecode)
-            .map_err(|e| CompileError::deserialize(e.to_string()))?;
-        Self::compile_module(target, &module)
-    }
-
-    /// Compile an already-deserialized Move module to assembly.
-    pub fn compile_module(target: &Target, module: &CompiledModule) -> CompileResult<Assembly> {
-        Self::compile_module_with_dependencies(target, module, &[])
-    }
-
-    /// Compile a Move module to assembly, with dependency modules
-    /// visible for resolving cross-module function signatures.
-    pub fn compile_module_with_dependencies(
-        target: &Target,
-        module: &CompiledModule,
-        dependencies: &[CompiledModule],
-    ) -> CompileResult<Assembly> {
-        let context = Context::create();
-        let compiler = Compiler::new(target, &context, module, dependencies)?;
-        compiler.emit()
-    }
-
-    fn new(
+    /// Create a compiler for a Move module.
+    pub fn new(
         target: &Target,
         context: &'ctx Context,
         module: &CompiledModule,
         dependencies: &[CompiledModule],
     ) -> CompileResult<Self> {
         let ctx = LlvmContext::new(context, module, dependencies)?;
-        let asm_builder = AssemblyBuilder::new(target)?;
-
-        Ok(Self { ctx, asm_builder })
+        let codegen = CodegenBackend::new(target)?;
+        Ok(Self { ctx, codegen })
     }
 
-    fn emit(&self) -> CompileResult<Assembly> {
+    /// Inject raw assembly that LLVM's integrated assembler will compile
+    /// alongside the Move functions. Use this to provide runtime stubs
+    /// (e.g., `_start`, `__move_rt_arithmetic_error`) for freestanding
+    /// execution modes.
+    pub fn set_module_assembly(&self, asm: &str) {
+        self.ctx.module.set_inline_assembly(asm);
+    }
+
+    /// Compile and emit as assembly text.
+    ///
+    /// Used by the hosted pipeline (runner → instrumenter → assembler).
+    pub fn emit_assembly(&self) -> CompileResult<Assembly> {
+        self.lower()?;
+        self.codegen.build_assembly(&self.ctx.module)
+    }
+
+    /// Compile and emit as an ELF object file.
+    ///
+    /// Used by the freestanding pipeline (ZK prover). All symbols —
+    /// including any injected via [`set_module_assembly`](Self::set_module_assembly) —
+    /// are resolved by LLVM's integrated assembler.
+    pub fn emit_object(&self) -> CompileResult<ObjectFile> {
+        self.lower()?;
+        self.codegen.build_object(&self.ctx.module)
+    }
+
+    /// Compile Move functions to LLVM IR and optimize.
+    fn lower(&self) -> CompileResult<()> {
         let target_module_env = self.ctx.target_module()?;
 
         // Collect non-native functions that we can compile directly:
@@ -98,17 +103,14 @@ impl<'ctx> Compiler<'ctx> {
             .collect::<Result<_, _>>()?;
 
         // Pass 2: compile function bodies.
-        // Emits IR into `self.ctx.module` via LLVM's interior-mutable FFI.
         for ((function_env, function_data), declaration) in targets.iter().zip(declarations) {
             let name = function_env.get_name_str();
             self.compile_function(declaration, function_env, function_data)
                 .with_context(|| format!("in function '{name}'"))?;
         }
 
-        self.asm_builder.optimize(&self.ctx.module)?;
-        let mut asm = self.asm_builder.build(&self.ctx.module)?;
-        asm.strip_subsections();
-        Ok(asm)
+        self.codegen.optimize(&self.ctx.module)?;
+        Ok(())
     }
 
     /// Declare an LLVM function (signature only, no body) for the given Move function.
@@ -203,17 +205,17 @@ mod tests {
         StructDefinitionIndex,
     };
 
-    use crate::{Compiler, Target, module::CompiledModuleBuilder};
+    use crate::{Target, module::CompiledModuleBuilder};
 
     #[test]
     fn empty_bytecode_is_error() {
-        let result = Compiler::compile(&Target::host(), &[]);
+        let result = crate::compile(&Target::host(), &[]);
         assert!(result.is_err(), "empty bytecode should fail");
     }
 
     #[test]
     fn garbage_bytecode_is_error() {
-        let result = Compiler::compile(&Target::host(), &[0xDE, 0xAD]);
+        let result = crate::compile(&Target::host(), &[0xDE, 0xAD]);
         assert!(result.is_err(), "garbage bytecode should fail");
     }
 
@@ -221,7 +223,7 @@ mod tests {
     fn missing_dependency_is_error() {
         let (module, _deps) = CompiledModuleBuilder::kitchen_sink();
         // Pass empty deps — dependency validation catches missing modules.
-        let result = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[]);
+        let result = crate::compile_module_with_deps(&Target::host(), &module, &[]);
         assert!(result.is_err(), "missing dependencies should fail");
     }
 

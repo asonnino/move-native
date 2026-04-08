@@ -17,6 +17,7 @@
     "CCMN",
     "CCMP",
     "cloneable",
+    "codegen",
     "dylib",
     "ERET",
     "ERETAA",

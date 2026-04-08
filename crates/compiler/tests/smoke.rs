@@ -3,15 +3,15 @@
 
 //! Integration tests for the Move-to-LLVM compiler.
 
+use compiler::Target;
 use compiler::module::CompiledModuleBuilder;
-use compiler::{Compiler, Target};
 use move_binary_format::file_format::{Bytecode, FunctionHandleIndex, SignatureToken};
 use move_core_types::account_address::AccountAddress;
 
 #[test]
 fn kitchen_sink_compiles() {
     let (module, deps) = CompiledModuleBuilder::kitchen_sink();
-    let asm = Compiler::compile_module_with_dependencies(&Target::host(), &module, &deps).unwrap();
+    let asm = compiler::compile_module_with_deps(&Target::host(), &module, &deps).unwrap();
 
     // Verify all function symbols are present
     for name in &[
@@ -170,7 +170,7 @@ fn same_name_cross_module_no_collision() {
         )
         .build();
 
-    let asm = Compiler::compile_module_with_dependencies(&Target::host(), &module, &[dep]).unwrap();
+    let asm = compiler::compile_module_with_deps(&Target::host(), &module, &[dep]).unwrap();
 
     assert!(
         asm.contains("_mv_0x0_M_double"),

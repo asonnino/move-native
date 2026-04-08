@@ -200,7 +200,6 @@ mod tests {
         StructDefinitionIndex,
     };
 
-    use crate::compiler::Compiler;
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
 
@@ -294,7 +293,7 @@ mod tests {
             )
             .build();
 
-        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+        let Err(err) = crate::compile_module(&Target::Aarch64, &module) else {
             panic!("expected TypeMismatch error for Add on struct");
         };
         assert!(
@@ -324,7 +323,7 @@ mod tests {
             )
             .build();
 
-        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+        let Err(err) = crate::compile_module(&Target::Aarch64, &module) else {
             panic!("expected TypeMismatch error for Unpack on integer");
         };
         assert!(
@@ -354,7 +353,7 @@ mod tests {
             )
             .build();
 
-        let Err(err) = Compiler::compile_module(&Target::Aarch64, &module) else {
+        let Err(err) = crate::compile_module(&Target::Aarch64, &module) else {
             panic!("expected TypeMismatch error for BorrowField on integer");
         };
         assert!(

@@ -186,7 +186,6 @@ mod tests {
         AbilitySet, Bytecode, FunctionHandleIndex, FunctionInstantiationIndex, SignatureToken,
     };
 
-    use crate::compiler::Compiler;
     use crate::error::{CompileError, catch_panic};
     use crate::module::CompiledModuleBuilder;
     use crate::target::Target;
@@ -331,8 +330,7 @@ mod tests {
             )
             .build();
 
-        let asm =
-            Compiler::compile_module_with_dependencies(&Target::host(), &module, &[dep]).unwrap();
+        let asm = crate::compile_module_with_deps(&Target::host(), &module, &[dep]).unwrap();
         assert!(
             asm.contains("_mv_0x0_M_caller"),
             "missing 'caller' symbol\n{asm}"

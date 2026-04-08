@@ -7,7 +7,6 @@ use move_binary_format::file_format::{
 
 use super::CompiledModuleBuilder;
 use crate::assembly::Assembly;
-use crate::compiler::Compiler;
 use crate::target::Target;
 
 impl CompiledModuleBuilder {
@@ -16,7 +15,7 @@ impl CompiledModuleBuilder {
     /// Shorthand for `.build()` + `Compiler::compile_module` — intended for tests.
     pub fn compile(self) -> Assembly {
         let module = self.build();
-        Compiler::compile_module(&Target::host(), &module).unwrap()
+        crate::compile_module(&Target::host(), &module).unwrap()
     }
 
     /// Builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.

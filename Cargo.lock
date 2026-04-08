@@ -751,6 +751,7 @@ dependencies = [
  "move-model",
  "move-stackless-bytecode",
  "num-bigint 0.4.6",
+ "object 0.38.1",
  "thiserror 2.0.18",
 ]
 
@@ -7131,10 +7132,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "compiler",
+ "inkwell",
  "move-binary-format",
- "object 0.38.1",
  "sp1-sdk",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

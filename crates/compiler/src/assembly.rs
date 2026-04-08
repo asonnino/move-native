@@ -1,20 +1,18 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+//! The `Assembly` output type and post-processing helpers.
+
 use std::{fmt, ops::Deref};
-
-use inkwell::OptimizationLevel;
-use inkwell::module::Module;
-use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{CodeModel, FileType, RelocMode, TargetMachine, TargetTriple};
-
-use crate::error::{CompileError, CompileResult};
-use crate::target::{CPU, Target};
 
 /// Assembly output from the compiler.
 pub struct Assembly(String);
 
 impl Assembly {
+    pub(crate) fn new(asm: String) -> Self {
+        Self(asm)
+    }
+
     /// Strip `.subsections_via_symbols` — Mach-O's dead-stripping directive
     /// that prevents the assembler from encoding `tbz`/`tbnz` branch-to-label
     /// (the assembler can't guarantee range when subsections may be reordered).
@@ -99,110 +97,11 @@ impl fmt::Display for Assembly {
     }
 }
 
-/// Owns the LLVM `TargetMachine` and drives optimization and assembly emission.
-pub(crate) struct AssemblyBuilder {
-    machine: TargetMachine,
-    check_gas_register: bool,
-}
-
-impl AssemblyBuilder {
-    pub(crate) fn new(target: &Target) -> CompileResult<Self> {
-        target.initialize();
-
-        let triple = TargetTriple::create(target.triple());
-        let llvm_target = inkwell::targets::Target::from_triple(&triple)
-            .map_err(|e| CompileError::target_init(e.to_string()))?;
-
-        let machine = llvm_target
-            .create_target_machine(
-                &triple,
-                CPU,
-                target.features(),
-                OptimizationLevel::Default,
-                RelocMode::PIC,
-                CodeModel::Default,
-            )
-            .ok_or_else(|| CompileError::target_machine("failed to create target machine"))?;
-
-        let check_gas_register = target.check_gas_register();
-        Ok(Self {
-            machine,
-            check_gas_register,
-        })
-    }
-
-    /// Run optimization passes on the module using the new pass manager.
-    ///
-    /// Runs mem2reg (promote allocas to SSA registers), instcombine, and
-    /// simplifycfg — enough to clean up the alloca-heavy IR we generate.
-    pub(crate) fn optimize(&self, module: &Module<'_>) -> CompileResult<()> {
-        let options = PassBuilderOptions::create();
-        module
-            .run_passes(
-                "mem2reg,instcombine<max-iterations=2>,simplifycfg",
-                &self.machine,
-                options,
-            )
-            .map_err(|e| CompileError::llvm(e.to_string()))
-    }
-
-    /// Emit the module as assembly text.
-    pub(crate) fn build(&self, module: &Module<'_>) -> CompileResult<Assembly> {
-        let buf = self
-            .machine
-            .write_to_memory_buffer(module, FileType::Assembly)
-            .map_err(|e| CompileError::codegen(e.to_string()))?;
-
-        let asm = std::str::from_utf8(buf.as_slice())
-            .map_err(|e| CompileError::codegen(e.to_string()))?
-            .to_string();
-
-        // With +reserve-x23, LLVM won't use x23 as a GPR. However, x23 may
-        // still appear in callee-saved stp/ldp pairs (e.g. `stp x24, x23, [sp, …]`)
-        // where the ARM pair-store drags x23 along as the partner of x24.
-        // This is benign — it preserves the gas counter across calls, which
-        // is exactly what we want.  Assert that x23 only appears in stp/ldp.
-        if self.check_gas_register && Self::has_x23_misuse(&asm) {
-            return Err(CompileError::codegen(
-                "x23 (reserved for gas metering) used outside stp/ldp save/restore",
-            ));
-        }
-
-        Ok(Assembly(asm))
-    }
-
-    /// Returns true if x23 appears in any instruction other than `stp`/`ldp`
-    /// (callee-saved save/restore in function prologues/epilogues).
-    fn has_x23_misuse(asm: &str) -> bool {
-        for line in asm.lines() {
-            let trimmed = line.trim();
-            if !trimmed.contains("x23") {
-                continue;
-            }
-            // Allow stp/ldp (callee-saved pairs), comments, and directives
-            if trimmed.starts_with("stp\t")
-                || trimmed.starts_with("ldp\t")
-                || trimmed.starts_with("stp ")
-                || trimmed.starts_with("ldp ")
-                || trimmed.starts_with(';')
-                || trimmed.starts_with('.')
-                || trimmed.starts_with("//")
-            {
-                continue;
-            }
-            return true;
-        }
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
 
     use super::Assembly;
-
-    // ── strip_subsections ────────────────────────────────────────────
 
     #[test]
     fn strip_subsections_removes_directive() {
@@ -233,7 +132,6 @@ mod tests {
         let mut asm = Assembly(input.into());
         asm.strip_subsections();
 
-        // All non-directive lines survive
         assert!(asm.contains(".section\t__TEXT,__text"));
         assert!(asm.contains(".globl\t_foo"));
         assert!(asm.contains("_foo:"));
@@ -253,7 +151,6 @@ mod tests {
             .into(),
         );
         asm.strip_subsections();
-        // Must NOT produce trampoline aliases
         assert!(!asm.contains("\tb _foo"));
         assert!(!asm.contains("foo:\n\tb"));
     }
@@ -334,41 +231,6 @@ mod tests {
         asm.add_symbol_aliases();
         assert!(asm.contains(".globl bar\n"));
         assert!(asm.contains("bar:\n\tb _bar\n"));
-    }
-
-    #[test]
-    fn x23_in_stp_ldp_is_ok() {
-        use super::AssemblyBuilder;
-        let asm = "stp\tx24, x23, [sp, #-16]!\nldp\tx24, x23, [sp], #16\n";
-        assert!(!AssemblyBuilder::has_x23_misuse(asm));
-    }
-
-    #[test]
-    fn x23_in_add_is_misuse() {
-        use super::AssemblyBuilder;
-        let asm = "\tadd\tx23, x0, x1\n";
-        assert!(AssemblyBuilder::has_x23_misuse(asm));
-    }
-
-    #[test]
-    fn x23_in_comment_is_ok() {
-        use super::AssemblyBuilder;
-        let asm = "; x23 is the gas register\n// x23 reserved\n";
-        assert!(!AssemblyBuilder::has_x23_misuse(asm));
-    }
-
-    #[test]
-    fn x23_in_directive_is_ok() {
-        use super::AssemblyBuilder;
-        let asm = ".cfi_offset x23, -8\n";
-        assert!(!AssemblyBuilder::has_x23_misuse(asm));
-    }
-
-    #[test]
-    fn no_x23_is_ok() {
-        use super::AssemblyBuilder;
-        let asm = "\tadd\tx0, x1, x2\n\tret\n";
-        assert!(!AssemblyBuilder::has_x23_misuse(asm));
     }
 
     #[test]
