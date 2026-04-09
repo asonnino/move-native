@@ -108,13 +108,15 @@ impl<'a> StubGenerator<'a> {
         writeln!(out, "\tecall")?;
         writeln!(out)?;
 
-        // Move runtime abort handler.
-        writeln!(out, "\t.globl\t__move_rt_arithmetic_error")?;
-        writeln!(out, "\t.type\t__move_rt_arithmetic_error,@function")?;
-        writeln!(out, "__move_rt_arithmetic_error:")?;
-        writeln!(out, "\tli\tt0, {:#x}", Self::SYSCALL_HALT)?;
-        writeln!(out, "\tli\ta0, 1")?;
-        writeln!(out, "\tecall")?;
+        // Move runtime abort handlers: arithmetic errors and explicit abort.
+        for handler in ["__move_rt_arithmetic_error", "__move_rt_abort"] {
+            writeln!(out, "\t.globl\t{handler}")?;
+            writeln!(out, "\t.type\t{handler},@function")?;
+            writeln!(out, "{handler}:")?;
+            writeln!(out, "\tli\tt0, {:#x}", Self::SYSCALL_HALT)?;
+            writeln!(out, "\tli\ta0, 1")?;
+            writeln!(out, "\tecall")?;
+        }
 
         Ok(())
     }
@@ -130,6 +132,7 @@ mod tests {
 
         assert!(stub.contains("_start:"));
         assert!(stub.contains("__move_rt_arithmetic_error:"));
+        assert!(stub.contains("__move_rt_abort:"));
         assert!(stub.contains("call\t_mv_0x0_M_add"));
         assert!(stub.contains(".text"));
         assert_eq!(stub.matches("# Read argument").count(), 2);

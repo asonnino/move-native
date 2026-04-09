@@ -3,24 +3,15 @@
 
 //! CLI for generating and verifying ZK proofs of Move contract execution.
 
-mod error;
-mod linker;
-mod proof;
-mod stub;
-
 use std::fs;
 
 use clap::Parser;
-use inkwell::context::Context;
 use move_binary_format::CompiledModule;
-use sp1_sdk::SP1Stdin;
 use tracing::{error, info};
 
-use compiler::{ModuleInfo, Target};
-use error::{ZkError, ZkResult};
-use linker::Linker;
-use proof::Prover;
-use stub::StubGenerator;
+use compiler::ModuleInfo;
+use zero_knowledge::error::{ZkError, ZkResult};
+use zero_knowledge::pipeline::CompiledElf;
 
 #[derive(Parser)]
 #[command(name = "zk", about = "ZK proof generation for Move contracts")]
@@ -57,75 +48,38 @@ async fn run(cli: &Cli) -> ZkResult<()> {
     let module = CompiledModule::deserialize_with_defaults(&bytecode)
         .map_err(|e| ZkError::Function(e.to_string()))?;
 
-    // 2. Find the target function.
+    // 2. Resolve the target function name.
     let info = ModuleInfo::from_module(&module)?;
-    let function = match &cli.function {
-        Some(name) => info
-            .function(name)
-            .ok_or_else(|| ZkError::Function(format!("function '{name}' not found")))?,
-        None => info.only_function().ok_or_else(|| {
-            let names: Vec<_> = info
-                .functions
-                .iter()
-                .filter(|f| !f.is_native)
-                .map(|f| f.name.as_str())
-                .collect();
-            ZkError::Function(format!(
-                "multiple functions in module, use --function: {names:?}"
-            ))
-        })?,
+    let function_name = match &cli.function {
+        Some(name) => {
+            info.function(name)
+                .ok_or_else(|| ZkError::Function(format!("function '{name}' not found")))?;
+            name.clone()
+        }
+        None => {
+            let func = info.only_function().ok_or_else(|| {
+                let names: Vec<_> = info
+                    .functions
+                    .iter()
+                    .filter(|f| !f.is_native)
+                    .map(|f| f.name.as_str())
+                    .collect();
+                ZkError::Function(format!(
+                    "multiple functions in module, use --function: {names:?}"
+                ))
+            })?;
+            func.name.clone()
+        }
     };
-    info!(
-        name = %function.name,
-        args = function.arg_count,
-        returns = function.ret_count,
-        "Selected function"
-    );
 
-    // 3. Generate the stub assembly.
-    let stub_asm = StubGenerator::from(function).generate();
-
-    // 4. Compile Move + stub → single .o via LLVM.
+    // 3. Compile Move → RISC-V → ELF.
     info!("Compiling to RISC-V");
-    let context = Context::create();
-    let compiler = compiler::Compiler::new(&Target::Riscv64, &context, &module, &[])?;
-    compiler.set_module_assembly(&stub_asm);
-    let object = compiler.emit_object()?;
+    let compiled = CompiledElf::compile(&module, &function_name, &[])?;
+    info!(bytes = compiled.elf_bytes.len(), "ELF ready");
 
-    // 5. Link relocations and wrap in SP1-compatible ELF.
-    info!("Building ELF");
-    let elf_bytes = Linker::new(&object, "_start").link()?.build_elf()?;
-    info!(bytes = elf_bytes.len(), "ELF ready");
-
-    // 6. Validate inputs.
-    if cli.inputs.len() != function.arg_count {
-        return Err(ZkError::Sp1(format!(
-            "expected {} inputs, got {}",
-            function.arg_count,
-            cli.inputs.len()
-        )));
-    }
-    info!(inputs = ?cli.inputs, "Inputs validated");
-
-    // 7. Prove and verify.
-    let elf = sp1_sdk::Elf::from(elf_bytes);
-    let mut stdin = SP1Stdin::new();
-    for val in &cli.inputs {
-        stdin.write(val);
-    }
-
+    // 5. Prove and verify.
     info!("Proving");
-    let proof = if cli.mock {
-        Prover::mock()
-            .await
-            .prove(elf, stdin, function.ret_count)
-            .await?
-    } else {
-        Prover::cpu()
-            .await
-            .prove(elf, stdin, function.ret_count)
-            .await?
-    };
+    let proof = compiled.prove(&cli.inputs, cli.mock).await?;
     info!(cycles = proof.cycles, "Execution complete");
     if let Some(value) = proof.return_value {
         info!(value, "Return value");
