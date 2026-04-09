@@ -46,7 +46,7 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
         type_params: Vec<Type>,
     ) -> CompileResult<Self> {
         let entry = ctx.context.append_basic_block(function, "entry");
-        ctx.builder.position_at_end(entry);
+        ctx.builder().position_at_end(entry);
 
         let state = FunctionState::new(ctx, function, parameter_count, function_data, type_params)?;
 

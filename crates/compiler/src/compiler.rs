@@ -25,7 +25,7 @@ use crate::types::TypeLowering;
 /// assembly with [`set_module_assembly`](Self::set_module_assembly), then call
 /// [`emit_assembly`](Self::emit_assembly) or [`emit_object`](Self::emit_object).
 pub struct Compiler<'ctx> {
-    pub(crate) ctx: LlvmContext<'ctx>,
+    ctx: LlvmContext<'ctx>,
     codegen: CodegenBackend,
 }
 
@@ -47,7 +47,7 @@ impl<'ctx> Compiler<'ctx> {
     /// (e.g., `_start`, `__move_rt_arithmetic_error`) for freestanding
     /// execution modes.
     pub fn set_module_assembly(&self, asm: &str) {
-        self.ctx.module.set_inline_assembly(asm);
+        self.ctx.module().set_inline_assembly(asm);
     }
 
     /// Compile and emit as assembly text.
@@ -55,7 +55,7 @@ impl<'ctx> Compiler<'ctx> {
     /// Used by the hosted pipeline (runner → instrumenter → assembler).
     pub fn emit_assembly(&self) -> CompileResult<Assembly> {
         self.lower()?;
-        self.codegen.build_assembly(&self.ctx.module)
+        self.codegen.build_assembly(self.ctx.module())
     }
 
     /// Compile and emit as an ELF object file.
@@ -65,7 +65,7 @@ impl<'ctx> Compiler<'ctx> {
     /// are resolved by LLVM's integrated assembler.
     pub fn emit_object(&self) -> CompileResult<ObjectFile> {
         self.lower()?;
-        self.codegen.build_object(&self.ctx.module)
+        self.codegen.build_object(self.ctx.module())
     }
 
     /// Compile Move functions to LLVM IR and optimize.
@@ -109,7 +109,7 @@ impl<'ctx> Compiler<'ctx> {
                 .with_context(|| format!("in function '{name}'"))?;
         }
 
-        self.codegen.optimize(&self.ctx.module)?;
+        self.codegen.optimize(self.ctx.module())?;
         Ok(())
     }
 

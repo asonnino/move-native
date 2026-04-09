@@ -48,10 +48,10 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = llvm.builder.build_call(callee_fn, &args, &call_name)?;
+        let call = llvm.builder().build_call(callee_fn, &args, &call_name)?;
 
         if !destinations.is_empty() {
-            let return_value = call.into_basic_value()?;
+            let return_value = call.to_basic_value()?;
             if destinations.len() == 1 {
                 self.state
                     .store(self.state.destination(destinations, 0)?, return_value)?;
@@ -62,7 +62,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                     )));
                 };
                 for (i, destination) in destinations.iter().enumerate() {
-                    let field = llvm.builder.build_extract_value(
+                    let field = llvm.builder().build_extract_value(
                         struct_val,
                         to_field_index(i)?,
                         &format!("call_ret_{i}"),
@@ -127,7 +127,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                 let function = llvm.add_function(&mangled, fn_type);
 
                 let saved_block = llvm
-                    .builder
+                    .builder()
                     .get_insert_block()
                     .expect("builder has no insert block during function compilation");
 
@@ -149,7 +149,7 @@ impl<'a, 'b, 'ctx> CallEmitter<'a, 'b, 'ctx> {
                         .with_context(|| format!("in monomorphized '{mangled}'"))?;
                     Ok(())
                 })();
-                llvm.builder.position_at_end(saved_block);
+                llvm.builder().position_at_end(saved_block);
                 result?;
                 function
             }

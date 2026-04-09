@@ -8,6 +8,32 @@ use crate::context::{DatatypeEnv, DatatypeHandle, LlvmContext};
 use crate::error::{CompileError, CompileResult};
 use crate::layout::EnumLayout;
 
+/// Extension methods on Move's `Type` for compiler-specific transformations.
+pub(crate) trait TypeExt {
+    /// Replace any remaining `TypeParameter` with a dummy concrete type (`U64`).
+    ///
+    /// Surviving type parameters must be phantom (the compiler only compiles
+    /// functions at top level when all type params are phantom), so the
+    /// concrete type chosen does not affect layout or codegen.
+    fn erase_type_params(self) -> Type;
+}
+
+impl TypeExt for Type {
+    fn erase_type_params(self) -> Type {
+        match self {
+            Type::TypeParameter(_) => Type::Primitive(PrimitiveType::U64),
+            Type::Vector(inner) => Type::Vector(Box::new(inner.erase_type_params())),
+            Type::Reference(m, inner) => Type::Reference(m, Box::new(inner.erase_type_params())),
+            Type::Datatype(mid, did, args) => Type::Datatype(
+                mid,
+                did,
+                args.into_iter().map(TypeExt::erase_type_params).collect(),
+            ),
+            other => other,
+        }
+    }
+}
+
 /// Lightweight view for lowering Move types to LLVM types.
 ///
 /// Created on the fly — borrows the LLVM context (which owns the env).
@@ -147,9 +173,57 @@ impl<'a, 'ctx> TypeLowering<'a, 'ctx> {
 mod tests {
     use move_model::ty::{PrimitiveType, Type};
 
-    use super::TypeLowering;
+    use super::{TypeExt, TypeLowering};
     use crate::context::{DatatypeHandle, LlvmContext};
     use crate::module::CompiledModuleBuilder;
+
+    #[test]
+    fn erase_bare_type_param() {
+        let ty = Type::TypeParameter(0);
+        assert_eq!(ty.erase_type_params(), Type::Primitive(PrimitiveType::U64));
+    }
+
+    #[test]
+    fn erase_nested_in_vector() {
+        let ty = Type::Vector(Box::new(Type::TypeParameter(1)));
+        assert_eq!(
+            ty.erase_type_params(),
+            Type::Vector(Box::new(Type::Primitive(PrimitiveType::U64)))
+        );
+    }
+
+    #[test]
+    fn erase_nested_in_reference() {
+        let ty = Type::Reference(true, Box::new(Type::TypeParameter(0)));
+        assert_eq!(
+            ty.erase_type_params(),
+            Type::Reference(true, Box::new(Type::Primitive(PrimitiveType::U64)))
+        );
+    }
+
+    #[test]
+    fn erase_deeply_nested() {
+        let ty = Type::Vector(Box::new(Type::Reference(
+            true,
+            Box::new(Type::TypeParameter(2)),
+        )));
+        assert_eq!(
+            ty.erase_type_params(),
+            Type::Vector(Box::new(Type::Reference(
+                true,
+                Box::new(Type::Primitive(PrimitiveType::U64))
+            )))
+        );
+    }
+
+    #[test]
+    fn preserve_concrete_types() {
+        let u8_ty = Type::Primitive(PrimitiveType::U8);
+        assert_eq!(u8_ty.clone().erase_type_params(), u8_ty);
+
+        let vec_bool = Type::Vector(Box::new(Type::Primitive(PrimitiveType::Bool)));
+        assert_eq!(vec_bool.clone().erase_type_params(), vec_bool);
+    }
 
     #[test]
     fn primitive_bit_widths() {

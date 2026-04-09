@@ -7181,6 +7181,8 @@ dependencies = [
  "sp1-sdk",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

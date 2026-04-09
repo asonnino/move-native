@@ -84,8 +84,8 @@ impl<'env> DatatypeEnv<'env> {
 pub(crate) struct LlvmContext<'ctx> {
     env: GlobalEnv,
     pub(crate) context: &'ctx Context,
-    pub(crate) module: Module<'ctx>,
-    pub(crate) builder: Builder<'ctx>,
+    module: Module<'ctx>,
+    builder: Builder<'ctx>,
     // Cached integer types
     pub(crate) i8_type: IntType<'ctx>,
     pub(crate) i16_type: IntType<'ctx>,
@@ -192,6 +192,14 @@ impl<'ctx> LlvmContext<'ctx> {
         let llvm_module = context.create_module("test");
         let builder = context.create_builder();
         LlvmContext::from_parts(context, llvm_module, builder, GlobalEnv::new())
+    }
+
+    pub(crate) fn module(&self) -> &Module<'ctx> {
+        &self.module
+    }
+
+    pub(crate) fn builder(&self) -> &Builder<'ctx> {
+        &self.builder
     }
 
     /// Look up a datatype definition by its handle.

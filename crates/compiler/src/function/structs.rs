@@ -68,7 +68,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         for (i, source) in sources.iter().enumerate() {
             let field_val = self.state.load_value(*source)?;
             agg = llvm
-                .builder
+                .builder()
                 .build_insert_value(agg, field_val, to_field_index(i)?, &format!("pack_{i}"))?
                 .into_struct_value();
         }
@@ -90,7 +90,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let struct_env = self.state.ctx().get_struct_env(handle)?;
         let field_count = struct_env.get_fields().count();
         for (i, destination) in destinations.iter().enumerate().take(field_count) {
-            let field_val = llvm.builder.build_extract_value(
+            let field_val = llvm.builder().build_extract_value(
                 struct_val,
                 to_field_index(i)?,
                 &format!("unpack_{i}"),
@@ -119,7 +119,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let struct_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let type_args = self.state.instantiate_types(type_args);
         let struct_ty = self.state.lower_type(&handle.to_type(type_args))?;
-        let field_ptr = llvm.builder.build_struct_gep(
+        let field_ptr = llvm.builder().build_struct_gep(
             struct_ty,
             struct_ptr,
             to_field_index(offset)?,
@@ -139,7 +139,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let struct_val = self.state.load_struct(self.state.source(sources, 0)?)?;
         let field_val =
-            llvm.builder
+            llvm.builder()
                 .build_extract_value(struct_val, to_field_index(offset)?, "getfield")?;
         self.state
             .store(self.state.destination(destinations, 0)?, field_val)?;
@@ -150,7 +150,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let pointee_ty = self.state.pointee_type(self.state.source(sources, 0)?)?;
-        let val = llvm.builder.build_load(pointee_ty, ptr, "read_ref")?;
+        let val = llvm.builder().build_load(pointee_ty, ptr, "read_ref")?;
         self.state
             .store(self.state.destination(destinations, 0)?, val)?;
         Ok(())
@@ -160,7 +160,7 @@ impl<'a, 'b, 'ctx> StructEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
         let val = self.state.load_value(self.state.source(sources, 1)?)?;
-        llvm.builder.build_store(ptr, val)?;
+        llvm.builder().build_store(ptr, val)?;
         Ok(())
     }
 

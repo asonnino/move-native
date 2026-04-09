@@ -3,7 +3,7 @@
 
 use move_stackless_bytecode::stackless_bytecode::Constant;
 
-use super::state::{CallSiteValueExt, FunctionState};
+use super::state::{BuilderExt, FunctionState};
 use crate::error::{CompileError, CompileResult};
 
 /// Emits LLVM IR for Move constant values.
@@ -29,10 +29,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 llvm.i128_type.const_int_arbitrary_precision(&words).into()
             }
             Constant::Address(big) => {
-                let bytes = big.to_bytes_le();
-                let mut buf = [0u8; 32];
-                let len = bytes.len().min(32);
-                buf[..len].copy_from_slice(&bytes[..len]);
+                let buf = Self::biguint_to_le_32(big);
                 let words: [u64; 4] = [
                     u64::from_le_bytes(buf[0..8].try_into().unwrap()),
                     u64::from_le_bytes(buf[8..16].try_into().unwrap()),
@@ -58,10 +55,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 );
                 let ptr = global.as_pointer_value();
                 let len = llvm.i64_type.const_int(bytes.len() as u64, false);
-                let call =
-                    llvm.builder
-                        .build_call(func, &[ptr.into(), len.into()], "const_vec_u8")?;
-                call.into_basic_value()?
+                llvm.builder().build_call_returning(
+                    func,
+                    &[ptr.into(), len.into()],
+                    "const_vec_u8",
+                )?
             }
             Constant::AddressArray(addresses) => {
                 let id = self.state.next_const_id()?;
@@ -76,10 +74,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                 );
                 let ptr = global.as_pointer_value();
                 let count = llvm.i64_type.const_int(addresses.len() as u64, false);
-                let call =
-                    llvm.builder
-                        .build_call(func, &[ptr.into(), count.into()], "const_vec_addr")?;
-                call.into_basic_value()?
+                llvm.builder().build_call_returning(
+                    func,
+                    &[ptr.into(), count.into()],
+                    "const_vec_addr",
+                )?
             }
             Constant::Vector(elements) => {
                 if elements.is_empty() {
@@ -96,12 +95,12 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         .declare_external("__move_rt_const_vec", function_type);
                     let null = llvm.ptr_type.const_null();
                     let zero = llvm.i64_type.const_zero();
-                    let call = llvm.builder.build_call(
+                    let val = llvm.builder().build_call_returning(
                         function,
                         &[null.into(), zero.into(), zero.into()],
                         "const_vec_empty",
                     )?;
-                    return self.state.store(destination, call.into_basic_value()?);
+                    return self.state.store(destination, val);
                 }
                 // Vector of ByteArrays → vector<vector<u8>>, needs a dedicated
                 // runtime helper because elements are variable-length.
@@ -119,12 +118,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                         .declare_external("__move_rt_const_vec_vec_u8", function_type);
                     let ptr = global.as_pointer_value();
                     let count = llvm.i64_type.const_int(elements.len() as u64, false);
-                    let call = llvm.builder.build_call(
+                    llvm.builder().build_call_returning(
                         function,
                         &[ptr.into(), count.into()],
                         "const_vec_vec_u8",
-                    )?;
-                    call.into_basic_value()?
+                    )?
                 } else {
                     let function_type = llvm.ptr_type.fn_type(
                         &[
@@ -145,12 +143,11 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     let ptr = global.as_pointer_value();
                     let count = llvm.i64_type.const_int(elements.len() as u64, false);
                     let esz = llvm.i64_type.const_int(elem_size as u64, false);
-                    let call = llvm.builder.build_call(
+                    llvm.builder().build_call_returning(
                         function,
                         &[ptr.into(), count.into(), esz.into()],
                         "const_vec",
-                    )?;
-                    call.into_basic_value()?
+                    )?
                 }
             }
         };
@@ -158,14 +155,19 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
     }
 
     /// Serialize an `AddressArray` into a flat buffer of 32-byte little-endian addresses.
+    /// Convert a `BigUint` to a 32-byte little-endian array, zero-padded.
+    fn biguint_to_le_32(big: &num_bigint::BigUint) -> [u8; 32] {
+        let bytes = big.to_bytes_le();
+        let mut buf = [0u8; 32];
+        let len = bytes.len().min(32);
+        buf[..len].copy_from_slice(&bytes[..len]);
+        buf
+    }
+
     fn serialize_address_array(addresses: &[num_bigint::BigUint]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(addresses.len() * 32);
         for addr in addresses {
-            let bytes = addr.to_bytes_le();
-            let mut padded = [0u8; 32];
-            let len = bytes.len().min(32);
-            padded[..len].copy_from_slice(&bytes[..len]);
-            buf.extend_from_slice(&padded);
+            buf.extend_from_slice(&Self::biguint_to_le_32(addr));
         }
         buf
     }
@@ -217,11 +219,7 @@ impl<'a, 'b, 'ctx> ConstantEmitter<'a, 'b, 'ctx> {
                     buf.extend_from_slice(&hi.to_le_bytes());
                 }
                 Constant::Address(big) => {
-                    let bytes = big.to_bytes_le();
-                    let mut padded = [0u8; 32];
-                    let len = bytes.len().min(32);
-                    padded[..len].copy_from_slice(&bytes[..len]);
-                    buf.extend_from_slice(&padded);
+                    buf.extend_from_slice(&Self::biguint_to_le_32(big));
                 }
                 other => return Err(CompileError::not_implemented(other)),
             }
