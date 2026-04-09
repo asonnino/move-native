@@ -26,7 +26,7 @@ fn fixture_with_dependencies() -> ModuleBundle {
 fn add_module_from_mv_file(#[case] target: Target) {
     let asm = fixture().compile_checked("M", &target);
     assert!(
-        asm.contains("add") || asm.contains("addi"),
+        asm.contains("\tadd\t") || asm.contains("\tadds\t") || asm.contains("\taddi\t"),
         "assembly should contain an add instruction"
     );
 }

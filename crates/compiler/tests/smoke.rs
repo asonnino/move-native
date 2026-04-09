@@ -211,7 +211,7 @@ fn serialization_round_trip(#[case] target: Target) {
     let asm = compiler::compile(&target, &bytecode).expect("compile failed");
 
     assert!(
-        asm.contains("add") || asm.contains("addi"),
+        asm.contains("\tadd\t") || asm.contains("\tadds\t") || asm.contains("\taddi\t"),
         "should contain add instruction"
     );
     assert!(asm.contains("\tret"), "should contain ret instruction");

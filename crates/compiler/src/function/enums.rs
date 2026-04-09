@@ -217,6 +217,7 @@ mod tests {
             )
             .compile();
         assert!(asm.contains("_mv_0x0_M_make_none"), "missing symbol\n{asm}");
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 
     #[test]
@@ -235,6 +236,7 @@ mod tests {
             )
             .compile();
         assert!(asm.contains("_mv_0x0_M_make_some"), "missing symbol\n{asm}");
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 
     #[test]
@@ -256,6 +258,7 @@ mod tests {
             asm.contains("_mv_0x0_M_unwrap_some"),
             "missing symbol\n{asm}"
         );
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 
     #[test]
@@ -280,6 +283,7 @@ mod tests {
             asm.contains("_mv_0x0_M_borrow_some"),
             "missing symbol\n{asm}"
         );
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 
     #[test]
@@ -305,5 +309,6 @@ mod tests {
             asm.contains("_mv_0x0_M_borrow_some_mut"),
             "missing symbol\n{asm}"
         );
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 }
