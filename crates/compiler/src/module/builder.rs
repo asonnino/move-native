@@ -68,6 +68,43 @@ impl CompiledModuleBuilder {
         }
     }
 
+    /// Allocate an identifier, param/return signatures, and a function handle.
+    ///
+    /// Shared bookkeeping used by all function-adding methods.
+    fn allocate_function_handle(
+        &mut self,
+        name: &str,
+        params: Vec<SignatureToken>,
+        returns: Vec<SignatureToken>,
+        type_parameters: Vec<AbilitySet>,
+        module: ModuleHandleIndex,
+    ) -> FunctionHandleIndex {
+        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
+        self.identifiers.push(Identifier::new(name).unwrap());
+
+        let params_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(params));
+        let returns_idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(returns));
+
+        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
+        self.function_handles.push(FunctionHandle {
+            module,
+            name: name_idx,
+            parameters: params_idx,
+            return_: returns_idx,
+            type_parameters,
+        });
+        handle_idx
+    }
+
+    /// Allocate a locals signature and return its index.
+    fn allocate_locals(&mut self, locals: Vec<SignatureToken>) -> SignatureIndex {
+        let idx = SignatureIndex(self.signatures.len() as u16);
+        self.signatures.push(Signature(locals));
+        idx
+    }
+
     /// Add a public function.
     ///
     /// The `FunctionHandleIndex` equals the insertion order (0, 1, …),
@@ -80,25 +117,9 @@ impl CompiledModuleBuilder {
         locals: Vec<SignatureToken>,
         code: Vec<Bytecode>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-        let locals_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(locals));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: vec![],
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, vec![], ModuleHandleIndex(0));
+        let locals_idx = self.allocate_locals(locals);
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -110,7 +131,6 @@ impl CompiledModuleBuilder {
                 jump_tables: vec![],
             }),
         });
-
         self
     }
 
@@ -124,25 +144,9 @@ impl CompiledModuleBuilder {
         code: Vec<Bytecode>,
         jump_tables: Vec<VariantJumpTable>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-        let locals_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(locals));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: vec![],
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, vec![], ModuleHandleIndex(0));
+        let locals_idx = self.allocate_locals(locals);
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -154,7 +158,6 @@ impl CompiledModuleBuilder {
                 jump_tables,
             }),
         });
-
         self
     }
 
@@ -165,23 +168,8 @@ impl CompiledModuleBuilder {
         params: Vec<SignatureToken>,
         returns: Vec<SignatureToken>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: vec![],
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, vec![], ModuleHandleIndex(0));
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -189,7 +177,6 @@ impl CompiledModuleBuilder {
             acquires_global_resources: vec![],
             code: None,
         });
-
         self
     }
 
@@ -201,23 +188,8 @@ impl CompiledModuleBuilder {
         params: Vec<SignatureToken>,
         returns: Vec<SignatureToken>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: type_params,
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, type_params, ModuleHandleIndex(0));
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -225,7 +197,6 @@ impl CompiledModuleBuilder {
             acquires_global_resources: vec![],
             code: None,
         });
-
         self
     }
 
@@ -239,25 +210,9 @@ impl CompiledModuleBuilder {
         locals: Vec<SignatureToken>,
         code: Vec<Bytecode>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-        let locals_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(locals));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: type_params,
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, type_params, ModuleHandleIndex(0));
+        let locals_idx = self.allocate_locals(locals);
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -269,7 +224,6 @@ impl CompiledModuleBuilder {
                 jump_tables: vec![],
             }),
         });
-
         self
     }
 
@@ -283,25 +237,9 @@ impl CompiledModuleBuilder {
         code: Vec<Bytecode>,
         acquires: Vec<StructDefinitionIndex>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-        let locals_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(locals));
-
-        let handle_idx = FunctionHandleIndex(self.function_handles.len() as u16);
-        self.function_handles.push(FunctionHandle {
-            module: ModuleHandleIndex(0),
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: vec![],
-        });
-
+        let handle_idx =
+            self.allocate_function_handle(name, params, returns, vec![], ModuleHandleIndex(0));
+        let locals_idx = self.allocate_locals(locals);
         self.function_definitions.push(FunctionDefinition {
             function: handle_idx,
             visibility: Visibility::Public,
@@ -313,7 +251,6 @@ impl CompiledModuleBuilder {
                 jump_tables: vec![],
             }),
         });
-
         self
     }
 
@@ -542,22 +479,7 @@ impl CompiledModuleBuilder {
         params: Vec<SignatureToken>,
         returns: Vec<SignatureToken>,
     ) -> Self {
-        let name_idx = IdentifierIndex(self.identifiers.len() as u16);
-        self.identifiers.push(Identifier::new(name).unwrap());
-
-        let params_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(params));
-        let returns_idx = SignatureIndex(self.signatures.len() as u16);
-        self.signatures.push(Signature(returns));
-
-        self.function_handles.push(FunctionHandle {
-            module,
-            name: name_idx,
-            parameters: params_idx,
-            return_: returns_idx,
-            type_parameters: vec![],
-        });
-
+        self.allocate_function_handle(name, params, returns, vec![], module);
         self
     }
 

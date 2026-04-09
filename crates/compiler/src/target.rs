@@ -3,10 +3,6 @@
 
 use inkwell::targets::InitializationConfig;
 
-pub(crate) const CPU: &str = "generic";
-/// Reserve x23 so LLVM never allocates the gas register.
-pub(crate) const FEATURES: &str = "+reserve-x23";
-
 /// Target architecture for code generation.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -18,20 +14,29 @@ pub enum Target {
 }
 
 impl Target {
+    pub(crate) const CPU: &str = "generic";
+    /// Reserve x23 so LLVM never allocates the gas register.
+    const AARCH64_FEATURES: &str = "+reserve-x23";
+
+    /// Returns the target matching the host architecture, if supported.
+    pub fn try_host() -> Option<Self> {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Some(Self::Aarch64)
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            None
+        }
+    }
+
     /// Returns the target matching the host architecture.
     ///
     /// # Panics
     ///
     /// Panics if the host architecture is not supported.
     pub fn host() -> Self {
-        #[cfg(target_arch = "aarch64")]
-        {
-            Self::Aarch64
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            panic!("unsupported host architecture; only aarch64 is supported")
-        }
+        Self::try_host().expect("unsupported host architecture; only aarch64 is supported")
     }
 
     pub(crate) fn triple(&self) -> &'static str {
@@ -53,7 +58,7 @@ impl Target {
     /// Target-specific LLVM feature flags.
     pub(crate) fn features(&self) -> &'static str {
         match self {
-            Self::Aarch64 => FEATURES,
+            Self::Aarch64 => Self::AARCH64_FEATURES,
             Self::Riscv64 => "",
         }
     }

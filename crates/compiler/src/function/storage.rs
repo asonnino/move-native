@@ -120,10 +120,10 @@ impl<'a, 'b, 'ctx> StorageEmitter<'a, 'b, 'ctx> {
             .map(|s| self.state.load_value(*s).map(|v| v.into()))
             .collect::<Result<_, _>>()?;
 
-        let call = llvm.builder.build_call(function_value, &args, symbol)?;
+        let call = llvm.builder().build_call(function_value, &args, symbol)?;
 
         if !destinations.is_empty() {
-            let ret_val = call.into_basic_value()?;
+            let ret_val = call.to_basic_value()?;
             self.state
                 .store(self.state.destination(destinations, 0)?, ret_val)?;
         }

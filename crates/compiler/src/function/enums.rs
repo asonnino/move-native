@@ -69,11 +69,11 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         // maintained. See compare_enum_values in arithmetic.rs.
         let mut enum_value = enum_type.const_zero();
         enum_value = llvm
-            .builder
+            .builder()
             .build_insert_value(enum_value, tag, 0, "enum_tag")?
             .into_struct_value();
         enum_value = llvm
-            .builder
+            .builder()
             .build_insert_value(
                 enum_value,
                 payload,
@@ -103,7 +103,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
             RefType::ByValue => {
                 let enum_value = self.state.load_struct(self.state.source(sources, 0)?)?;
                 let payload = llvm
-                    .builder
+                    .builder()
                     .build_extract_value(
                         enum_value,
                         variant.payload_field_index()?,
@@ -112,7 +112,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                     .into_struct_value();
 
                 for (i, destination) in destinations.iter().enumerate() {
-                    let field = llvm.builder.build_extract_value(
+                    let field = llvm.builder().build_extract_value(
                         payload,
                         to_field_index(i)?,
                         &format!("variant_field_{i}"),
@@ -122,7 +122,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
             }
             RefType::ByImmRef | RefType::ByMutRef => {
                 let enum_ptr = self.state.load_pointer(self.state.source(sources, 0)?)?;
-                let payload_ptr = llvm.builder.build_struct_gep(
+                let payload_ptr = llvm.builder().build_struct_gep(
                     enum_type,
                     enum_ptr,
                     variant.payload_field_index()?,
@@ -137,7 +137,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
                         ))
                     })?;
                 for (i, destination) in destinations.iter().enumerate() {
-                    let field_ptr = llvm.builder.build_struct_gep(
+                    let field_ptr = llvm.builder().build_struct_gep(
                         payload_type,
                         payload_ptr,
                         to_field_index(i)?,
@@ -179,7 +179,7 @@ impl<'a, 'b, 'ctx> EnumEmitter<'a, 'b, 'ctx> {
         for (i, source) in sources.iter().enumerate() {
             let field = self.state.load_value(*source)?;
             payload = llvm
-                .builder
+                .builder()
                 .build_insert_value(payload, field, to_field_index(i)?, &format!("payload_{i}"))?
                 .into_struct_value();
         }

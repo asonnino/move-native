@@ -11,4 +11,4 @@ pub mod info;
 mod kitchen_sink;
 
 pub use builder::CompiledModuleBuilder;
-pub use info::ModuleInfo;
+pub use info::{FunctionInfo, ModuleInfo};

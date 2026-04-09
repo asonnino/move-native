@@ -5,33 +5,56 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use inkwell::basic_block::BasicBlock;
+use inkwell::builder::Builder;
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{
-    BasicValueEnum, CallSiteValue, FunctionValue, IntValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, IntValue, PointerValue,
+    StructValue,
 };
 use move_model::model::FunctionEnv as MoveFunctionEnv;
-use move_model::ty::{PrimitiveType, Type};
+use move_model::ty::Type;
 use move_stackless_bytecode::function_target::FunctionData;
 use move_stackless_bytecode::stackless_bytecode::{Bytecode, Label};
 
 use crate::context::LlvmContext;
 use crate::error::{CompileError, CompileResult, to_field_index};
-use crate::types::TypeLowering;
+use crate::types::{TypeExt, TypeLowering};
 
 /// Extension trait for extracting a `BasicValueEnum` from a call result.
 pub(crate) trait CallSiteValueExt<'ctx> {
-    fn into_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>>;
+    fn to_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>>;
 }
 
 impl<'ctx> CallSiteValueExt<'ctx> for CallSiteValue<'ctx> {
-    fn into_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>> {
+    fn to_basic_value(self) -> CompileResult<BasicValueEnum<'ctx>> {
         let inkwell::values::ValueKind::Basic(v) = self.try_as_basic_value() else {
             return Err(CompileError::TypeMismatch(
                 "expected non-void return from call".into(),
             ));
         };
         Ok(v)
+    }
+}
+
+/// Extension trait for calling a function and extracting its return value in one step.
+pub(crate) trait BuilderExt<'ctx> {
+    fn build_call_returning(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CompileResult<BasicValueEnum<'ctx>>;
+}
+
+impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
+    fn build_call_returning(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CompileResult<BasicValueEnum<'ctx>> {
+        self.build_call(function, args, name)?.to_basic_value()
     }
 }
 
@@ -59,12 +82,12 @@ impl<'ctx> Local<'ctx> {
     ) -> CompileResult<Self> {
         let mty = if type_params.is_empty() {
             // Erase surviving type parameters (phantom) to a dummy concrete type.
-            FunctionState::erase_type_params(ty.clone())
+            ty.clone().erase_type_params()
         } else {
-            FunctionState::erase_type_params(ty.instantiate(type_params))
+            ty.instantiate(type_params).erase_type_params()
         };
         let llvm_ty = TypeLowering::new(ctx).lower_type(&mty)?;
-        let alloca = ctx.builder.build_alloca(llvm_ty, name)?;
+        let alloca = ctx.builder().build_alloca(llvm_ty, name)?;
         Ok(Self {
             mty,
             llvm_ty,
@@ -116,7 +139,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             let parameter = function
                 .get_nth_param(to_field_index(i)?)
                 .expect("LLVM parameter count mismatch");
-            ctx.builder.build_store(local.alloca, parameter)?;
+            ctx.builder().build_store(local.alloca, parameter)?;
         }
 
         let mut label_blocks = BTreeMap::new();
@@ -157,7 +180,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         let local = self.get_local(idx)?;
         Ok(self
             .ctx
-            .builder
+            .builder()
             .build_load(local.llvm_ty, local.alloca, &format!("t{idx}"))?)
     }
 
@@ -196,7 +219,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
 
     pub(crate) fn store(&self, idx: usize, val: BasicValueEnum<'ctx>) -> CompileResult<()> {
         let local = self.get_local(idx)?;
-        self.ctx.builder.build_store(local.alloca, val)?;
+        self.ctx.builder().build_store(local.alloca, val)?;
         Ok(())
     }
 
@@ -230,7 +253,7 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         };
         instantiated
             .into_iter()
-            .map(Self::erase_type_params)
+            .map(TypeExt::erase_type_params)
             .collect()
     }
 
@@ -290,33 +313,12 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
         })?;
         let arr_ty = ctx.i8_type.array_type(len);
         let arr_val = ctx.context.const_string(data, false);
-        let global = ctx.module.add_global(arr_ty, None, name);
+        let global = ctx.module().add_global(arr_ty, None, name);
         global.set_initializer(&arr_val);
         global.set_constant(true);
         global.set_linkage(Linkage::Private);
         global.set_unnamed_addr(true);
         Ok(global)
-    }
-
-    /// Replace any remaining `TypeParameter` with a dummy concrete type (`U64`).
-    ///
-    /// Surviving type parameters must be phantom (the compiler only compiles
-    /// functions at top level when all type params are phantom), so the
-    /// concrete type chosen does not affect layout or codegen.
-    pub(super) fn erase_type_params(ty: Type) -> Type {
-        match ty {
-            Type::TypeParameter(_) => Type::Primitive(PrimitiveType::U64),
-            Type::Vector(inner) => Type::Vector(Box::new(Self::erase_type_params(*inner))),
-            Type::Reference(m, inner) => {
-                Type::Reference(m, Box::new(Self::erase_type_params(*inner)))
-            }
-            Type::Datatype(mid, did, args) => Type::Datatype(
-                mid,
-                did,
-                args.into_iter().map(Self::erase_type_params).collect(),
-            ),
-            other => other,
-        }
     }
 
     /// Checked access to a source operand index.
@@ -343,65 +345,5 @@ impl<'a, 'ctx> FunctionState<'a, 'ctx> {
             BasicValueEnum::ArrayValue(_) => "array",
             _ => "other",
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use move_model::ty::{PrimitiveType, Type};
-
-    use super::FunctionState;
-
-    #[test]
-    fn erase_bare_type_param() {
-        let ty = Type::TypeParameter(0);
-        let erased = FunctionState::erase_type_params(ty);
-        assert_eq!(erased, Type::Primitive(PrimitiveType::U64));
-    }
-
-    #[test]
-    fn erase_nested_in_vector() {
-        let ty = Type::Vector(Box::new(Type::TypeParameter(1)));
-        let erased = FunctionState::erase_type_params(ty);
-        assert_eq!(
-            erased,
-            Type::Vector(Box::new(Type::Primitive(PrimitiveType::U64)))
-        );
-    }
-
-    #[test]
-    fn erase_nested_in_reference() {
-        let ty = Type::Reference(true, Box::new(Type::TypeParameter(0)));
-        let erased = FunctionState::erase_type_params(ty);
-        assert_eq!(
-            erased,
-            Type::Reference(true, Box::new(Type::Primitive(PrimitiveType::U64)))
-        );
-    }
-
-    #[test]
-    fn erase_deeply_nested() {
-        // Vector<&mut TypeParameter(2)>
-        let ty = Type::Vector(Box::new(Type::Reference(
-            true,
-            Box::new(Type::TypeParameter(2)),
-        )));
-        let erased = FunctionState::erase_type_params(ty);
-        assert_eq!(
-            erased,
-            Type::Vector(Box::new(Type::Reference(
-                true,
-                Box::new(Type::Primitive(PrimitiveType::U64))
-            )))
-        );
-    }
-
-    #[test]
-    fn preserve_concrete_types() {
-        let u8_ty = Type::Primitive(PrimitiveType::U8);
-        assert_eq!(FunctionState::erase_type_params(u8_ty.clone()), u8_ty);
-
-        let vec_bool = Type::Vector(Box::new(Type::Primitive(PrimitiveType::Bool)));
-        assert_eq!(FunctionState::erase_type_params(vec_bool.clone()), vec_bool,);
     }
 }

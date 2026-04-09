@@ -11,7 +11,7 @@ use inkwell::targets::{CodeModel, FileType, RelocMode, TargetMachine, TargetTrip
 use crate::assembly::Assembly;
 use crate::error::{CompileError, CompileResult};
 use crate::object_file::ObjectFile;
-use crate::target::{CPU, Target};
+use crate::target::Target;
 
 /// Owns the LLVM `TargetMachine` and drives optimization and code emission.
 pub(crate) struct CodegenBackend {
@@ -30,7 +30,7 @@ impl CodegenBackend {
         let machine = llvm_target
             .create_target_machine(
                 &triple,
-                CPU,
+                Target::CPU,
                 target.features(),
                 OptimizationLevel::Default,
                 RelocMode::PIC,
@@ -100,10 +100,8 @@ impl CodegenBackend {
             if !trimmed.contains("x23") && !trimmed.contains("w23") {
                 continue;
             }
-            if trimmed.starts_with("stp\t")
-                || trimmed.starts_with("ldp\t")
-                || trimmed.starts_with("stp ")
-                || trimmed.starts_with("ldp ")
+            if Self::starts_with_mnemonic(trimmed, "stp")
+                || Self::starts_with_mnemonic(trimmed, "ldp")
                 || trimmed.starts_with(';')
                 || trimmed.starts_with('.')
                 || trimmed.starts_with("//")
@@ -113,6 +111,15 @@ impl CodegenBackend {
             return true;
         }
         false
+    }
+
+    /// Check whether `line` begins with `mnemonic` followed by whitespace.
+    fn starts_with_mnemonic(line: &str, mnemonic: &str) -> bool {
+        line.starts_with(mnemonic)
+            && line
+                .as_bytes()
+                .get(mnemonic.len())
+                .is_some_and(|&b| b == b'\t' || b == b' ')
     }
 }
 

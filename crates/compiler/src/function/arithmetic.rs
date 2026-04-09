@@ -7,7 +7,7 @@ use inkwell::values::{BasicValueEnum, IntValue, StructValue};
 use move_model::ty::{PrimitiveType, Type};
 use move_stackless_bytecode::stackless_bytecode::Operation;
 
-use super::state::{CallSiteValueExt, FunctionState};
+use super::state::{BuilderExt, FunctionState};
 use crate::context::{DatatypeEnv, DatatypeHandle};
 use crate::error::{CompileError, CompileResult, to_field_index};
 use crate::layout::EnumLayout;
@@ -87,7 +87,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
     fn emit_abort_if(&self, condition: IntValue<'ctx>) -> CompileResult<()> {
         let llvm = self.state.ctx();
         let current_block = llvm
-            .builder
+            .builder()
             .get_insert_block()
             .expect("builder has no insert block during function compilation");
         let function = current_block
@@ -96,19 +96,19 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let abort_block = llvm.context.append_basic_block(function, "abort");
         let continue_block = llvm.context.append_basic_block(function, "continue");
 
-        llvm.builder
+        llvm.builder()
             .build_conditional_branch(condition, abort_block, continue_block)?;
 
-        llvm.builder.position_at_end(abort_block);
+        llvm.builder().position_at_end(abort_block);
         let abort_function = self.state.declare_external(
             "__move_rt_arithmetic_error",
             llvm.context.void_type().fn_type(&[], false),
         );
-        llvm.builder
+        llvm.builder()
             .build_call(abort_function, &[], "arithmetic_error")?;
-        llvm.builder.build_unreachable()?;
+        llvm.builder().build_unreachable()?;
 
-        llvm.builder.position_at_end(continue_block);
+        llvm.builder().position_at_end(continue_block);
         Ok(())
     }
 
@@ -122,56 +122,56 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         match operation {
             Operation::Add => {
-                let result = llvm.builder.build_int_add(lhs, rhs, "add")?;
+                let result = llvm.builder().build_int_add(lhs, rhs, "add")?;
                 let overflow =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::ULT, result, lhs, "add_ov")?;
                 self.emit_abort_if(overflow)?;
                 Ok(result)
             }
             Operation::Sub => {
                 let underflow =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::ULT, lhs, rhs, "sub_uf")?;
                 self.emit_abort_if(underflow)?;
-                Ok(llvm.builder.build_int_sub(lhs, rhs, "sub")?)
+                Ok(llvm.builder().build_int_sub(lhs, rhs, "sub")?)
             }
             Operation::Mul => {
-                let result = llvm.builder.build_int_mul(lhs, rhs, "mul")?;
+                let result = llvm.builder().build_int_mul(lhs, rhs, "mul")?;
                 let zero = rhs.get_type().const_int(0, false);
                 let one = rhs.get_type().const_int(1, false);
                 let rhs_nonzero =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::NE, rhs, zero, "rhs_nz")?;
                 let safe_divisor = llvm
-                    .builder
+                    .builder()
                     .build_select(rhs_nonzero, rhs, one, "safe_div")?
                     .into_int_value();
                 let div_back =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_unsigned_div(result, safe_divisor, "div_back")?;
                 let mismatch =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::NE, div_back, lhs, "mul_mm")?;
-                let overflow = llvm.builder.build_and(rhs_nonzero, mismatch, "mul_ov")?;
+                let overflow = llvm.builder().build_and(rhs_nonzero, mismatch, "mul_ov")?;
                 self.emit_abort_if(overflow)?;
                 Ok(result)
             }
             Operation::Div => {
                 let zero = rhs.get_type().const_int(0, false);
                 let is_zero =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::EQ, rhs, zero, "div_z")?;
                 self.emit_abort_if(is_zero)?;
-                Ok(llvm.builder.build_int_unsigned_div(lhs, rhs, "div")?)
+                Ok(llvm.builder().build_int_unsigned_div(lhs, rhs, "div")?)
             }
             Operation::Mod => {
                 let zero = rhs.get_type().const_int(0, false);
                 let is_zero =
-                    llvm.builder
+                    llvm.builder()
                         .build_int_compare(IntPredicate::EQ, rhs, zero, "mod_z")?;
                 self.emit_abort_if(is_zero)?;
-                Ok(llvm.builder.build_int_unsigned_rem(lhs, rhs, "mod")?)
+                Ok(llvm.builder().build_int_unsigned_rem(lhs, rhs, "mod")?)
             }
             _ => unreachable!("emit_arithmetic called with non-arithmetic op"),
         }
@@ -192,9 +192,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             Operation::Ge => IntPredicate::UGE,
             _ => unreachable!("emit_ord_cmp called with non-comparison op"),
         };
-        let cmp = llvm.builder.build_int_compare(pred, lhs, rhs, "cmp")?;
+        let cmp = llvm.builder().build_int_compare(pred, lhs, rhs, "cmp")?;
         Ok(llvm
-            .builder
+            .builder()
             .build_int_z_extend(cmp, llvm.i8_type, "cmp_ext")?)
     }
 
@@ -212,7 +212,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let eq = self.emit_eq_values(lhs, rhs, &mty, 0)?;
         let result = if matches!(operation, Operation::Neq) {
             let one = llvm.i8_type.const_int(1, false);
-            llvm.builder.build_xor(eq, one, "neq")?
+            llvm.builder().build_xor(eq, one, "neq")?
         } else {
             eq
         };
@@ -250,10 +250,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let lhs = lhs.into_int_value();
                 let rhs = rhs.into_int_value();
                 let cmp = llvm
-                    .builder
+                    .builder()
                     .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")?;
                 Ok(llvm
-                    .builder
+                    .builder()
                     .build_int_z_extend(cmp, llvm.i8_type, "eq_ext")?)
             }
 
@@ -262,8 +262,8 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                 let lhs_ptr = lhs.into_pointer_value();
                 let rhs_ptr = rhs.into_pointer_value();
                 let pointee_ty = self.state.lower_type(inner)?;
-                let lhs_val = llvm.builder.build_load(pointee_ty, lhs_ptr, "deref_l")?;
-                let rhs_val = llvm.builder.build_load(pointee_ty, rhs_ptr, "deref_r")?;
+                let lhs_val = llvm.builder().build_load(pointee_ty, lhs_ptr, "deref_l")?;
+                let rhs_val = llvm.builder().build_load(pointee_ty, rhs_ptr, "deref_r")?;
                 self.emit_eq_values(lhs_val, rhs_val, inner, depth + 1)
             }
 
@@ -275,10 +275,10 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
                     .i8_type
                     .fn_type(&[llvm.ptr_type.into(), llvm.ptr_type.into()], false);
                 let func = self.state.declare_external("__move_rt_vec_eq", fn_type);
-                let result =
-                    llvm.builder
-                        .build_call(func, &[lhs_ptr.into(), rhs_ptr.into()], "vec_eq")?;
-                Ok(result.into_basic_value()?.into_int_value())
+                Ok(llvm
+                    .builder()
+                    .build_call_returning(func, &[lhs_ptr.into(), rhs_ptr.into()], "vec_eq")?
+                    .into_int_value())
             }
 
             // Structs: field-by-field comparison, AND-reduce
@@ -322,18 +322,18 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let mut acc = llvm.i8_type.const_int(1, false);
         for (i, field_ty) in field_types.iter().enumerate() {
-            let lhs_field = llvm.builder.build_extract_value(
+            let lhs_field = llvm.builder().build_extract_value(
                 lhs_struct,
                 to_field_index(i)?,
                 &format!("l_{i}"),
             )?;
-            let rhs_field = llvm.builder.build_extract_value(
+            let rhs_field = llvm.builder().build_extract_value(
                 rhs_struct,
                 to_field_index(i)?,
                 &format!("r_{i}"),
             )?;
             let field_eq = self.emit_eq_values(lhs_field, rhs_field, field_ty, depth + 1)?;
-            acc = llvm.builder.build_and(acc, field_eq, "and_eq")?;
+            acc = llvm.builder().build_and(acc, field_eq, "and_eq")?;
         }
         Ok(acc)
     }
@@ -361,33 +361,33 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         );
 
         let lhs_tag = llvm
-            .builder
+            .builder()
             .build_extract_value(lhs_struct, 0, "lhs_enum_tag")?
             .into_int_value();
         let rhs_tag = llvm
-            .builder
+            .builder()
             .build_extract_value(rhs_struct, 0, "rhs_enum_tag")?
             .into_int_value();
         let tag_eq =
-            llvm.builder
+            llvm.builder()
                 .build_int_compare(IntPredicate::EQ, lhs_tag, rhs_tag, "enum_tag_eq")?;
         let mut acc = llvm
-            .builder
+            .builder()
             .build_int_z_extend(tag_eq, llvm.i8_type, "enum_tag_eq_i8")?;
 
         for variant in layout.variants() {
             let payload_types = variant.payload_field_types(type_args);
             let lhs_payload = llvm
-                .builder
+                .builder()
                 .build_extract_value(lhs_struct, variant.payload_field_index()?, "lhs_payload")?
                 .into_struct_value();
             let rhs_payload = llvm
-                .builder
+                .builder()
                 .build_extract_value(rhs_struct, variant.payload_field_index()?, "rhs_payload")?
                 .into_struct_value();
             let payload_eq =
                 self.compare_struct_fields(lhs_payload, rhs_payload, &payload_types, depth)?;
-            acc = llvm.builder.build_and(acc, payload_eq, "enum_eq")?;
+            acc = llvm.builder().build_and(acc, payload_eq, "enum_eq")?;
         }
 
         Ok(acc)
@@ -402,9 +402,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(match operation {
-            Operation::BitAnd => llvm.builder.build_and(lhs, rhs, "and")?,
-            Operation::BitOr => llvm.builder.build_or(lhs, rhs, "or")?,
-            Operation::Xor => llvm.builder.build_xor(lhs, rhs, "xor")?,
+            Operation::BitAnd => llvm.builder().build_and(lhs, rhs, "and")?,
+            Operation::BitOr => llvm.builder().build_or(lhs, rhs, "or")?,
+            Operation::Xor => llvm.builder().build_xor(lhs, rhs, "xor")?,
             _ => unreachable!("emit_bitwise called with non-bitwise op"),
         })
     }
@@ -418,7 +418,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let val = self.state.load_int(self.state.source(sources, 0)?)?;
         let amt = self.state.load_int(self.state.source(sources, 1)?)?;
         let amt = if amt.get_type().get_bit_width() < val.get_type().get_bit_width() {
-            llvm.builder
+            llvm.builder()
                 .build_int_z_extend(amt, val.get_type(), "shl_ext")?
         } else if amt.get_type().get_bit_width() > val.get_type().get_bit_width() {
             return Err(CompileError::TypeMismatch(
@@ -432,14 +432,14 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
             .get_type()
             .const_int(val.get_type().get_bit_width() as u64, false);
         let out_of_range =
-            llvm.builder
+            llvm.builder()
                 .build_int_compare(IntPredicate::UGE, amt, bit_width, "shr_oor")?;
         self.emit_abort_if(out_of_range)?;
 
         Ok(if matches!(operation, Operation::Shl) {
-            llvm.builder.build_left_shift(val, amt, "shl")?
+            llvm.builder().build_left_shift(val, amt, "shl")?
         } else {
-            llvm.builder.build_right_shift(val, amt, false, "shr")?
+            llvm.builder().build_right_shift(val, amt, false, "shr")?
         })
     }
 
@@ -452,9 +452,9 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let lhs = self.state.load_int(self.state.source(sources, 0)?)?;
         let rhs = self.state.load_int(self.state.source(sources, 1)?)?;
         Ok(if matches!(operation, Operation::And) {
-            llvm.builder.build_and(lhs, rhs, "land")?
+            llvm.builder().build_and(lhs, rhs, "land")?
         } else {
-            llvm.builder.build_or(lhs, rhs, "lor")?
+            llvm.builder().build_or(lhs, rhs, "lor")?
         })
     }
 
@@ -462,7 +462,7 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         let llvm = self.state.ctx();
         let source = self.state.load_int(self.state.source(sources, 0)?)?;
         let one = llvm.i8_type.const_int(1, false);
-        Ok(llvm.builder.build_xor(source, one, "not")?)
+        Ok(llvm.builder().build_xor(source, one, "not")?)
     }
 
     fn lower_cast(&self, source: usize, target_ty: IntType<'ctx>) -> CompileResult<IntValue<'ctx>> {
@@ -473,16 +473,16 @@ impl<'a, 'b, 'ctx> ArithmeticEmitter<'a, 'b, 'ctx> {
         Ok(if source_bits > destination_bits {
             let shift_amt = val.get_type().const_int(destination_bits as u64, false);
             let high_bits = llvm
-                .builder
+                .builder()
                 .build_right_shift(val, shift_amt, false, "hi")?;
             let zero = val.get_type().const_int(0, false);
             let overflow =
-                llvm.builder
+                llvm.builder()
                     .build_int_compare(IntPredicate::NE, high_bits, zero, "cast_ov")?;
             self.emit_abort_if(overflow)?;
-            llvm.builder.build_int_truncate(val, target_ty, "cast")?
+            llvm.builder().build_int_truncate(val, target_ty, "cast")?
         } else if source_bits < destination_bits {
-            llvm.builder.build_int_z_extend(val, target_ty, "cast")?
+            llvm.builder().build_int_z_extend(val, target_ty, "cast")?
         } else {
             val
         })
