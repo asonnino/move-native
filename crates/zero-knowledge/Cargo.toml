@@ -1,0 +1,25 @@
+[package]
+name = "zero-knowledge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zk"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+compiler = { workspace = true }
+inkwell = { workspace = true }
+object = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Move bytecode
+move-binary-format = { workspace = true }
+
+# SP1 zkVM prover + verifier
+sp1-sdk = "6.0"
+tokio = { version = "1", features = ["full"] }
