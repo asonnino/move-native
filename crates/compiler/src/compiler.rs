@@ -387,6 +387,7 @@ mod tests {
             asm.contains("_mv_0x0_M_use_local"),
             "phantom-generic with T-typed local should compile\n{asm}"
         );
+        assert!(asm.contains("\tret"), "missing ret instruction\n{asm}");
     }
 
     #[test]

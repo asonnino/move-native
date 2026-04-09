@@ -396,6 +396,9 @@ mod tests {
             asm.contains("_mv_0x0_M_call_swap"),
             "missing 'call_swap' symbol\n{asm}"
         );
-        assert!(asm.contains("bl"), "missing 'bl' call instruction\n{asm}");
+        assert!(
+            asm.contains("\tbl\t"),
+            "missing 'bl' call instruction\n{asm}"
+        );
     }
 }

@@ -288,6 +288,10 @@ mod tests {
             asm.contains("_mv_0x0_M_color_to_u64"),
             "missing symbol\n{asm}"
         );
+        assert!(
+            asm.contains("\tcmp\t") || asm.contains("\ttbz\t") || asm.contains("\ttbnz\t"),
+            "missing compare/branch for variant switch\n{asm}"
+        );
     }
 
     #[test]

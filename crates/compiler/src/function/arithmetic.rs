@@ -575,7 +575,7 @@ mod tests {
         let asm = comparison_op_asm("eq_fn", SignatureToken::U64, Bytecode::Eq);
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
         assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
-        assert!(asm.contains("eq"), "missing eq condition\n{asm}");
+        assert!(asm.contains(", eq"), "missing eq condition\n{asm}");
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
         let asm = comparison_op_asm("neq_fn", SignatureToken::U64, Bytecode::Neq);
         assert!(asm.contains("\tcmp\t"), "missing cmp instruction\n{asm}");
         assert!(asm.contains("\tcset\t"), "missing cset instruction\n{asm}");
-        assert!(asm.contains("ne"), "missing ne condition\n{asm}");
+        assert!(asm.contains(", ne"), "missing ne condition\n{asm}");
     }
 
     #[test]
@@ -665,6 +665,10 @@ mod tests {
             Bytecode::CastU8,
         );
         assert!(asm.contains("_mv_0x0_M_trunc_fn"), "missing symbol\n{asm}");
+        assert!(
+            asm.contains("__move_rt_arithmetic_error"),
+            "narrowing cast should emit arithmetic_error\n{asm}"
+        );
     }
 
     #[test]
@@ -676,6 +680,10 @@ mod tests {
             Bytecode::CastU64,
         );
         assert!(asm.contains("_mv_0x0_M_extend_fn"), "missing symbol\n{asm}");
+        assert!(
+            !asm.contains("__move_rt_arithmetic_error"),
+            "widening cast should not emit arithmetic_error\n{asm}"
+        );
     }
 
     #[test]
@@ -687,6 +695,10 @@ mod tests {
             Bytecode::CastU64,
         );
         assert!(asm.contains("_mv_0x0_M_cast_noop"), "missing symbol\n{asm}");
+        assert!(
+            !asm.contains("__move_rt_arithmetic_error"),
+            "same-width cast should not emit arithmetic_error\n{asm}"
+        );
     }
 
     #[test]
@@ -879,12 +891,14 @@ mod tests {
     fn logical_and() {
         let asm = binary_op_asm("and_fn", SignatureToken::Bool, Bytecode::And);
         assert!(asm.contains("_mv_0x0_M_and_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("\tand\t"), "missing and instruction\n{asm}");
     }
 
     #[test]
     fn logical_or() {
         let asm = binary_op_asm("or_fn", SignatureToken::Bool, Bytecode::Or);
         assert!(asm.contains("_mv_0x0_M_or_fn"), "missing symbol\n{asm}");
+        assert!(asm.contains("\torr\t"), "missing orr instruction\n{asm}");
     }
 
     #[test]
