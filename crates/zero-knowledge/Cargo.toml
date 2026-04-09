@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "zero_knowledge"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zk"
 path = "src/main.rs"
@@ -22,4 +26,8 @@ move-binary-format = { workspace = true }
 
 # SP1 zkVM prover + verifier
 sp1-sdk = "6.0"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rstest = { workspace = true }
 tokio = { version = "1", features = ["full"] }
