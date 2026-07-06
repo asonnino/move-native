@@ -9,6 +9,10 @@ description = "Compile Move bytecode to Arm64 via LLVM"
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Exposes `Compiler::new_for_test` for downstream crates' unit tests.
+test-util = []
+
 [dependencies]
 ethnum = "1.5"
 inkwell.workspace = true

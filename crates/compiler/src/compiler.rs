@@ -44,6 +44,16 @@ impl<'ctx> Compiler<'ctx> {
         Ok(Self { ctx, codegen })
     }
 
+    /// Create a compiler over an empty module (no Move functions), for unit
+    /// tests that exercise [`inject_function`](Self::inject_function) in
+    /// isolation. Enabled by the `test-util` feature.
+    #[cfg(feature = "test-util")]
+    pub fn new_for_test(target: &Target, context: &'ctx Context) -> CompileResult<Self> {
+        let ctx = LlvmContext::empty(context);
+        let codegen = CodegenBackend::new(target)?;
+        Ok(Self { ctx, codegen })
+    }
+
     /// Inject an auxiliary, hand-written function into the module and return
     /// its symbol. The IR-level counterpart to
     /// [`set_module_assembly`](Self::set_module_assembly).
