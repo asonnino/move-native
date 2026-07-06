@@ -109,10 +109,13 @@ impl<'a, 'ctx> Sp1Syscall<'a, 'ctx> {
     ) -> CompileResult<()> {
         let context = self.ir.context();
         let fn_ty = context.void_type().fn_type(param_types, false);
+        // The SHA precompiles write guest memory through `a0`/`a1`, so declare a
+        // memory clobber; without it LLVM may forward stale loads/stores across
+        // the syscall (issue #10).
         let asm = context.create_inline_asm(
             fn_ty,
             "ecall".to_string(),
-            "{t0},{a0},{a1}".to_string(),
+            "{t0},{a0},{a1},~{memory}".to_string(),
             true,
             false,
             None,
