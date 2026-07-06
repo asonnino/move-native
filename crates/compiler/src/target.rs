@@ -17,6 +17,11 @@ impl Target {
     pub(crate) const CPU: &str = "generic";
     /// Reserve x23 so LLVM never allocates the gas register.
     const AARCH64_FEATURES: &str = "+reserve-x23";
+    /// Enable the RISC-V "M" extension (hardware multiply/divide) so LLVM
+    /// emits `mul`/`div`/`rem` instructions instead of `__multi3`/`__udivdi3`
+    /// compiler-rt libcalls, which are not linked into the SP1 guest. SP1's
+    /// zkVM implements the RV64IM instruction set.
+    const RISCV64_FEATURES: &str = "+m";
 
     /// Returns the target matching the host architecture, if supported.
     pub fn try_host() -> Option<Self> {
@@ -59,7 +64,7 @@ impl Target {
     pub(crate) fn features(&self) -> &'static str {
         match self {
             Self::Aarch64 => Self::AARCH64_FEATURES,
-            Self::Riscv64 => "",
+            Self::Riscv64 => Self::RISCV64_FEATURES,
         }
     }
 

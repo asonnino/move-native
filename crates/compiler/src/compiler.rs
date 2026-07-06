@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use inkwell::context::Context;
+use inkwell::types::FunctionType;
 use inkwell::values::FunctionValue;
 use move_binary_format::CompiledModule;
 use move_model::model::FunctionEnv;
@@ -14,6 +15,7 @@ use crate::codegen::CodegenBackend;
 use crate::context::{DatatypeHandle, LlvmContext};
 use crate::error::{CompileContext, CompileError, CompileResult, catch_panic};
 use crate::function::FunctionLowering;
+use crate::inject::{InjectedFn, InjectedSymbol};
 use crate::mangle::Mangler;
 use crate::object_file::ObjectFile;
 use crate::target::Target;
@@ -40,6 +42,26 @@ impl<'ctx> Compiler<'ctx> {
         let ctx = LlvmContext::new(context, module, dependencies)?;
         let codegen = CodegenBackend::new(target)?;
         Ok(Self { ctx, codegen })
+    }
+
+    /// Inject an auxiliary, hand-written function into the module and return
+    /// its symbol. The IR-level counterpart to
+    /// [`set_module_assembly`](Self::set_module_assembly).
+    ///
+    /// The `build` closure receives an [`InjectedFn`] facade and the freshly
+    /// created [`FunctionValue`], and is responsible for appending the
+    /// function's basic blocks and body.
+    pub fn inject_function(
+        &self,
+        name: &str,
+        signature: FunctionType<'ctx>,
+        build: impl FnOnce(&InjectedFn<'_, 'ctx>, FunctionValue<'ctx>) -> CompileResult<()>,
+    ) -> CompileResult<InjectedSymbol> {
+        let function = self.ctx.add_function(name, signature);
+        build(&InjectedFn::new(&self.ctx), function)?;
+        Ok(InjectedSymbol {
+            name: name.to_owned(),
+        })
     }
 
     /// Inject raw assembly that LLVM's integrated assembler will compile
