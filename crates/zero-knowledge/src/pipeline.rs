@@ -15,6 +15,7 @@ use sp1_sdk::SP1Stdin;
 use crate::error::{ZkError, ZkResult};
 use crate::linker::Linker;
 use crate::proof::{Proof, Prover};
+use crate::sp1::Sp1Commit;
 use crate::stub::StubGenerator;
 
 /// Result of compiling a Move function into an SP1-ready ELF.
@@ -51,9 +52,16 @@ impl CompiledElf {
             .function(function_name)
             .ok_or_else(|| ZkError::Function(format!("function '{function_name}' not found")))?;
 
-        let stub_asm = StubGenerator::from(function).generate();
         let context = Context::create();
         let compiler = compiler::Compiler::new(&Target::Riscv64, &context, module, deps)?;
+        let commit = compiler.inject_function(
+            Sp1Commit::SYMBOL,
+            Sp1Commit::signature(&context),
+            |injected, function| Sp1Commit::new(injected).build(function),
+        )?;
+        let stub_asm = StubGenerator::from(function)
+            .with_commit(&commit)
+            .generate();
         compiler.set_module_assembly(&stub_asm);
         let object = compiler.emit_object()?;
         let elf_bytes = Linker::new(&object, "_start").link()?.build_elf()?;

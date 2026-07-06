@@ -6,13 +6,19 @@
 
 use std::fmt;
 
-use compiler::FunctionInfo;
+use compiler::{FunctionInfo, InjectedSymbol};
+
+use crate::sp1::Sp1Commit;
 
 /// SP1 entry-stub generator for a Move function.
 pub struct StubGenerator<'a> {
     symbol: &'a str,
     arg_count: usize,
     ret_count: usize,
+    /// Symbol of the commit-and-halt routine the stub tail-calls. Defaults to
+    /// [`Sp1Commit::SYMBOL`]; set explicitly from the injected [`InjectedSymbol`]
+    /// via [`with_commit`](Self::with_commit) so the stub and the IR agree.
+    commit_symbol: &'a str,
 }
 
 impl<'a> From<&'a FunctionInfo> for StubGenerator<'a> {
@@ -21,6 +27,7 @@ impl<'a> From<&'a FunctionInfo> for StubGenerator<'a> {
             symbol: &info.symbol,
             arg_count: info.arg_count,
             ret_count: info.ret_count,
+            commit_symbol: Sp1Commit::SYMBOL,
         }
     }
 }
@@ -35,7 +42,13 @@ impl<'a> StubGenerator<'a> {
     /// SP1 file descriptor for public-values output.
     const FD_PUBLIC_VALUES: u32 = 13;
 
-    /// Generate RISC-V assembly for the SP1 entry stub.
+    /// Point the stub's commit tail-call at the given injected symbol, so the
+    /// `call` target and the IR-level definition share one typed handle.
+    pub fn with_commit(mut self, commit: &'a InjectedSymbol) -> Self {
+        self.commit_symbol = &commit.name;
+        self
+    }
+
     /// Generate RISC-V assembly for the SP1 entry stub.
     pub fn generate(&self) -> String {
         let mut output = String::new();
@@ -50,6 +63,7 @@ impl<'a> StubGenerator<'a> {
             symbol,
             arg_count,
             ret_count,
+            commit_symbol: Sp1Commit::SYMBOL,
         }
     }
 
@@ -61,8 +75,7 @@ impl<'a> StubGenerator<'a> {
         writeln!(out, "_start:")?;
 
         // Reserve stack space for reading inputs (aligned to 16 bytes).
-        let stack_frame = (self.arg_count * 8).max(16);
-        let stack_frame = (stack_frame + 15) & !15;
+        let stack_frame = ((self.arg_count * 8).max(16) + 15) & !15;
 
         // Stack grows downward from just below the code segment.
         writeln!(out, "\tli\tsp, 0x78100000")?;
@@ -91,7 +104,7 @@ impl<'a> StubGenerator<'a> {
         writeln!(out, "\tcall\t{}", self.symbol)?;
         writeln!(out)?;
 
-        // Commit return value to SP1 public outputs.
+        // Write return value to SP1 public output stream.
         if self.ret_count > 0 {
             writeln!(out, "\tsd\ta0, 0(sp)")?;
             writeln!(out, "\tli\ta0, {}", Self::FD_PUBLIC_VALUES)?;
@@ -102,13 +115,18 @@ impl<'a> StubGenerator<'a> {
             writeln!(out)?;
         }
 
-        // Halt with exit code 0.
-        writeln!(out, "\tli\tt0, {:#x}", Self::SYSCALL_HALT)?;
-        writeln!(out, "\tli\ta0, 0")?;
-        writeln!(out, "\tecall")?;
+        // Commit SHA-256 digest and halt (implemented as LLVM IR in sp1_commit.rs).
+        if self.ret_count > 0 {
+            writeln!(out, "\tmv\ta0, sp")?;
+            writeln!(out, "\tli\ta1, 8")?;
+        } else {
+            writeln!(out, "\tli\ta0, 0")?;
+            writeln!(out, "\tli\ta1, 0")?;
+        }
+        writeln!(out, "\tcall\t{}", self.commit_symbol)?;
         writeln!(out)?;
 
-        // Move runtime abort handlers: arithmetic errors and explicit abort.
+        // Abort handlers.
         for handler in ["__move_rt_arithmetic_error", "__move_rt_abort"] {
             writeln!(out, "\t.globl\t{handler}")?;
             writeln!(out, "\t.type\t{handler},@function")?;
@@ -124,7 +142,9 @@ impl<'a> StubGenerator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::StubGenerator;
+    use compiler::InjectedSymbol;
+
+    use super::{Sp1Commit, StubGenerator};
 
     #[test]
     fn stub_for_two_arg_function() {
@@ -162,5 +182,24 @@ mod tests {
         let stub = StubGenerator::new("_mv_0x0_M_f", 3, 0).generate();
 
         assert!(stub.contains("addi\tsp, sp, -32"));
+    }
+
+    #[test]
+    fn stub_calls_commit_function_by_default() {
+        let stub = StubGenerator::new("_mv_0x0_M_add", 2, 1).generate();
+
+        assert!(stub.contains(&format!("call\t{}", Sp1Commit::SYMBOL)));
+    }
+
+    #[test]
+    fn with_commit_threads_the_symbol() {
+        let commit = InjectedSymbol {
+            name: "__custom_commit".to_string(),
+        };
+        let stub = StubGenerator::new("_mv_0x0_M_add", 2, 1)
+            .with_commit(&commit)
+            .generate();
+
+        assert!(stub.contains("call\t__custom_commit"));
     }
 }
