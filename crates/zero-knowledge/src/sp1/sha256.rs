@@ -148,3 +148,33 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
         Ok(b.build_or(r, b3, "")?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SHA256_EMPTY_SWAPPED, SHA256_H};
+
+    #[test]
+    fn h_matches_fips_180_4() {
+        // FIPS 180-4 §5.3.3 — the SHA-256 initial hash values.
+        assert_eq!(
+            SHA256_H,
+            [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_swapped_is_byte_swapped_sha256_of_empty() {
+        // sha256("") = e3b0c442 98fc1c14 9afbf4c8 996fb924 27ae41e4 649b934c a495991b 7852b855
+        // (eight big-endian u32 words). SP1's COMMIT convention takes each word
+        // little-endian, so the constant must be each word byte-swapped.
+        let digest: [u32; 8] = [
+            0xe3b0c442, 0x98fc1c14, 0x9afbf4c8, 0x996fb924, 0x27ae41e4, 0x649b934c, 0xa495991b,
+            0x7852b855,
+        ];
+        let swapped = digest.map(u32::swap_bytes);
+        assert_eq!(SHA256_EMPTY_SWAPPED, swapped);
+    }
+}

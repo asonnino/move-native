@@ -43,6 +43,17 @@ impl Proof {
             .verify(&self.proof, &self.verifying_key, None)
             .map_err(|e| ZkError::Sp1(e.to_string()))
     }
+
+    /// Decode the first `u64` return value from the committed public-values
+    /// bytes (little-endian). Returns `None` when the function returns nothing
+    /// or fewer than 8 bytes were committed.
+    fn decode_return_value(public_values: &[u8], ret_count: usize) -> Option<u64> {
+        if ret_count == 0 {
+            return None;
+        }
+        let bytes: [u8; 8] = public_values.get(..8)?.try_into().ok()?;
+        Some(u64::from_le_bytes(bytes))
+    }
 }
 
 /// Generates ZK proofs of Move program execution via SP1.
@@ -85,16 +96,7 @@ impl<P: Sp1Prover> Prover<P> {
 
         let cycles = report.total_instruction_count();
 
-        let return_value = if ret_count > 0 {
-            let bytes = public_values.as_slice();
-            if bytes.len() >= 8 {
-                Some(u64::from_le_bytes(bytes[..8].try_into().unwrap()))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let return_value = Proof::decode_return_value(public_values.as_slice(), ret_count);
 
         let proving_key = self
             .client
@@ -115,5 +117,34 @@ impl<P: Sp1Prover> Prover<P> {
             return_value,
             mock: self.mock,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Proof;
+
+    #[test]
+    fn decode_return_value_reads_first_le_u64() {
+        let pv = 5u64.to_le_bytes();
+        assert_eq!(Proof::decode_return_value(&pv, 1), Some(5));
+    }
+
+    #[test]
+    fn decode_return_value_ignores_bytes_past_the_first_word() {
+        let mut pv = 42u64.to_le_bytes().to_vec();
+        pv.extend_from_slice(&[0xff; 8]);
+        assert_eq!(Proof::decode_return_value(&pv, 1), Some(42));
+    }
+
+    #[test]
+    fn decode_return_value_none_when_no_return() {
+        assert_eq!(Proof::decode_return_value(&5u64.to_le_bytes(), 0), None);
+    }
+
+    #[test]
+    fn decode_return_value_none_when_too_few_bytes() {
+        assert_eq!(Proof::decode_return_value(&[1, 2, 3], 1), None);
+        assert_eq!(Proof::decode_return_value(&[], 1), None);
     }
 }

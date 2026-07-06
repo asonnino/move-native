@@ -27,3 +27,7 @@ move-binary-format = { workspace = true }
 # SP1 zkVM prover + verifier
 sp1-sdk = "6.0"
 tokio = { version = "1.51", features = ["full"] }
+
+[dev-dependencies]
+# `test-util` exposes `Compiler::new_for_test` for the sp1 IR-codegen tests.
+compiler = { workspace = true, features = ["test-util"] }
