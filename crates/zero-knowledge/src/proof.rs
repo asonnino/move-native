@@ -22,6 +22,12 @@ pub struct Proof {
 
 impl Proof {
     /// Verify this proof.
+    ///
+    /// The real (CPU) prover enforces `committed_digest == sha256(public_values)`
+    /// and `exit_code == 0`, so it genuinely checks the SHA-256 commitment. The
+    /// mock prover's verification is a no-op for Core proofs: it validates
+    /// neither the digest nor the exit code, so mock proofs only attest that the
+    /// program executed and returned a value, not that the commitment is correct.
     pub async fn verify(&self) -> ZkResult<()> {
         if self.mock {
             let client = ProverClient::builder().mock().build().await;
