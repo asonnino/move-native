@@ -1,6 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use move_binary_format::CompiledModule;
 use move_binary_format::file_format::{
     Ability, AbilitySet, Bytecode, DatatypeTyParameter, SignatureToken,
 };
@@ -16,6 +17,11 @@ impl CompiledModuleBuilder {
     pub fn compile(self) -> Assembly {
         let module = self.build();
         crate::compile_module(&Target::host(), &module).unwrap()
+    }
+
+    /// A built, trivial `add(a, b) = a + b` module — a ready-made fixture.
+    pub fn add() -> CompiledModule {
+        Self::binary_op("add", SignatureToken::U64, Bytecode::Add).build()
     }
 
     /// Builder pre-loaded with `Point { x: u64, y: u64 }` at `DatatypeHandleIndex(0)`.

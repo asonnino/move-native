@@ -3,7 +3,7 @@
 
 //! Move module metadata, construction, and loading.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 mod basic;
 mod builder;
 pub mod bundle;

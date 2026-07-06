@@ -181,17 +181,23 @@ impl<'ctx> LlvmContext<'ctx> {
         Ok(LlvmContext::from_parts(context, llvm_module, builder, env))
     }
 
-    /// Create a minimal `LlvmContext` with an empty `GlobalEnv` for unit testing.
-    ///
-    /// Leaks the LLVM `Context` so the returned value is `'static` — fine for tests.
-    /// Sufficient for code paths that don't access the Move environment
-    /// (primitives, references, vectors, etc.).
+    /// Create a minimal `LlvmContext` with an empty `GlobalEnv` over the given
+    /// `context`, for unit-testing IR emission that doesn't touch the Move
+    /// environment (e.g. injected runtime functions).
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn empty(context: &'ctx Context) -> Self {
+        let llvm_module = context.create_module("test");
+        let builder = context.create_builder();
+        Self::from_parts(context, llvm_module, builder, GlobalEnv::new())
+    }
+
+    /// Like [`empty`](Self::empty) but leaks its own `Context` so the result is
+    /// `'static` — convenient for compiler-internal tests that don't already
+    /// hold a `Context`.
     #[cfg(test)]
     pub(crate) fn new_for_test() -> LlvmContext<'static> {
         let context: &'static Context = Box::leak(Box::new(Context::create()));
-        let llvm_module = context.create_module("test");
-        let builder = context.create_builder();
-        LlvmContext::from_parts(context, llvm_module, builder, GlobalEnv::new())
+        LlvmContext::empty(context)
     }
 
     pub(crate) fn module(&self) -> &Module<'ctx> {
