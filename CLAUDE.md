@@ -247,14 +247,17 @@ Test with hand-written instrumented assembly loaded via `dlopen`.
 
 - LLVM 18 is required (inkwell). Set the prefix before building/testing:
   `export LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18`
-- **ZK real-prover tests must run with `--release`.** The `zero-knowledge` crate's
-  gated real-prover test (`prove_add_real` in `tests/custom.rs`, `#[ignore]`d)
-  generates an actual SP1 Core proof. In a debug build the SP1 prover is
-  unoptimized and takes tens of minutes; under `--release` it is dramatically
-  faster. Always run it as:
+- **Run any SP1 test with `--release`.** Anything that executes or proves in the
+  SP1 zkVM is dramatically faster optimized, because the SP1 executor/prover is
+  the bottleneck and is very slow unoptimized. This applies to both the
+  `zero-knowledge` integration suite (`tests/custom.rs`) — the mock-prover tests
+  take ~9 min in debug vs. seconds in release — and especially the gated
+  real-prover test (`prove_add_real`, `#[ignore]`d), which is ~30 min in debug
+  vs. ~1 min in release. Examples:
+  `cargo test -p zero-knowledge --test custom --release`
   `cargo test -p zero-knowledge --test custom prove_add_real --release -- --ignored --nocapture`
-  The mock-prover tests (the default suite) run fine in debug — only the real
-  prover needs `--release`.
+  The pure unit tests (`cargo test -p zero-knowledge --lib`) don't touch SP1 and
+  are fast in debug.
 
 ---
 
