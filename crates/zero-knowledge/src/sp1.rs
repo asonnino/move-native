@@ -109,3 +109,122 @@ impl<'a, 'ctx> Sp1Commit<'a, 'ctx> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use compiler::{Compiler, Target};
+    use inkwell::context::Context;
+    use inkwell::values::AnyValue;
+
+    use super::Sp1Commit;
+
+    /// Emit `__sp1_commit_and_halt` over an empty test module and return its
+    /// unoptimized LLVM IR text.
+    fn commit_ir() -> String {
+        let ctx = Context::create();
+        let compiler = Compiler::new_for_test(&Target::Riscv64, &ctx).unwrap();
+        let ir = std::cell::RefCell::new(String::new());
+        compiler
+            .inject_function(
+                Sp1Commit::SYMBOL,
+                Sp1Commit::signature(&ctx),
+                |injected, f| {
+                    Sp1Commit::new(injected).build(f)?;
+                    *ir.borrow_mut() = f.print_to_string().to_string();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        ir.into_inner()
+    }
+
+    #[test]
+    fn signature_is_void_ptr_i64() {
+        let ctx = Context::create();
+        let sig = Sp1Commit::signature(&ctx);
+        assert_eq!(sig.get_return_type(), None, "returns void");
+        assert_eq!(sig.count_param_types(), 2);
+        let params = sig.get_param_types();
+        assert!(params[0].is_pointer_type());
+        assert!(params[1].into_int_type().get_bit_width() == 64);
+    }
+
+    #[test]
+    fn emits_the_five_named_blocks() {
+        let ir = commit_ir();
+        for block in [
+            "entry:",
+            "empty_pv:",
+            "compute_sha:",
+            "commit_digest:",
+            "deferred:",
+        ] {
+            assert!(ir.contains(block), "missing basic block `{block}`");
+        }
+    }
+
+    #[test]
+    fn allocates_the_sha_scratch_buffers() {
+        let ir = commit_ir();
+        assert!(ir.contains("%w = alloca [64 x i64]"));
+        assert!(ir.contains("%h = alloca [8 x i64]"));
+    }
+
+    #[test]
+    fn branches_on_empty_public_values() {
+        let ir = commit_ir();
+        assert!(ir.contains("icmp eq i64 %1, 0"));
+        assert!(ir.contains("br i1 %is_empty, label %empty_pv, label %compute_sha"));
+    }
+
+    #[test]
+    fn computes_sha_via_the_two_precompiles() {
+        let ir = commit_ir();
+        // t0 immediates: SHA_EXTEND = 0x300105 = 3145989, SHA_COMPRESS = 0x10106 = 65798.
+        assert!(
+            ir.contains("(i64 3145989, ptr %w, i64 0)"),
+            "SHA_EXTEND ecall"
+        );
+        assert!(
+            ir.contains("(i64 65798, ptr %w, ptr %h)"),
+            "SHA_COMPRESS ecall"
+        );
+    }
+
+    #[test]
+    fn commits_eight_digest_words() {
+        // 8 COMMIT (t0 = 0x10 = 16) ecalls in commit_digest.
+        assert_eq!(commit_ir().matches("(i64 16, i64 ").count(), 8);
+    }
+
+    #[test]
+    fn commits_eight_deferred_words_then_halts() {
+        let ir = commit_ir();
+        // 8 COMMIT_DEFERRED (t0 = 0x1a = 26), then 1 HALT (t0 = 0).
+        assert_eq!(ir.matches("(i64 26, i64 ").count(), 8);
+        assert_eq!(ir.matches("(i64 0, i64 0, i64 0)").count(), 1);
+        assert!(ir.contains("unreachable"));
+    }
+
+    #[test]
+    fn total_ecall_count_is_nineteen() {
+        // 2 SHA + 8 COMMIT + 8 COMMIT_DEFERRED + 1 HALT.
+        assert_eq!(commit_ir().matches("asm sideeffect \"ecall\"").count(), 19);
+    }
+
+    #[test]
+    fn ecalls_declare_a_memory_clobber() {
+        // The SHA precompiles write guest memory; every ecall must clobber it
+        // so LLVM keeps loads/stores ordered across the syscall (issue #10).
+        let ir = commit_ir();
+        assert!(
+            ir.contains("~{memory}"),
+            "ecall is missing a ~{{memory}} clobber"
+        );
+        assert_eq!(
+            ir.matches("asm sideeffect \"ecall\"").count(),
+            ir.matches("~{memory}").count(),
+            "every ecall should carry the clobber",
+        );
+    }
+}

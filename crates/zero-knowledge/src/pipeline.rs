@@ -97,3 +97,31 @@ impl CompiledElf {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use compiler::module::CompiledModuleBuilder;
+
+    use super::CompiledElf;
+
+    #[test]
+    fn compile_produces_a_valid_elf() {
+        let elf = CompiledElf::compile(&CompiledModuleBuilder::add(), "add", &[]).unwrap();
+        assert_eq!(elf.arg_count, 2);
+        assert_eq!(elf.ret_count, 1);
+        assert!(!elf.elf_bytes.is_empty());
+        assert_eq!(&elf.elf_bytes[..4], b"\x7fELF", "ELF magic");
+    }
+
+    #[test]
+    fn compile_errors_on_unknown_function() {
+        assert!(CompiledElf::compile(&CompiledModuleBuilder::add(), "nope", &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn prove_rejects_a_wrong_input_count() {
+        // `add` takes 2 args; the guard must reject before touching SP1.
+        let elf = CompiledElf::compile(&CompiledModuleBuilder::add(), "add", &[]).unwrap();
+        assert!(elf.prove(&[1], true).await.is_err());
+    }
+}

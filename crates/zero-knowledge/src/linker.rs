@@ -204,7 +204,21 @@ impl LinkedText {
 
 #[cfg(test)]
 mod tests {
-    use super::LinkedText;
+    use compiler::module::CompiledModuleBuilder;
+    use compiler::{Compiler, Target};
+
+    use super::{LinkedText, Linker};
+
+    #[test]
+    fn link_errors_on_missing_entry_symbol() {
+        let module = CompiledModuleBuilder::add();
+        let ctx = inkwell::context::Context::create();
+        let object = Compiler::new(&Target::Riscv64, &ctx, &module, &[])
+            .unwrap()
+            .emit_object()
+            .unwrap();
+        assert!(Linker::new(&object, "no_such_entry").link().is_err());
+    }
 
     /// Decode the PC-relative offset from a patched auipc+jalr pair.
     fn decode_call_offset(code: &[u8], position: usize) -> i64 {
