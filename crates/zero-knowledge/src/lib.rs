@@ -7,4 +7,5 @@ pub mod error;
 pub mod linker;
 pub mod pipeline;
 pub mod proof;
+mod sp1;
 pub mod stub;
