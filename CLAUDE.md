@@ -243,6 +243,21 @@ Test with hand-written instrumented assembly loaded via `dlopen`.
 
 ---
 
+## Building & Testing
+
+- LLVM 18 is required (inkwell). Set the prefix before building/testing:
+  `export LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18`
+- **ZK real-prover tests must run with `--release`.** The `zero-knowledge` crate's
+  gated real-prover test (`prove_add_real` in `tests/custom.rs`, `#[ignore]`d)
+  generates an actual SP1 Core proof. In a debug build the SP1 prover is
+  unoptimized and takes tens of minutes; under `--release` it is dramatically
+  faster. Always run it as:
+  `cargo test -p zero-knowledge --test custom prove_add_real --release -- --ignored --nocapture`
+  The mock-prover tests (the default suite) run fine in debug — only the real
+  prover needs `--release`.
+
+---
+
 ## Dependencies
 
 ```toml
