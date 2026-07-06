@@ -62,18 +62,21 @@ repos:
         language: system
         files: *rust-files-pattern
         pass_filenames: false
+        stages: [pre-push]
       - id: cargo-test
         name: cargo-test
         entry: cargo nextest run --no-tests=warn
         language: system
         files: (^crates/|Cargo\.(toml|lock)$|nextest\.toml|rust-toolchain\.toml$)
         pass_filenames: false
+        stages: [pre-push]
       - id: cargo-doctests
         name: cargo-doctests
         entry: cargo test --doc
         language: system
         files: *rust-files-pattern
         pass_filenames: false
+        stages: [pre-push]
       - id: clippy
         name: clippy
         entry: cargo clippy
@@ -81,3 +84,4 @@ repos:
         language: system
         files: *rust-files-pattern
         pass_filenames: false
+        stages: [pre-push]
