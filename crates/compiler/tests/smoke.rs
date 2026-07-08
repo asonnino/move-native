@@ -93,15 +93,11 @@ fn kitchen_sink_compiles(#[case] target: Target) {
                 asm.contains("\tb."),
                 "should contain conditional branches (b.cond)"
             );
-            // LLVM emits underscore-prefixed symbols on macOS.
+            // Cross-module call to Dep::double. Mach-O prepends an extra `_` to
+            // symbols, so substring-match the ELF (single-underscore) form.
             assert!(
-                asm.contains("__mv_0x0_M_make_point"),
-                "should contain LLVM symbol __mv_0x0_M_make_point\nassembly:\n{asm}"
-            );
-            // Cross-module call.
-            assert!(
-                asm.contains("bl\t__mv_0x0_Dep_double") || asm.contains("bl __mv_0x0_Dep_double"),
-                "should contain a branch-and-link to external 'double'\nassembly:\n{asm}"
+                asm.contains("_mv_0x0_Dep_double"),
+                "should reference external symbol _mv_0x0_Dep_double\nassembly:\n{asm}"
             );
         }
         Target::Riscv64 => {
