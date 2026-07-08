@@ -38,7 +38,6 @@ compile_tests! {
     borrow,
     clock,
     coin,
-    coin_registry,
     config,
     deny_list,
     derived_object,
@@ -87,4 +86,14 @@ compile_tests! {
     versioned,
     zklogin_verified_id,
     zklogin_verified_issuer,
+}
+
+// `coin_registry` pattern-matches on an enum, which lowers to a `VariantSwitch`
+// that panics in the pinned Sui move-stackless-bytecode (see #21).
+#[rstest]
+#[case::aarch64(Target::Aarch64)]
+#[case::riscv64(Target::Riscv64)]
+#[ignore = "upstream Sui move-stackless-bytecode panics lowering VariantSwitch; see #21"]
+fn coin_registry(#[case] target: Target) {
+    fixture().compile_checked("coin_registry", &target);
 }
