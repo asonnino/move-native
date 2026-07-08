@@ -33,10 +33,15 @@ jobs:
     name: Check formatting
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-      - name: Install editorconfig-checker and taplo
+      - name: Install taplo
         uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
         with:
-          tool: editorconfig-checker@3.8.0,taplo@0.9.3
+          tool: taplo@0.9.3
+      - name: Install editorconfig-checker
+        run: |
+          url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v3.8.0/ec-linux-amd64.tar.gz"
+          curl -sSL "$url" | tar xz
+          sudo install "$(find . -name ec-linux-amd64 -type f)" /usr/local/bin/editorconfig-checker
       - name: Check files against editorconfig
         run: editorconfig-checker
       - name: Check formatting of all TOML files
