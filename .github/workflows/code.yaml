@@ -45,8 +45,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Install LLVM 18
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
           sudo apt-get update
           sudo apt-get install -y llvm-18-dev libpolly-18-dev
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
@@ -66,8 +64,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Install LLVM 18
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
           sudo apt-get update
           sudo apt-get install -y llvm-18-dev libpolly-18-dev
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
@@ -88,8 +84,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Install LLVM 18
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
           sudo apt-get update
           sudo apt-get install -y llvm-18-dev libpolly-18-dev
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2

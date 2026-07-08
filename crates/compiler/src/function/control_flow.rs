@@ -254,6 +254,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "upstream Sui move-stackless-bytecode panics lowering VariantSwitch \
+                (label_map not seeded from jump-table targets); see #21"]
     fn variant_switch() {
         let ref_option =
             SignatureToken::Reference(Box::new(SignatureToken::Datatype(DatatypeHandleIndex(0))));
