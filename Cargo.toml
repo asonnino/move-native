@@ -1,4 +1,12 @@
 [workspace]
+default-members = [
+  "crates/compiler",
+  "crates/graph",
+  "crates/instrumenter",
+  "crates/runner",
+  "crates/runtime",
+  "crates/verifier",
+]
 members = ["crates/*"]
 resolver = "2"
 
