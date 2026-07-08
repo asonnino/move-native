@@ -10,19 +10,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CLICOLOR_FORCE: 1
-  CARGO_INCREMENTAL: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
+  CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
   RUST_BACKTRACE: short
-  RUSTDOCFLAGS: -D warnings
   LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
 
 jobs:
   diff:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -30,6 +33,7 @@ jobs:
       isRust: ${{ steps.diff.outputs.isRust }}
       isTestConfig: ${{ steps.diff.outputs.isTestConfig }}
       isRelevantForRustTests: ${{ steps.diff.outputs.isRust == 'true' || steps.diff.outputs.isTestConfig == 'true' }}
+      isRelevantForZkTests: ${{ steps.diff.outputs.isZk == 'true' || steps.diff.outputs.isTestConfig == 'true' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
       - name: Detect Changes
@@ -41,79 +45,41 @@ jobs:
     needs: diff
     if: ${{ needs.diff.outputs.isRust == 'true' }}
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-      - name: Install build dependencies (LLVM 18, protoc)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev libpolly-18-dev protobuf-compiler
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
+      - uses: "./.github/actions/rust-setup"
       - name: Check formatting with rustfmt
         run: cargo fmt --all -- --check
       - name: Lint using clippy (including tests)
-        run: cargo clippy --workspace --all-features --tests --no-deps --exclude zero-knowledge -- -D warnings
-
-  build:
-    name: Build Rust code
-    needs: diff
-    if: ${{ needs.diff.outputs.isRust == 'true' }}
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-      - name: Install build dependencies (LLVM 18, protoc)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev libpolly-18-dev protobuf-compiler
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
-      - name: Build Rust code
-        run: cargo build --workspace --exclude zero-knowledge
+        run: cargo clippy --locked --all-features --tests --no-deps -- -D warnings
 
   test:
     name: Test Rust code
     needs: diff
     if: ${{ needs.diff.outputs.isRelevantForRustTests == 'true' }}
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     steps:
-      - uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
-        with:
-          tool: cargo-nextest
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-      - name: Install build dependencies (LLVM 18, protoc)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev libpolly-18-dev protobuf-compiler
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
+      - uses: "./.github/actions/rust-setup"
       - name: Run tests
-        run: cargo nextest run --workspace --exclude zero-knowledge --profile ci --no-tests=warn
+        run: cargo nextest run --locked --profile ci --no-tests=warn
 
   test-zk:
     name: Test zero-knowledge (release)
     needs: diff
-    if: ${{ needs.diff.outputs.isRelevantForRustTests == 'true' }}
+    if: ${{ needs.diff.outputs.isRelevantForZkTests == 'true' }}
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
-      - uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
-        with:
-          tool: cargo-nextest
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v6.0.2
-      - name: Install build dependencies (LLVM 18, protoc)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev libpolly-18-dev protobuf-compiler
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
+      - uses: "./.github/actions/rust-setup"
       # The SP1 prover is unusably slow unoptimized, so build and test in release.
       - name: Lint zero-knowledge (clippy, release)
-        run: cargo clippy -p zero-knowledge --all-features --tests --release --no-deps -- -D warnings
+        run: cargo clippy --locked -p zero-knowledge --all-features --tests --release --no-deps -- -D warnings
       - name: Test zero-knowledge (release)
-        run: cargo nextest run -p zero-knowledge --profile ci --release --no-tests=warn
+        run: cargo nextest run --locked -p zero-knowledge --profile ci --release --no-tests=warn
 
   check-all:
     name: Check if all code checks succeeded
@@ -121,10 +87,10 @@ jobs:
     needs:
       - diff
       - lint
-      - build
       - test
       - test-zk
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Decide whether all needed jobs succeeded
         uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # pin@v1.2.2

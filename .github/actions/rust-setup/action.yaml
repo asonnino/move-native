@@ -1,0 +1,17 @@
+name: Rust setup
+description: Install nextest, build dependencies (LLVM 18, protoc), and restore the Rust cache
+
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
+      with:
+        tool: cargo-nextest
+    - name: Install build dependencies (LLVM 18, protoc)
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-18-dev libpolly-18-dev protobuf-compiler
+    - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # pin@v2.8.2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}

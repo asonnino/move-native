@@ -7,6 +7,9 @@ outputs:
   isTestConfig:
     description: True when changes happened in the configuration for `nextest`
     value: "${{ steps.diff.outputs.isTestConfig }}"
+  isZk:
+    description: True when changes affect the `zero-knowledge` crate or its dependencies
+    value: "${{ steps.diff.outputs.isZk }}"
 
 runs:
   using: composite
@@ -23,5 +26,14 @@ runs:
             - 'Cargo.lock'
             - 'rust-toolchain.toml'
             - '.github/workflows/code.yaml'
+            - '.github/actions/**'
           isTestConfig:
             - '.config/nextest.toml'
+          isZk:
+            - 'crates/zero-knowledge/**'
+            - 'crates/compiler/**'
+            - 'Cargo.toml'
+            - 'Cargo.lock'
+            - 'rust-toolchain.toml'
+            - '.github/workflows/code.yaml'
+            - '.github/actions/**'
