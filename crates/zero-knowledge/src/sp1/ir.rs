@@ -30,6 +30,11 @@ impl<'a, 'ctx> Ir<'a, 'ctx> {
         self.injected.i64_type().const_int(value, false)
     }
 
+    /// An unsigned `i32` constant (SHA-256 works on 32-bit words).
+    pub(crate) fn const_i32(&self, value: u32) -> IntValue<'ctx> {
+        self.i32_type().const_int(value as u64, false)
+    }
+
     /// Pointer to `array[index]` of an aggregate `alloca`.
     pub(crate) fn array_slot(
         &self,
@@ -45,16 +50,16 @@ impl<'a, 'ctx> Ir<'a, 'ctx> {
         })
     }
 
-    /// Store a constant `i64` into `array[index]`.
+    /// Store a constant `i32` word into `array[index]`.
     pub(crate) fn store_const(
         &self,
         array_ty: ArrayType<'ctx>,
         ptr: PointerValue<'ctx>,
         index: u64,
-        value: u64,
+        value: u32,
     ) -> CompileResult<()> {
         let slot = self.array_slot(array_ty, ptr, index)?;
-        self.builder().build_store(slot, self.const_i64(value))?;
+        self.builder().build_store(slot, self.const_i32(value))?;
         Ok(())
     }
 
@@ -68,6 +73,10 @@ impl<'a, 'ctx> Ir<'a, 'ctx> {
 
     pub(crate) fn i8_type(&self) -> IntType<'ctx> {
         self.injected.i8_type()
+    }
+
+    pub(crate) fn i32_type(&self) -> IntType<'ctx> {
+        self.context().i32_type()
     }
 
     pub(crate) fn i64_type(&self) -> IntType<'ctx> {

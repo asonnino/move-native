@@ -42,7 +42,7 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
         h_ty: ArrayType<'ctx>,
     ) -> CompileResult<()> {
         for (i, word) in SHA256_EMPTY_SWAPPED.iter().enumerate() {
-            self.ir.store_const(h_ty, h_ptr, i as u64, *word as u64)?;
+            self.ir.store_const(h_ty, h_ptr, i as u64, *word)?;
         }
         Ok(())
     }
@@ -75,7 +75,7 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
 
         // Seed the hash state with the SHA-256 initial constants.
         for (i, value) in SHA256_H.iter().enumerate() {
-            self.ir.store_const(h_ty, h_ptr, i as u64, *value as u64)?;
+            self.ir.store_const(h_ty, h_ptr, i as u64, *value)?;
         }
 
         // Expand the schedule and compress it into the hash state.
@@ -86,7 +86,7 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
         // Byte-swap each digest word for the COMMIT convention.
         for i in 0..8u64 {
             let slot = self.ir.array_slot(h_ty, h_ptr, i)?;
-            let word = b.build_load(self.ir.i64_type(), slot, "")?.into_int_value();
+            let word = b.build_load(self.ir.i32_type(), slot, "")?.into_int_value();
             let swapped = self.bswap32(word)?;
             b.build_store(slot, swapped)?;
         }
@@ -95,14 +95,14 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
     }
 
     /// Load 4 little-endian bytes at `base + byte_offset`, packed big-endian
-    /// into an `i64` (the canonical SHA-256 word packing).
+    /// into an `i32` (the canonical SHA-256 word packing).
     fn load_be_u32(
         &self,
         base: PointerValue<'ctx>,
         byte_offset: u64,
     ) -> CompileResult<IntValue<'ctx>> {
         let b = self.ir.builder();
-        let mut result = self.ir.const_i64(0);
+        let mut result = self.ir.const_i32(0);
 
         for byte_idx in 0..4u64 {
             let gep = unsafe {
@@ -114,8 +114,8 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
                 )?
             };
             let byte = b.build_load(self.ir.i8_type(), gep, "")?.into_int_value();
-            let extended = b.build_int_z_extend(byte, self.ir.i64_type(), "")?;
-            let shift = self.ir.const_i64((3 - byte_idx) * 8);
+            let extended = b.build_int_z_extend(byte, self.ir.i32_type(), "")?;
+            let shift = self.ir.const_i32(((3 - byte_idx) * 8) as u32);
             let shifted = b.build_left_shift(extended, shift, "")?;
             result = b.build_or(result, shifted, "")?;
         }
@@ -123,28 +123,28 @@ impl<'a, 'ctx> Sha256<'a, 'ctx> {
         Ok(result)
     }
 
-    /// Byte-swap the low 32 bits of an `i64` (big-endian digest to the
-    /// little-endian words COMMIT expects).
+    /// Byte-swap an `i32` (big-endian digest to the little-endian words COMMIT
+    /// expects).
     fn bswap32(&self, value: IntValue<'ctx>) -> CompileResult<IntValue<'ctx>> {
         let b = self.ir.builder();
-        let mask = self.ir.const_i64(0xff);
+        let mask = self.ir.const_i32(0xff);
 
         let b0 = b.build_and(value, mask, "")?;
         let b1 = b.build_and(
-            b.build_right_shift(value, self.ir.const_i64(8), false, "")?,
+            b.build_right_shift(value, self.ir.const_i32(8), false, "")?,
             mask,
             "",
         )?;
         let b2 = b.build_and(
-            b.build_right_shift(value, self.ir.const_i64(16), false, "")?,
+            b.build_right_shift(value, self.ir.const_i32(16), false, "")?,
             mask,
             "",
         )?;
-        let b3 = b.build_right_shift(value, self.ir.const_i64(24), false, "")?;
+        let b3 = b.build_right_shift(value, self.ir.const_i32(24), false, "")?;
 
-        let r = b.build_left_shift(b0, self.ir.const_i64(24), "")?;
-        let r = b.build_or(r, b.build_left_shift(b1, self.ir.const_i64(16), "")?, "")?;
-        let r = b.build_or(r, b.build_left_shift(b2, self.ir.const_i64(8), "")?, "")?;
+        let r = b.build_left_shift(b0, self.ir.const_i32(24), "")?;
+        let r = b.build_or(r, b.build_left_shift(b1, self.ir.const_i32(16), "")?, "")?;
+        let r = b.build_or(r, b.build_left_shift(b2, self.ir.const_i32(8), "")?, "")?;
         Ok(b.build_or(r, b3, "")?)
     }
 }

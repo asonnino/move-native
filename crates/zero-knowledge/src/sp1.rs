@@ -63,8 +63,8 @@ impl<'a, 'ctx> Sp1Commit<'a, 'ctx> {
         let commit_digest = ir.context().append_basic_block(function, "commit_digest");
         let deferred = ir.context().append_basic_block(function, "deferred");
 
-        let w_ty = ir.i64_type().array_type(64);
-        let h_ty = ir.i64_type().array_type(8);
+        let w_ty = ir.i32_type().array_type(64);
+        let h_ty = ir.i32_type().array_type(8);
         let sha = Sha256::new(ir);
         let syscall = Sp1Syscall::new(ir);
 
@@ -93,7 +93,9 @@ impl<'a, 'ctx> Sp1Commit<'a, 'ctx> {
         b.position_at_end(commit_digest);
         for i in 0..8u64 {
             let slot = ir.array_slot(h_ty, h_ptr, i)?;
-            let word = b.build_load(ir.i64_type(), slot, "")?.into_int_value();
+            let word = b.build_load(ir.i32_type(), slot, "")?.into_int_value();
+            // COMMIT carries the digest word in a 64-bit register; zero-extend.
+            let word = b.build_int_z_extend(word, ir.i64_type(), "")?;
             syscall.commit(i, word)?;
         }
         b.build_unconditional_branch(deferred)?;
@@ -166,8 +168,8 @@ mod tests {
     #[test]
     fn allocates_the_sha_scratch_buffers() {
         let ir = commit_ir();
-        assert!(ir.contains("%w = alloca [64 x i64]"));
-        assert!(ir.contains("%h = alloca [8 x i64]"));
+        assert!(ir.contains("%w = alloca [64 x i32]"));
+        assert!(ir.contains("%h = alloca [8 x i32]"));
     }
 
     #[test]
