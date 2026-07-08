@@ -37,13 +37,16 @@ jobs:
         uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
         with:
           tool: taplo@0.9.3
-      - name: Install editorconfig-checker
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # pin@v6.0.0
+        with:
+          python-version: "3.x"
+      - name: Install and run editorconfig-checker
         run: |
-          url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v3.8.0/ec-linux-amd64.tar.gz"
-          curl -sSL "$url" | tar xz
-          sudo install "$(find . -name ec-linux-amd64 -type f)" /usr/local/bin/editorconfig-checker
-      - name: Check files against editorconfig
-        run: editorconfig-checker
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install editorconfig-checker=="2.7.3"
+          ec
       - name: Check formatting of all TOML files
         run: taplo format --check
       - name: Install yamlfmt
