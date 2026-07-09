@@ -62,7 +62,7 @@ jobs:
     name: Check spelling
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
-      - uses: crate-ci/typos@07d900b8fa1097806b8adb6391b0d3e0ac2fdea7 # pin@v1.39.0
+      - uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # pin@v1.48.0
 
   shellcheck:
     name: ShellCheck
