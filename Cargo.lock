@@ -751,7 +751,7 @@ dependencies = [
  "move-model",
  "move-stackless-bytecode",
  "num-bigint 0.4.6",
- "object 0.38.1",
+ "object 0.39.1",
  "rstest",
  "thiserror 2.0.18",
 ]
@@ -1706,7 +1706,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -1766,9 +1766,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash 0.2.0",
 ]
@@ -2120,12 +2120,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.13.0"
+version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
+checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
 ]
@@ -2567,7 +2567,7 @@ source = "git+https://github.com/MystenLabs/sui?rev=e4146b827fc1ceb26af5885acb32
 dependencies = [
  "anyhow",
  "enum-compat-util",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "move-abstract-interpreter",
  "move-core-types",
  "move-proc-macros",
@@ -2690,7 +2690,7 @@ dependencies = [
  "enum-compat-util",
  "ethnum",
  "hex",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "leb128",
  "move-proc-macros",
  "num",
@@ -2714,7 +2714,7 @@ dependencies = [
  "clap",
  "codespan",
  "colored",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "lcov",
  "move-abstract-interpreter",
  "move-binary-format",
@@ -3087,14 +3087,14 @@ dependencies = [
 
 [[package]]
 name = "object"
-version = "0.38.1"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "271638cd5fa9cca89c4c304675ca658efc4e64a66c716b7cfe1afb4b9611dbbc"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
 dependencies = [
  "crc32fast",
  "flate2",
- "hashbrown 0.16.1",
- "indexmap 2.13.0",
+ "hashbrown 0.17.1",
+ "indexmap 2.14.0",
  "memchr",
  "ruzstd",
 ]
@@ -3601,7 +3601,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
 ]
 
 [[package]]
@@ -3612,7 +3612,7 @@ checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "serde",
 ]
 
@@ -4323,7 +4323,7 @@ dependencies = [
  "compiler",
  "instrumenter",
  "move-binary-format",
- "object 0.38.1",
+ "object 0.39.1",
  "runtime",
  "tempfile",
  "thiserror 2.0.18",
@@ -4338,7 +4338,7 @@ dependencies = [
  "instrumenter",
  "libc",
  "moka",
- "object 0.38.1",
+ "object 0.39.1",
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
@@ -4666,7 +4666,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "schemars 0.9.0",
  "schemars 1.2.1",
  "serde_core",
@@ -6255,7 +6255,7 @@ version = "0.19.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
 dependencies = [
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "toml_datetime 0.6.11",
  "winnow 0.5.40",
 ]
@@ -6266,7 +6266,7 @@ version = "0.25.10+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a82418ca169e235e6c399a84e395ab6debeb3bc90edc959bf0f48647c6a32d1b"
 dependencies = [
- "indexmap 2.13.0",
+ "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "winnow 1.0.1",
@@ -6640,7 +6640,7 @@ version = "0.1.0"
 dependencies = [
  "graph",
  "instrumenter",
- "object 0.38.1",
+ "object 0.39.1",
  "tempfile",
  "thiserror 2.0.18",
  "yaxpeax-arch",
@@ -7177,7 +7177,7 @@ dependencies = [
  "compiler",
  "inkwell",
  "move-binary-format",
- "object 0.38.1",
+ "object 0.39.1",
  "sp1-sdk",
  "thiserror 2.0.18",
  "tokio",
