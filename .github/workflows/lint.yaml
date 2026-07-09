@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
       - name: Install taplo
-        uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # pin@v2.82.10
         with:
           tool: taplo@0.9.3
       - name: Set up Python
@@ -80,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
       - name: Install licensesnip
-        uses: taiki-e/install-action@70e00552f3196d9a4c7dde7c57ef4c4830d422dd # pin@v2.68.2
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # pin@v2.82.10
         with:
           tool: licensesnip@1.7.0
       - run: licensesnip check
