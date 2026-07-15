@@ -20,7 +20,7 @@ move-binary-format.workspace = true
 move-core-types.workspace = true
 move-model.workspace = true
 move-stackless-bytecode.workspace = true
-num-bigint = "0.4"
+num-bigint = "0.5"
 thiserror.workspace = true
 
 [dev-dependencies]

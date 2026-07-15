@@ -157,7 +157,7 @@ dependencies = [
  "derivative",
  "digest 0.10.7",
  "itertools 0.10.5",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-traits",
  "paste",
  "rustc_version",
@@ -180,7 +180,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7abe79b0e4288889c4574159ab790824d0033b9fdcb2a112a3182fac2e514565"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -195,7 +195,7 @@ checksum = "adb7b85a02b83d2f22f89bd5cac66c9c89474240cb6207cb1efc16d098e822a5"
 dependencies = [
  "ark-std",
  "digest 0.10.7",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
 ]
 
 [[package]]
@@ -750,7 +750,7 @@ dependencies = [
  "move-core-types",
  "move-model",
  "move-stackless-bytecode",
- "num-bigint 0.4.6",
+ "num-bigint 0.5.1",
  "object 0.39.1",
  "rstest",
  "thiserror 2.0.18",
@@ -2940,7 +2940,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -2961,9 +2961,19 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.6"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -3025,7 +3035,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
 ]
@@ -3190,7 +3200,7 @@ version = "0.3.2-succinct"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95a083928c9055f2171e3cb0bb4767969e4955473e71ba61affe46d7a3c98a89"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "p3-field",
  "p3-mds",
  "p3-poseidon2",
@@ -3206,7 +3216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9abf208fbfe540d6e2a6caaa2a9a345b1c8cb23ffdcdfcc6987244525d4fc821"
 dependencies = [
  "ff 0.13.1",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "p3-field",
  "p3-poseidon2",
  "p3-symmetric",
@@ -3262,7 +3272,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36459d4acb03d08097d713f336c7393990bb489ab19920d4f68658c7a5c10968"
 dependencies = [
  "itertools 0.12.1",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-traits",
  "p3-util",
  "rand 0.8.5",
@@ -3319,7 +3329,7 @@ version = "0.3.2-succinct"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb1f52bcb6be38bdc8fa6b38b3434d4eedd511f361d4249fd798c6a5ef817b40"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "p3-field",
  "p3-mds",
  "p3-poseidon2",
@@ -5468,7 +5478,7 @@ dependencies = [
  "futures",
  "hashbrown 0.14.5",
  "itertools 0.14.0",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "num-traits",
  "num_cpus",
  "rayon",
@@ -5531,7 +5541,7 @@ dependencies = [
  "hex",
  "itertools 0.14.0",
  "lazy_static",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "serde",
  "sha2 0.10.9",
  "slop-algebra",
@@ -5564,7 +5574,7 @@ dependencies = [
  "itertools 0.14.0",
  "lru",
  "mti",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "opentelemetry",
  "pin-project",
  "rand 0.8.5",
@@ -5724,7 +5734,7 @@ dependencies = [
  "bindgen",
  "cfg-if",
  "hex",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5778,7 +5788,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "k256",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "serde",
  "sha2 0.10.9",
  "slop-algebra",
@@ -5933,7 +5943,7 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "lazy_static",
- "num-bigint 0.4.6",
+ "num-bigint 0.4.8",
  "rand 0.8.5",
  "rustc-hex",
 ]
