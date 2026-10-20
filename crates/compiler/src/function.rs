@@ -55,10 +55,23 @@ impl<'a, 'ctx> FunctionLowering<'a, 'ctx> {
 
     pub(crate) fn lower_function(&self, function_data: &FunctionData) -> CompileResult<()> {
         for byte_code in &function_data.code {
+            // The verifier allows unreachable code after a jump or ret. Nothing branches
+            // to it, and emitting it would put instructions after the terminator.
+            if !matches!(byte_code, Bytecode::Label(..)) && self.current_block_is_terminated() {
+                continue;
+            }
             self.lower_bytecode(byte_code)
                 .with_context(|| format!("at {byte_code:?}"))?;
         }
         Ok(())
+    }
+
+    fn current_block_is_terminated(&self) -> bool {
+        self.state
+            .ctx()
+            .builder()
+            .get_insert_block()
+            .is_some_and(|block| block.get_terminator().is_some())
     }
 
     fn lower_bytecode(&self, byte_code: &Bytecode) -> CompileResult<()> {
