@@ -254,6 +254,54 @@ mod tests {
     }
 
     #[test]
+    fn unreachable_code_after_branch() {
+        // Same as `branch_and_jump`, but the loop exit jumps back into the loop, so
+        // nothing reaches the trailing MoveLoc/Ret. Move's verifier accepts that.
+        let asm = CompiledModuleBuilder::new()
+            .function(
+                "spin",
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64],
+                vec![SignatureToken::U64, SignatureToken::U64],
+                vec![
+                    Bytecode::LdU64(0),
+                    Bytecode::StLoc(1),
+                    Bytecode::LdU64(0),
+                    Bytecode::StLoc(2),
+                    // LOOP:
+                    Bytecode::CopyLoc(1),
+                    Bytecode::CopyLoc(0),
+                    Bytecode::Lt,
+                    Bytecode::BrFalse(4), // -> LOOP, so the tail below is unreachable
+                    Bytecode::Branch(9),
+                    Bytecode::MoveLoc(1),
+                    Bytecode::LdU64(1),
+                    Bytecode::Add,
+                    Bytecode::StLoc(1),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::LdU64(2),
+                    Bytecode::Mod,
+                    Bytecode::LdU64(0),
+                    Bytecode::Eq,
+                    Bytecode::BrFalse(4),
+                    Bytecode::MoveLoc(2),
+                    Bytecode::CopyLoc(1),
+                    Bytecode::Add,
+                    Bytecode::StLoc(2),
+                    Bytecode::Branch(4), // -> LOOP
+                    // unreachable:
+                    Bytecode::MoveLoc(2),
+                    Bytecode::Ret,
+                ],
+            )
+            .compile();
+        assert!(
+            asm.contains("_mv_0x0_M_spin"),
+            "missing 'spin' symbol\n{asm}"
+        );
+    }
+
+    #[test]
     #[ignore = "upstream Sui move-stackless-bytecode panics lowering VariantSwitch \
                 (label_map not seeded from jump-table targets); see #21"]
     fn variant_switch() {
